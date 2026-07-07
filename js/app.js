@@ -1098,7 +1098,7 @@ function onToggleHideMarked() {
 /** Reflect the hide-handled toggle's label + aria-pressed from state.hideMarked. */
 function updateHideMarkedButton() {
   if (!dom.hideMarkedBtn) return;
-  dom.hideMarkedBtn.textContent = state.hideMarked ? 'Show handled' : 'Hide handled';
+  dom.hideMarkedBtn.textContent = state.hideMarked ? 'Show skipped' : 'Hide skipped';
   dom.hideMarkedBtn.setAttribute('aria-pressed', String(state.hideMarked));
 }
 
