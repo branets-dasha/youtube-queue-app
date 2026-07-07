@@ -57,7 +57,7 @@ The app runs entirely in your browser, but YouTube still needs to know *which* O
 3. **Pick a start cutoff** (defaults to 7 days ago). Everything published **at or before** this instant is treated as already handled and will never enter your queue.
 4. Click **Sign in** and approve the YouTube permission in the Google popup. Because the app is unverified and the scope is sensitive, Google shows a **"Google hasn't verified this app"** screen — click **Advanced → continue**. Signing in only authorizes; it does **not** auto-fetch.
    - Since the OAuth token is **memory-only**, you'll re-approve on each fresh load of the page.
-5. Click **Refresh (fetch newer)** to pull your subscriptions and their recent uploads into the queue. The app does not auto-refresh, so you'll need to use this button manually whenever you want to re-scan your subscriptions. It will append newer videos without duplicating or resetting items you already handled.
+5. Click **Fetch new** to pull your subscriptions and their recent uploads into the queue. The app does not auto-refresh, so you'll need to use the **Fetch new** button manually whenever you want to re-scan your subscriptions for newer videos. Alternatively, you can use the **Refresh all** button which loads videos all the way back to the cutoff, updating their data. Neither will duplicate the items or reset their status. "Fetch new" is cheaper in terms of quota.
 
 ### Connect the player to your YouTube account (optional)
 
