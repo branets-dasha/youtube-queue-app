@@ -26,6 +26,9 @@ export const LS_CUTOFF = 'yqa_cutoff';
 export const LS_VIDEOS_FALLBACK = 'yqa_videos_fallback';
 // Persisted channel map (channelId -> { title, avatarUrl }) for card avatars.
 export const LS_CHANNELS = 'yqa_channels';
+// Persisted player playback rate (one of 1 / 1.5 / 2). Source of truth + default.
+export const LS_PLAYBACK_RATE = 'yqa_playback_rate';
+export const DEFAULT_PLAYBACK_RATE = 1;
 
 // IndexedDB configuration.
 export const IDB_NAME = 'yqa';

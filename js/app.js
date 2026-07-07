@@ -9,6 +9,7 @@ import {
   STATE_WATCHED,
   STATE_NOT_INTERESTED,
   QUEUE_DISPLAY_LIMIT,
+  DEFAULT_PLAYBACK_RATE,
 } from './config.js';
 import {
   getClientId,
@@ -24,6 +25,8 @@ import {
   replaceAllVideos,
   loadChannels,
   saveChannels,
+  getPlaybackRate,
+  setPlaybackRate,
 } from './store.js';
 import {
   waitForGis,
@@ -119,6 +122,13 @@ async function init() {
   // Load the persisted channel avatar/title map BEFORE the first render so
   // avatars appear immediately for already-stored videos (zero API cost).
   state.channels = loadChannels();
+
+  // Restore the persisted playback rate (validated; fall back to default 1x for
+  // anything not 1/1.5/2). player.js applies it on each video load; the button
+  // highlight is set by updateRateButtons when the app view shows.
+  const storedRate = getPlaybackRate();
+  state.rate = [1, 1.5, 2].includes(storedRate) ? storedRate : DEFAULT_PLAYBACK_RATE;
+  playerSetRate(state.rate);
 
   // INIT is one of the three CLEANUP sites. Migrate installs that predate the
   // cutoff key (derive it from floor), then run cleanup BEFORE the first render.
@@ -784,6 +794,7 @@ function markPlayingCard(videoId) {
 function onRate(rate) {
   state.rate = rate;
   playerSetRate(rate);
+  setPlaybackRate(rate); // persist across reloads
   updateRateButtons();
 }
 

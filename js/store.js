@@ -15,6 +15,7 @@ import {
   LS_CUTOFF,
   LS_VIDEOS_FALLBACK,
   LS_CHANNELS,
+  LS_PLAYBACK_RATE,
   IDB_NAME,
   IDB_VERSION,
   IDB_STORE_VIDEOS,
@@ -76,6 +77,26 @@ export function setCutoff(iso) {
     localStorage.removeItem(LS_CUTOFF);
   } else {
     localStorage.setItem(LS_CUTOFF, iso);
+  }
+}
+
+// The persisted player playback rate (yqa_playback_rate). Returns a Number, or
+// null if absent/unreadable (caller validates + falls back to the default).
+
+export function getPlaybackRate() {
+  try {
+    const raw = localStorage.getItem(LS_PLAYBACK_RATE);
+    return raw == null ? null : Number(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function setPlaybackRate(rate) {
+  try {
+    localStorage.setItem(LS_PLAYBACK_RATE, String(rate));
+  } catch {
+    /* ignore */
   }
 }
 
