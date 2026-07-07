@@ -196,8 +196,8 @@ function buildAvatar(rec, channels) {
     class: 'row__avatar',
     alt: title, // channel title
     loading: 'lazy',
-    width: '24',
-    height: '24',
+    width: '36',
+    height: '36',
   });
   // If the avatar fails to load, swap in the placeholder so height stays uniform.
   img.onerror = () => {
@@ -275,7 +275,6 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     href: watchUrl,
     target: '_blank',
     rel: 'noopener',
-    title: rec.title, // native tooltip showing the full (clamped) title; attribute, XSS-safe
     text: rec.title, // safe
   });
 
