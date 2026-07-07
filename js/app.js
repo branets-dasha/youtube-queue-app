@@ -4,7 +4,7 @@
 // event binding and first-run onboarding. This is the only module that reaches
 // into every layer.
 
-import { STATE_WATCHED, STATE_NOT_INTERESTED } from './config.js';
+import { STATE_NEW, STATE_WATCHED, STATE_NOT_INTERESTED } from './config.js';
 import {
   getClientId,
   setClientId,
@@ -27,6 +27,7 @@ import { getSubscriptions, getChannelVideosSince, ApiError } from './api.js';
 import {
   upsertVideos,
   computeQueue,
+  computeVisible,
   advanceCutoff,
   daysAgoIso,
 } from './queue.js';
@@ -36,6 +37,7 @@ import {
   hideStatus,
   renderQueue,
   renderStats,
+  setCardState,
   setVisible,
 } from './ui.js';
 
@@ -47,7 +49,8 @@ const state = {
   clientId: null,
   cutoff: null,
   records: [], // all stored video records
-  queue: [], // derived: computeQueue(records, cutoff)
+  visible: [], // derived: computeVisible(records, cutoff) — render list (any state)
+  queue: [], // derived: computeQueue(records, cutoff) — still-'new' subset, for the count
   handledThisSession: 0,
   lastAction: null, // { videoId, prevState } for undo
   refreshing: false,
@@ -78,6 +81,16 @@ async function init() {
     state.records = await getAllVideos();
   } catch {
     state.records = [];
+  }
+
+  // Reload-time cleanup (a): on page load, advance the cutoff across any
+  // contiguous handled prefix and prune it BEFORE the first render.
+  if (state.cutoff) {
+    try {
+      await reconcileCutoff();
+    } catch {
+      // Non-fatal: fall through and render whatever we have.
+    }
   }
 
   routeFirstRun();
@@ -334,6 +347,11 @@ async function onRefresh() {
 
     await mergeAndPersist(collected);
 
+    // Reload-time cleanup (b): after fetching newer videos, advance the cutoff
+    // across the contiguous handled prefix, prune, then re-render.
+    await reconcileCutoff();
+    recompute();
+
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
     if (skipped > 0) parts.push(`${skipped} channel(s) skipped (deleted/unavailable).`);
     showStatus(dom.status, parts.join(' '), 'success');
@@ -360,61 +378,71 @@ async function mergeAndPersist(incoming) {
 // Marking actions + cutoff advancement + pruning
 // ---------------------------------------------------------------------------
 
-async function markVideo(videoId, newState) {
+async function markVideo(videoId, newState, opts = {}) {
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;
 
-  // Position of the acted-on row in the current queue, so we can restore
-  // keyboard focus to whatever slides into its place after the re-render.
-  const focusIdx = state.queue.findIndex((r) => r.videoId === videoId);
-
-  // Optimistically mutate in memory; remember enough to revert on failure.
   const prevState = rec.state;
-  rec.state = newState;
-  state.handledThisSession += 1;
+  // Toggle semantics: acting on a state the card is already in reverts it to
+  // 'new', so a mis-mark can be corrected straight from the still-usable buttons
+  // (or with the w/x key), and switching watched<->not_interested just re-marks.
+  const nextState = prevState === newState ? STATE_NEW : newState;
+
+  const card = findCard(videoId);
+
+  // Optimistic, SYNCHRONOUS UI update: set the state, grey just this one card in
+  // place, refresh the header counts, and (for keyboard marks) advance focus to
+  // the next card BEFORE awaiting the persist. Nothing is recomputed, reordered,
+  // or pruned, so the list stays perfectly stable across rapid w/x succession.
+  rec.state = nextState;
+  applyHandledDelta(prevState, nextState);
   state.lastAction = { videoId, prevState };
+  if (card) setCardState(card, nextState);
+  updateStats();
+  showUndoBar();
+  if (opts.advanceFocus && card) {
+    const next = nextRowAfter(card);
+    if (next) next.focus();
+  }
 
   try {
     await putVideo(rec);
-    // Advance the cutoff / prune, stashing what was pruned so undo can survive
-    // pruning of the just-handled item (the dominant burn-down path).
-    const { prunedRecords, prevCutoff } = await applyCutoffAdvancement();
-    if (state.lastAction) {
-      state.lastAction.prunedRecords = prunedRecords;
-      state.lastAction.prevCutoff = prevCutoff;
-    }
   } catch (err) {
-    // Persistence failed: revert the optimistic in-memory mutation so state
-    // stays consistent with what is actually stored, then surface the error.
+    // Persistence failed: revert the optimistic changes so memory matches store.
     rec.state = prevState;
-    state.handledThisSession = Math.max(0, state.handledThisSession - 1);
-    state.lastAction = null;
-    recompute();
+    applyHandledDelta(nextState, prevState);
+    if (card) setCardState(card, prevState);
+    updateStats();
+    if (state.lastAction && state.lastAction.videoId === videoId) {
+      state.lastAction = null;
+    }
     handleError(err);
-    return;
   }
-
-  recompute();
-  showUndoBar(newState);
-  restoreQueueFocus(focusIdx);
 }
 
 /**
- * Advance the cutoff and prune. Returns the pruned record objects (with the
- * states they had at prune time) plus the cutoff that was in effect before the
- * advance, so a subsequent undo can restore them.
- * @returns {Promise<{ prunedRecords: Array<object>, prevCutoff: (string|null) }>}
+ * Keep the "handled this session" tally consistent across marks, toggles and
+ * undos: +1 when a 'new' video becomes handled, -1 when a handled video reverts
+ * to 'new', 0 when switching between two handled states.
  */
-async function applyCutoffAdvancement() {
-  const prevCutoff = state.cutoff;
+function applyHandledDelta(fromState, toState) {
+  if (fromState === STATE_NEW && toState !== STATE_NEW) {
+    state.handledThisSession += 1;
+  } else if (fromState !== STATE_NEW && toState === STATE_NEW) {
+    state.handledThisSession = Math.max(0, state.handledThisSession - 1);
+  }
+}
+
+/**
+ * Reload-time cutoff cleanup (NOT run on individual marks). Advances the cutoff
+ * across the contiguous handled prefix, deletes the pruned records, and persists
+ * the new cutoff. Pure derivation via advanceCutoff; does not render.
+ */
+async function reconcileCutoff() {
   const { newCutoff, prunedIds } = advanceCutoff(state.records, state.cutoff);
 
-  let prunedRecords = [];
   if (prunedIds.length > 0) {
     const prunedSet = new Set(prunedIds);
-    prunedRecords = state.records
-      .filter((r) => prunedSet.has(r.videoId))
-      .map((r) => ({ ...r }));
     state.records = state.records.filter((r) => !prunedSet.has(r.videoId));
     await deleteVideos(prunedIds);
   }
@@ -423,70 +451,71 @@ async function applyCutoffAdvancement() {
     state.cutoff = newCutoff;
     setStartCutoff(newCutoff);
   }
-
-  return { prunedRecords, prevCutoff };
 }
 
 async function onUndo() {
   const action = state.lastAction;
   if (!action) return;
 
-  try {
-    const rec = state.records.find((r) => r.videoId === action.videoId);
-    const pruned = action.prunedRecords || [];
-
-    if (rec) {
-      // The record is still in the store: simply revert its state.
-      rec.state = action.prevState;
-      await putVideo(rec);
-    } else if (pruned.length > 0) {
-      // The record (and any others at/behind the advanced cutoff) were pruned
-      // when the cutoff advanced. Re-insert the stashed records, restoring the
-      // acted-on one to its prior state, and roll the cutoff back so they land
-      // back inside the active window.
-      const restored = pruned.map((r) => ({
-        ...r,
-        state: r.videoId === action.videoId ? action.prevState : r.state,
-      }));
-      state.records = state.records.concat(restored);
-      if (
-        action.prevCutoff !== undefined &&
-        action.prevCutoff !== state.cutoff
-      ) {
-        state.cutoff = action.prevCutoff;
-        setStartCutoff(action.prevCutoff);
-      }
-      await putVideos(restored);
-    } else {
-      showStatus(dom.status, 'Cannot undo: that item was already pruned.', 'info');
-      state.lastAction = null;
-      hideUndoBar();
-      return;
-    }
-
-    state.handledThisSession = Math.max(0, state.handledThisSession - 1);
+  const rec = state.records.find((r) => r.videoId === action.videoId);
+  if (!rec) {
+    // The video is no longer present (e.g. pruned by a reload). Nothing to undo.
     state.lastAction = null;
-    recompute();
     hideUndoBar();
+    return;
+  }
+
+  const curState = rec.state;
+  const card = findCard(action.videoId);
+
+  // Optimistically revert to the pre-mark state and un-grey the card in place.
+  rec.state = action.prevState;
+  applyHandledDelta(curState, action.prevState);
+  if (card) setCardState(card, action.prevState);
+  updateStats();
+  state.lastAction = null;
+  hideUndoBar();
+
+  try {
+    await putVideo(rec);
   } catch (err) {
+    // Roll back the optimistic revert on persistence failure.
+    rec.state = curState;
+    applyHandledDelta(action.prevState, curState);
+    if (card) setCardState(card, curState);
+    updateStats();
     handleError(err);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Queue DOM helpers (operate on the stable, in-place list)
+// ---------------------------------------------------------------------------
+
 /**
- * After a re-render, return keyboard focus to the queue row now occupying the
- * given index (clamped), or to the empty state when the queue is empty.
- * @param {number} idx position the acted-on row held before the re-render
+ * Find the rendered card (<li class="row">) for a videoId via its data attribute.
+ * @param {string} videoId
+ * @returns {HTMLElement|null}
  */
-function restoreQueueFocus(idx) {
-  if (idx < 0) return;
-  const rows = Array.from(dom.queueList.querySelectorAll('.row'));
-  if (rows.length > 0) {
-    rows[Math.min(idx, rows.length - 1)].focus();
-  } else if (dom.emptyState && !dom.emptyState.hidden) {
-    dom.emptyState.setAttribute('tabindex', '-1');
-    dom.emptyState.focus();
+function findCard(videoId) {
+  for (const row of dom.queueList.querySelectorAll('.row')) {
+    if (row.dataset.videoId === videoId) return row;
   }
+  return null;
+}
+
+/**
+ * The next card after `card` in queue/DOM order, for post-mark focus advance.
+ * Returns `card` itself when it is the last one (keep focus put), or null.
+ * @param {HTMLElement} card
+ * @returns {HTMLElement|null}
+ */
+function nextRowAfter(card) {
+  if (!card) return null;
+  const rows = Array.from(dom.queueList.querySelectorAll('.row'));
+  const i = rows.indexOf(card);
+  if (i === -1) return null;
+  return i < rows.length - 1 ? rows[i + 1] : card;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,11 +523,34 @@ function restoreQueueFocus(idx) {
 // ---------------------------------------------------------------------------
 
 function recompute() {
+  // The render list includes ALL in-window videos (any state); the queue is the
+  // still-'new' subset used only for the "Queued" count.
+  state.visible = computeVisible(state.records, state.cutoff);
   state.queue = computeQueue(state.records, state.cutoff);
   render();
 }
 
 function render() {
+  updateStats();
+
+  const hasItems = state.visible.length > 0;
+  setVisible(dom.queueList, hasItems);
+  setVisible(dom.emptyState, !hasItems && isSignedIn());
+
+  // Button clicks are mouse-driven, so they don't advance focus; keyboard w/x
+  // (in onGlobalKeydown) pass advanceFocus for rapid down-the-list marking.
+  renderQueue(dom.queueList, state.visible, {
+    onWatched: (id) => markVideo(id, STATE_WATCHED),
+    onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
+  });
+}
+
+/**
+ * Refresh only the header stats (counts + cutoff) without touching the list, so
+ * marking a card in place never re-renders or reorders the queue.
+ */
+function updateStats() {
+  state.queue = computeQueue(state.records, state.cutoff);
   renderStats(
     {
       queuedCountEl: dom.queuedCount,
@@ -511,15 +563,6 @@ function render() {
       cutoff: state.cutoff,
     }
   );
-
-  const hasItems = state.queue.length > 0;
-  setVisible(dom.queueList, hasItems);
-  setVisible(dom.emptyState, !hasItems && isSignedIn());
-
-  renderQueue(dom.queueList, state.queue, {
-    onWatched: (id) => markVideo(id, STATE_WATCHED),
-    onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
-  });
 }
 
 function showUndoBar() {
@@ -557,12 +600,12 @@ function onGlobalKeydown(e) {
   } else if (key === 'w') {
     if (idx >= 0) {
       e.preventDefault();
-      markVideo(rows[idx].dataset.videoId, STATE_WATCHED);
+      markVideo(rows[idx].dataset.videoId, STATE_WATCHED, { advanceFocus: true });
     }
   } else if (key === 'x') {
     if (idx >= 0) {
       e.preventDefault();
-      markVideo(rows[idx].dataset.videoId, STATE_NOT_INTERESTED);
+      markVideo(rows[idx].dataset.videoId, STATE_NOT_INTERESTED, { advanceFocus: true });
     }
   } else if (key === 'u') {
     e.preventDefault();

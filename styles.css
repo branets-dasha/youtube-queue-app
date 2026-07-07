@@ -420,6 +420,45 @@ main {
   flex: 1 1 0; /* equal-width action buttons across the footer */
 }
 
+/* ---- Handled (marked) cards ---- */
+
+/* Grey ONLY the thumbnail and text — never the action buttons — and do NOT gate
+   this on :hover/:focus-within. So the acted-on card greys the instant its state
+   class is set (no lag), regardless of whether a button inside it still holds
+   focus or the pointer. opacity/filter change no layout, so card height is
+   identical in every state. */
+.row--handled .row__thumb {
+  opacity: 0.5;
+  filter: grayscale(0.7);
+  transition: opacity 0.12s ease, filter 0.12s ease;
+}
+.row--handled .row__meta {
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+
+/* Taken-action indicator: a solid state-coloured button background driven by the
+   aria-pressed set (synchronously) by setCardState. Buttons are excluded from the
+   greying above, so the colour stays clearly legible at rest on a handled card. */
+.btn--watched[aria-pressed='true'] {
+  background: var(--watched);
+  border-color: var(--watched);
+  color: var(--primary-text);
+}
+.btn--watched[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--watched);
+  filter: brightness(1.06);
+}
+.btn--not[aria-pressed='true'] {
+  background: var(--not);
+  border-color: var(--not);
+  color: var(--primary-text);
+}
+.btn--not[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--not);
+  filter: brightness(1.06);
+}
+
 /* ---- Empty state ---- */
 
 .empty {

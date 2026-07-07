@@ -5,6 +5,8 @@
 // We NEVER assign API data into innerHTML. Video URLs are built with
 // encodeURIComponent on the id, and thumbnails are set via img.src only.
 
+import { STATE_WATCHED, STATE_NOT_INTERESTED } from './config.js';
+
 // ---------------------------------------------------------------------------
 // Small DOM helpers
 // ---------------------------------------------------------------------------
@@ -133,6 +135,33 @@ export function hideStatus(container) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Reflect a record's state on an ALREADY-RENDERED card, in place, without
+ * rebuilding it: toggle the greyed "handled" styling and mirror the taken action
+ * onto the action buttons via aria-pressed (CSS paints the active button's
+ * background from it). Preserves the .row element (and thus its focus), its
+ * data-video-id, and child order, so the app.js focus/keyboard contract is
+ * untouched — and it adds/removes nothing that affects layout, so card height is
+ * identical in every state.
+ * @param {HTMLElement} card the <li class="row">
+ * @param {string} state 'new' | 'watched' | 'not_interested'
+ */
+export function setCardState(card, state) {
+  if (!card) return;
+  const handled = state === STATE_WATCHED || state === STATE_NOT_INTERESTED;
+
+  card.classList.remove('row--watched', 'row--not_interested', 'row--handled');
+  if (handled) {
+    card.classList.add('row--handled');
+    card.classList.add(state === STATE_WATCHED ? 'row--watched' : 'row--not_interested');
+  }
+
+  const watchedBtn = card.querySelector('.btn--watched');
+  const notBtn = card.querySelector('.btn--not');
+  if (watchedBtn) watchedBtn.setAttribute('aria-pressed', String(state === STATE_WATCHED));
+  if (notBtn) notBtn.setAttribute('aria-pressed', String(state === STATE_NOT_INTERESTED));
+}
+
+/**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
  * @param {object} handlers { onWatched(id), onNotInterested(id) }
@@ -216,6 +245,7 @@ export function buildQueueRow(rec, handlers) {
     class: 'btn btn--watched',
     type: 'button',
     'aria-label': `Mark "${rec.title}" as watched`,
+    'aria-pressed': 'false',
     text: 'Watched',
     onclick: () => handlers.onWatched(rec.videoId),
   });
@@ -223,6 +253,7 @@ export function buildQueueRow(rec, handlers) {
     class: 'btn btn--not',
     type: 'button',
     'aria-label': `Mark "${rec.title}" as not interested`,
+    'aria-pressed': 'false',
     text: 'Not interested',
     onclick: () => handlers.onNotInterested(rec.videoId),
   });
@@ -240,6 +271,9 @@ export function buildQueueRow(rec, handlers) {
     },
     [thumbLink, meta, actions]
   );
+
+  // Reflect the record's initial state (marked videos render greyed on load).
+  setCardState(li, rec.state);
 
   return li;
 }

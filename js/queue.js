@@ -138,6 +138,21 @@ export function computeQueue(records, cutoff) {
 }
 
 /**
+ * Compute the RENDER list: all records strictly newer than the cutoff,
+ * REGARDLESS of state (new / watched / not_interested), sorted ascending by
+ * publishedAt (oldest first). Unlike computeQueue this KEEPS marked videos in
+ * the list (they are greyed out in the UI) until a reload advances the cutoff
+ * and prunes the contiguous handled prefix. Pure; does not mutate the input.
+ * @param {Array<object>} records
+ * @param {string|null|undefined} cutoff ISO timestamp
+ * @returns {Array<object>}
+ */
+export function computeVisible(records, cutoff) {
+  const filtered = records.filter((r) => isAfterCutoff(r, cutoff));
+  return sortAscending(filtered);
+}
+
+/**
  * Advance the start cutoff across the contiguous handled prefix.
  *
  * Algorithm (pinned by spec):
