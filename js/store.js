@@ -22,7 +22,24 @@ import {
   IDB_VERSION,
   IDB_STORE_VIDEOS,
   IDB_KEYPATH,
+  STATE_NEW,
+  STATE_SKIPPED,
 } from './config.js';
+
+/**
+ * Migrate loaded records to the single "handled" state model: any record whose
+ * state is not 'new' (old 'watched' / 'not_interested', or anything unexpected)
+ * becomes 'skipped'. Mutates + returns the array. Applied on every read so the
+ * in-memory model is always normalized regardless of what's on disk.
+ * @param {Array<object>} records
+ * @returns {Array<object>}
+ */
+function migrateStates(records) {
+  for (const r of records) {
+    if (r && r.state !== STATE_NEW) r.state = STATE_SKIPPED;
+  }
+  return records;
+}
 
 // ---------------------------------------------------------------------------
 // localStorage: client id & cutoff
@@ -256,13 +273,13 @@ function fallbackWriteAll(records) {
 export async function getAllVideos() {
   const db = await openDb();
   if (!db || useFallback) {
-    return fallbackReadAll();
+    return migrateStates(fallbackReadAll());
   }
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE_VIDEOS, 'readonly');
     const store = tx.objectStore(IDB_STORE_VIDEOS);
     const req = store.getAll();
-    req.onsuccess = () => resolve(req.result || []);
+    req.onsuccess = () => resolve(migrateStates(req.result || []));
     req.onerror = () => reject(req.error);
   });
 }

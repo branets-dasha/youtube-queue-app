@@ -33,7 +33,7 @@ export const DEFAULT_PLAYBACK_RATE = 1;
 // absent/null = unset). Distinct from LS_PLAYBACK_RATE (the live/current rate):
 // this is the fallback applied to a video that has no per-video preferredRate.
 export const LS_DEFAULT_RATE = 'yqa_default_rate';
-// Persisted "hide marked (watched / not-interested) videos" view toggle. Default off.
+// Persisted "hide handled (skipped) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 
 // IndexedDB configuration.
@@ -61,7 +61,9 @@ export const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 // out of order isn't missed. Tunable. Default: 6 hours.
 export const INCREMENTAL_REFRESH_BUFFER_MS = 6 * 60 * 60 * 1000;
 
-// Valid video states.
+// Valid video states. There is a SINGLE "handled" state, `skipped` — the old
+// split into 'watched' / 'not_interested' was functionally identical (both just
+// meant "handled"), so they were merged. Old records migrate to 'skipped' on load
+// (see store.js). Throughout the app, "handled" means `state !== STATE_NEW`.
 export const STATE_NEW = 'new';
-export const STATE_WATCHED = 'watched';
-export const STATE_NOT_INTERESTED = 'not_interested';
+export const STATE_SKIPPED = 'skipped';

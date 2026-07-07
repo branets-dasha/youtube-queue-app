@@ -5,7 +5,7 @@
 // We NEVER assign API data into innerHTML. Video URLs are built with
 // encodeURIComponent on the id, and thumbnails are set via img.src only.
 
-import { STATE_WATCHED, STATE_NOT_INTERESTED } from './config.js';
+import { STATE_NEW } from './config.js';
 import { formatDuration, isShort } from './queue.js';
 
 // ---------------------------------------------------------------------------
@@ -144,22 +144,16 @@ export function hideStatus(container) {
  * untouched — and it adds/removes nothing that affects layout, so card height is
  * identical in every state.
  * @param {HTMLElement} card the <li class="row">
- * @param {string} state 'new' | 'watched' | 'not_interested'
+ * @param {string} state 'new' | 'skipped'
  */
 export function setCardState(card, state) {
   if (!card) return;
-  const handled = state === STATE_WATCHED || state === STATE_NOT_INTERESTED;
+  const handled = state !== STATE_NEW; // single "handled" state
 
-  card.classList.remove('row--watched', 'row--not_interested', 'row--handled');
-  if (handled) {
-    card.classList.add('row--handled');
-    card.classList.add(state === STATE_WATCHED ? 'row--watched' : 'row--not_interested');
-  }
+  card.classList.toggle('row--handled', handled);
 
-  const watchedBtn = card.querySelector('.btn--watched');
-  const notBtn = card.querySelector('.btn--not');
-  if (watchedBtn) watchedBtn.setAttribute('aria-pressed', String(state === STATE_WATCHED));
-  if (notBtn) notBtn.setAttribute('aria-pressed', String(state === STATE_NOT_INTERESTED));
+  const skipBtn = card.querySelector('.btn--skip');
+  if (skipBtn) skipBtn.setAttribute('aria-pressed', String(handled));
 }
 
 /**
@@ -277,7 +271,7 @@ export function renderPlayerMeta(container, rec, channels = {}) {
 /**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
- * @param {object} handlers { onWatched(id), onNotInterested(id), onPlay(id) }
+ * @param {object} handlers { onSkip(id), onPlay(id), onCardRate(id, rate) }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  * @returns {HTMLLIElement}
  */
@@ -376,36 +370,27 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     ]),
   ]);
 
-  // Compact ICON actions on ONE row (▶ · 1× 2× · ✓ ✕). Glyphs are static unicode
-  // (never API data); each carries an aria-label AND a title tooltip. The card
-  // title itself is the link to the video on YouTube, so no separate ↗ button.
-  // Watched/Not keep their classes so setCardState's aria-pressed + the
-  // active-colour CSS still apply.
+  // Two TEXT action buttons flank the compact speed group: [▶ Play] · 1× 2× ·
+  // [Skip]. The ▶ glyph is static unicode (never API data); each button carries
+  // an aria-label AND a title. The card title itself links to the video on
+  // YouTube, so there is no separate ↗ button. Skip keeps its class so
+  // setCardState's aria-pressed + the active-colour CSS still apply.
   const playBtn = el('button', {
-    class: 'btn btn--icon btn--play',
+    class: 'btn btn--play',
     type: 'button',
     'aria-label': `Play "${rec.title}" in the player`,
     title: 'Play',
-    text: '▶',
+    text: '▶ Play',
     onclick: () => handlers.onPlay && handlers.onPlay(rec.videoId),
   });
-  const watchedBtn = el('button', {
-    class: 'btn btn--icon btn--watched',
+  const skipBtn = el('button', {
+    class: 'btn btn--skip',
     type: 'button',
-    'aria-label': `Mark "${rec.title}" as watched`,
+    'aria-label': `Skip "${rec.title}"`,
     'aria-pressed': 'false',
-    title: 'Watched',
-    text: '✓',
-    onclick: () => handlers.onWatched(rec.videoId),
-  });
-  const notBtn = el('button', {
-    class: 'btn btn--icon btn--not',
-    type: 'button',
-    'aria-label': `Mark "${rec.title}" as not interested`,
-    'aria-pressed': 'false',
-    title: 'Not interested',
-    text: '✕',
-    onclick: () => handlers.onNotInterested(rec.videoId),
+    title: 'Skip',
+    text: 'Skip',
+    onclick: () => handlers.onSkip && handlers.onSkip(rec.videoId),
   });
 
   // Per-video preferred-speed group (1× / 2×) placed right after Play. It sets a
@@ -436,8 +421,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
   const actions = el('div', { class: 'row__actions' }, [
     playBtn,
     speedGroup,
-    watchedBtn,
-    notBtn,
+    skipBtn,
   ]);
 
   const li = el(
@@ -463,7 +447,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
  * Render the queue list into `listEl`.
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
- * @param {object} handlers { onWatched, onNotInterested }
+ * @param {object} handlers { onSkip, onPlay, onCardRate }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  */
 export function renderQueue(listEl, queue, handlers, channels = {}, more = null) {

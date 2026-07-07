@@ -18,12 +18,14 @@
 //     positionSeconds: number, // optional; last watch position, for resume
 //     liked:        boolean,   // optional; locally-tracked YouTube like state
 //     preferredRate: number,   // optional; per-video preferred speed (1 | 1.5 | 2)
-//     state:        'new' | 'watched' | 'not_interested'
+//     state:        'new' | 'skipped'   // 'skipped' is the single "handled" state
 //   }
 
+// A single "handled" state. Every handled check below is expressed as
+// `state === STATE_NEW` (or its negation), so nothing depends on the exact
+// handled value — a record is "handled" iff its state is not 'new'.
 export const STATE_NEW = 'new';
-export const STATE_WATCHED = 'watched';
-export const STATE_NOT_INTERESTED = 'not_interested';
+export const STATE_SKIPPED = 'skipped';
 
 // A video whose length is at most this many seconds is treated as a "Short".
 // Heuristic only — the API exposes no isShort flag to the client.
@@ -148,7 +150,7 @@ export function computeQueue(records, cutoff) {
 
 /**
  * Compute the RENDER list: all records strictly newer than the cutoff,
- * REGARDLESS of state (new / watched / not_interested), sorted ascending by
+ * REGARDLESS of state (new / skipped), sorted ascending by
  * publishedAt (oldest first). Unlike computeQueue this KEEPS marked videos in
  * the list (they are greyed out in the UI) until a reload advances the cutoff
  * and prunes the contiguous handled prefix. Pure; does not mutate the input.
@@ -163,8 +165,8 @@ export function computeVisible(records, cutoff) {
 
 /**
  * The next auto-play candidate AFTER `currentVideoId` in an ascending
- * (oldest->newest) list: the first record whose state === 'new' (which skips
- * BOTH 'watched' and 'not_interested') AND is embeddable (embeddable !== false).
+ * (oldest->newest) list: the first record whose state === 'new' (which skips any
+ * handled 'skipped' video) AND is embeddable (embeddable !== false).
  * If `currentVideoId` is not in the list, the search starts from the beginning
  * (graceful). Returns null when nothing eligible remains. Pure.
  * @param {Array<object>} sorted visible records, ascending by publishedAt
@@ -188,7 +190,7 @@ export function nextPlayable(sorted, currentVideoId) {
  * first UNMARKED video is just after it."
  *
  * Sort ascending (tie-safe). Walk from the oldest present video (strictly after
- * `floor`): while it is handled (watched / not_interested) advance the result to
+ * `floor`): while it is handled (state !== 'new') advance the result to
  * its publishedAt; stop at the first 'new'. TIE-SAFETY: the result is always
  * STRICTLY LESS than the earliest still-'new' video's publishedAt, so a handled
  * video sharing a timestamp with a 'new' one never pulls the cutoff onto (or

@@ -6,8 +6,7 @@
 
 import {
   STATE_NEW,
-  STATE_WATCHED,
-  STATE_NOT_INTERESTED,
+  STATE_SKIPPED,
   QUEUE_DISPLAY_LIMIT,
   DEFAULT_PLAYBACK_RATE,
   INCREMENTAL_REFRESH_BUFFER_MS,
@@ -103,7 +102,7 @@ const state = {
   rate: 1, // player playback rate (1 / 1.5 / 2)
   defaultRate: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
-  hideMarked: false, // view filter: hide watched/not-interested videos (persisted)
+  hideMarked: false, // view filter: hide skipped (handled) videos (persisted)
   curtain: false, // privacy curtain overlay: true = raised (covering the page)
 };
 
@@ -596,10 +595,9 @@ async function markVideo(videoId, newState, opts = {}) {
 
   const prevState = rec.state;
   // Toggle semantics: acting on a state the card is already in reverts it to
-  // 'new', so a mis-mark can be corrected straight from the still-usable buttons
-  // (or with the w/x key), and switching watched<->not_interested just re-marks.
-  // `opts.force` (used by auto-mark when a video ENDS) always SETS newState, so a
-  // just-finished video is never accidentally toggled back to 'new'.
+  // 'new', so a mis-skip can be corrected straight from the still-usable button
+  // (or with the x key). `opts.force` (used by auto-mark when a video ENDS)
+  // always SETS newState, so a just-finished video is never toggled back to 'new'.
   const nextState = opts.force
     ? newState
     : prevState === newState
@@ -611,7 +609,7 @@ async function markVideo(videoId, newState, opts = {}) {
   // Optimistic, SYNCHRONOUS UI update: set the state, grey just this one card in
   // place, refresh the header counts, and (for keyboard marks) advance focus to
   // the next card BEFORE awaiting the persist. Nothing is recomputed, reordered,
-  // or pruned, so the list stays perfectly stable across rapid w/x succession.
+  // or pruned, so the list stays perfectly stable across rapid Skip succession.
   rec.state = nextState;
   applyHandledDelta(prevState, nextState);
   state.lastAction = { videoId, prevState };
@@ -833,11 +831,11 @@ function openOnYouTube(videoId) {
 }
 
 /**
- * Fired when the current video ENDS: auto-mark it 'watched' via the EXISTING
+ * Fired when the current video ENDS: auto-mark it 'skipped' via the EXISTING
  * markVideo path (force = never toggle), so the cutoff marker + greying +
  * persistence all update; then auto-play the NEXT eligible video — the first one
- * after it that is still 'new' (skips 'watched' AND 'not_interested') and is
- * embeddable — or show the caught-up state when none remain.
+ * after it that is still 'new' (skips any handled video) and is embeddable — or
+ * show the caught-up state when none remain.
  * @param {string} endedId
  */
 function onPlayerEnded(endedId) {
@@ -845,7 +843,7 @@ function onPlayerEnded(endedId) {
   // Reset the saved position so a finished video won't resume at its very end.
   const rec = state.records.find((r) => r.videoId === endedId);
   if (rec) rec.positionSeconds = 0;
-  markVideo(endedId, STATE_WATCHED, { force: true }); // persists rec (incl. position)
+  markVideo(endedId, STATE_SKIPPED, { force: true }); // persists rec (incl. position)
   const next = nextPlayable(state.visible, endedId);
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
@@ -928,7 +926,7 @@ function onCardRate(videoId, rate) {
 }
 
 /**
- * Skip button: mark the CURRENT video watched and advance — reusing the EXACT
+ * Skip button: mark the CURRENT video skipped and advance — reusing the EXACT
  * same path as auto-advance-on-end (forced markVideo + nextPlayable).
  */
 function onSkipNext() {
@@ -1068,14 +1066,13 @@ function render() {
   const more =
     !state.showAll && total > QUEUE_DISPLAY_LIMIT ? { total, onShowAll } : null;
 
-  // Button clicks are mouse-driven, so they don't advance focus; keyboard w/x
-  // (in onGlobalKeydown) pass advanceFocus for rapid down-the-list marking.
+  // Button clicks are mouse-driven, so they don't advance focus; the keyboard x
+  // (in onGlobalKeydown) passes advanceFocus for rapid down-the-list skipping.
   renderQueue(
     dom.queueList,
     windowed,
     {
-      onWatched: (id) => markVideo(id, STATE_WATCHED),
-      onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
+      onSkip: (id) => markVideo(id, STATE_SKIPPED),
       onPlay: (id) => playVideo(id),
       onCardRate: (id, rate) => onCardRate(id, rate),
     },
@@ -1214,8 +1211,8 @@ function cyclePlaybackRate(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. QUEUE: j/k move, w watched, x not-interested, u undo,
-// Enter play focused card. PLAYER: Space play/pause, ←/→ seek, -/+ speed, n
+// Keyboard shortcuts. QUEUE: j/k move, x skip, u undo, Enter play focused card.
+// PLAYER: Space play/pause, ←/→ seek, -/+ speed, n
 // next, l like, m mute, f fullscreen. Ignored while typing in an input/textarea,
 // during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays allowed for '+').
 // ---------------------------------------------------------------------------
@@ -1298,15 +1295,11 @@ function onGlobalKeydown(e) {
     e.preventDefault();
     if (idx < rows.length - 1) rows[idx + 1].focus();
     else if (idx === -1 && rows.length) rows[0].focus();
-  } else if (key === 'w') {
-    if (idx >= 0) {
-      e.preventDefault();
-      markVideo(rows[idx].dataset.videoId, STATE_WATCHED, { advanceFocus: true });
-    }
   } else if (key === 'x') {
+    // x = Skip: toggle the focused card between new and skipped.
     if (idx >= 0) {
       e.preventDefault();
-      markVideo(rows[idx].dataset.videoId, STATE_NOT_INTERESTED, { advanceFocus: true });
+      markVideo(rows[idx].dataset.videoId, STATE_SKIPPED, { advanceFocus: true });
     }
   } else if (key === '1' || key === '2') {
     // Set the FOCUSED card's preferred speed. Reuses the card speed-button

@@ -14,6 +14,7 @@
   --accent: #065fd4;
   --watched: #0b8043;
   --not: #b23b3b;
+  --skip: #5f6b7a; /* neutral slate for the card Skip button's active state */
   --focus: #1a73e8;
   --radius: 10px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -36,6 +37,7 @@
     --accent: #6ea8fe;
     --watched: #34c759;
     --not: #ff6b6b;
+    --skip: #64748b; /* neutral slate for the card Skip button's active state */
     --focus: #8ab4f8;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
     --shadow-hover: 0 8px 22px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.5);
@@ -223,19 +225,12 @@ main {
 .btn--ghost:hover:not(:disabled) {
   background: var(--surface-2);
 }
-.btn--watched {
-  border-color: var(--watched);
-  color: var(--watched);
+.btn--skip {
+  border-color: var(--border);
+  color: var(--text-dim);
 }
-.btn--watched:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--watched) 14%, transparent);
-}
-.btn--not {
-  border-color: var(--not);
-  color: var(--not);
-}
-.btn--not:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--not) 14%, transparent);
+.btn--skip:hover:not(:disabled) {
+  background: var(--surface-2);
 }
 
 /* ---- Toolbar ---- */
@@ -607,16 +602,16 @@ a.row__channel:focus-visible {
   gap: 8px;
   padding: 8px 14px 14px;
 }
-/* Cohesive, understated icon buttons: ghost (transparent border, no fill) at
-   rest with a uniform size; a subtle neutral fill on hover; and the SEMANTIC
-   colour on hover — green (Watched) / red (Not interested) / accent (Play). */
+/* Cohesive, understated buttons: ghost (transparent border, no fill) at rest;
+   a subtle neutral fill on hover; Play tinted with the accent on hover, Skip
+   staying neutral. */
 .row__actions .btn {
   border-color: transparent;
   background: transparent;
   color: var(--text-dim);
 }
-/* Direct-child action icons (▶ ✓ ✕) share the row evenly; the speed group and
-   its compact buttons keep their natural size, on ONE line. */
+/* Direct-child text buttons (▶ Play, Skip) share the row evenly; the speed group
+   and its compact buttons keep their natural size, on ONE line. */
 .row__actions > .btn {
   flex: 1 1 0;
 }
@@ -628,21 +623,13 @@ a.row__channel:focus-visible {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
 }
-.row__actions .btn--watched:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--watched) 12%, transparent);
-  color: var(--watched);
-}
-.row__actions .btn--not:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--not) 12%, transparent);
-  color: var(--not);
-}
 .btn--icon {
   padding: 7px 10px;
   font-size: 1.05rem;
   line-height: 1;
 }
 /* Per-video preferred-speed group: compact, tightly grouped, with a subtle
-   divider before the ✓ ✕ icons. */
+   divider before the Skip button. */
 .row__rates {
   flex: 0 0 auto;
   display: flex;
@@ -685,27 +672,18 @@ a.row__channel:focus-visible {
   opacity: 0.55;
 }
 
-/* Taken-action indicator: a solid state-coloured button background driven by the
-   aria-pressed set (synchronously) by setCardState. Buttons are excluded from the
-   greying above, so the colour stays clearly legible at rest on a handled card. */
-.row__actions .btn--watched[aria-pressed='true'] {
-  background: var(--watched);
-  border-color: var(--watched);
+/* Taken-action indicator: a solid NEUTRAL slate fill on the Skip button driven by
+   the aria-pressed set (synchronously) by setCardState. Buttons are excluded from
+   the greying above, so it stays clearly legible at rest on a handled card, and
+   the slate reads distinctly against the greyed thumbnail/text (not red/green). */
+.row__actions .btn--skip[aria-pressed='true'] {
+  background: var(--skip);
+  border-color: var(--skip);
   color: var(--primary-text);
 }
-.row__actions .btn--watched[aria-pressed='true']:hover:not(:disabled) {
-  /* Keep the check icon light on hover; only nudge the fill a touch darker. */
-  background: color-mix(in srgb, var(--watched) 90%, #000);
-  color: var(--primary-text);
-}
-.row__actions .btn--not[aria-pressed='true'] {
-  background: var(--not);
-  border-color: var(--not);
-  color: var(--primary-text);
-}
-.row__actions .btn--not[aria-pressed='true']:hover:not(:disabled) {
-  /* Keep the cross icon light on hover; only nudge the fill a touch darker. */
-  background: color-mix(in srgb, var(--not) 90%, #000);
+.row__actions .btn--skip[aria-pressed='true']:hover:not(:disabled) {
+  /* Keep the label light on hover; only nudge the fill a touch darker. */
+  background: color-mix(in srgb, var(--skip) 88%, #000);
   color: var(--primary-text);
 }
 

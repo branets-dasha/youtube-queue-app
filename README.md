@@ -94,7 +94,7 @@ The app is deliberately quota-frugal and **never** uses `search.list`:
     - `yqa_default_rate` — the Default-speed setting (absent when off).
     - `yqa_hide_marked` — the Hide-handled toggle.
     - `yqa_videos_fallback` — video records, **only** when IndexedDB is unavailable.
-- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (falls back to `localStorage` if IndexedDB is unavailable). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `watched` / `not_interested`), `durationSeconds`, `embeddable`, `preferredRate`, `positionSeconds` (resume), and `liked`.
+- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (falls back to `localStorage` if IndexedDB is unavailable). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredRate`, `positionSeconds` (resume), and `liked`.
 - The **like** state is stored **locally** and is never fetched back from YouTube, so a like/unlike you make directly on YouTube will **not** be reflected here.
 - Nothing is ever sent to any server other than Google's.
 
@@ -177,8 +177,8 @@ import {
 } from './js/queue.js';
 
 const recs = [
-  { videoId: 'a', publishedAt: '2026-01-01T00:00:00Z', state: 'watched' },
-  { videoId: 'b', publishedAt: '2026-01-02T00:00:00Z', state: 'not_interested' },
+  { videoId: 'a', publishedAt: '2026-01-01T00:00:00Z', state: 'skipped' },
+  { videoId: 'b', publishedAt: '2026-01-02T00:00:00Z', state: 'skipped' },
   { videoId: 'c', publishedAt: '2026-01-03T00:00:00Z', state: 'new' },
 ];
 const floor = '2025-12-31T00:00:00Z';
