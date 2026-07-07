@@ -30,7 +30,7 @@ import {
 import {
   getSubscriptions,
   getChannelVideosSince,
-  getVideoDurations,
+  getVideoDetails,
   ApiError,
 } from './api.js';
 import {
@@ -39,6 +39,7 @@ import {
   computeVisible,
   computeCutoff,
   videosToClean,
+  nextPlayable,
   daysAgoIso,
 } from './queue.js';
 import {
@@ -47,9 +48,15 @@ import {
   hideStatus,
   renderQueue,
   renderStats,
+  renderPlayerMeta,
   setCardState,
   setVisible,
 } from './ui.js';
+import {
+  initPlayer,
+  loadVideo as playerLoad,
+  setRate as playerSetRate,
+} from './player.js';
 
 // ---------------------------------------------------------------------------
 // Application state (in-memory)
@@ -66,6 +73,9 @@ const state = {
   handledThisSession: 0,
   lastAction: null, // { videoId, prevState } for undo
   refreshing: false,
+  playing: null, // videoId currently loaded in the on-page player
+  playerInited: false,
+  rate: 1, // player playback rate (1 or 2)
 };
 
 // DOM references, populated in init().
@@ -147,6 +157,15 @@ function cacheDom() {
   dom.emptyState = byId('empty-state');
   dom.undoBtn = byId('undo-btn');
   dom.undoBar = byId('undo-bar');
+
+  // Player pane.
+  dom.playerTitle = byId('player-title');
+  dom.playerMeta = byId('player-meta');
+  dom.playerEmpty = byId('player-empty');
+  dom.rate1x = byId('rate-1x');
+  dom.rate15x = byId('rate-15x');
+  dom.rate2x = byId('rate-2x');
+  dom.skipBtn = byId('skip-btn');
 }
 
 function bindEvents() {
@@ -164,6 +183,10 @@ function bindEvents() {
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
   dom.undoBtn.addEventListener('click', onUndo);
+  if (dom.rate1x) dom.rate1x.addEventListener('click', () => onRate(1));
+  if (dom.rate15x) dom.rate15x.addEventListener('click', () => onRate(1.5));
+  if (dom.rate2x) dom.rate2x.addEventListener('click', () => onRate(2));
+  if (dom.skipBtn) dom.skipBtn.addEventListener('click', onSkipNext);
 
   document.addEventListener('keydown', onGlobalKeydown);
 
@@ -194,6 +217,7 @@ function openSetupPanel() {
   setVisible(dom.setupPanel, true);
   setVisible(dom.cutoffPanel, false);
   setVisible(dom.appMain, false);
+  document.body.classList.remove('app-active'); // onboarding scrolls normally
   if (state.clientId) dom.clientIdInput.value = state.clientId;
   dom.clientIdInput.focus();
 }
@@ -209,6 +233,7 @@ function openCutoffPanel() {
   if (!state.floor) {
     setVisible(dom.appMain, false);
     setVisible(dom.setupPanel, false);
+    document.body.classList.remove('app-active');
   }
   dom.cutoffInput.focus();
 }
@@ -276,6 +301,8 @@ function showMainApp() {
   setVisible(dom.setupPanel, false);
   setVisible(dom.cutoffPanel, false);
   setVisible(dom.appMain, true);
+  document.body.classList.add('app-active'); // two-pane full-height layout
+  ensurePlayer();
   updateAuthUi();
   recompute();
 }
@@ -384,11 +411,12 @@ async function onRefresh() {
     // handled prefix, and advance the floor.
     await cleanup();
 
-    // Durations are not in playlistItems: batch videos.list?part=contentDetails
-    // (<=50 ids/call, 1 unit each) for the surviving visible videos lacking one
+    // Duration + embeddability are not in playlistItems: batch
+    // videos.list?part=contentDetails,status (<=50 ids/call, 1 unit each; adding
+    // `status` is 0 extra quota) for the surviving visible videos lacking either
     // (covers newly fetched + backfill of older ones). Then the final render.
-    showStatus(dom.status, 'Fetching video lengths…', 'progress');
-    await backfillDurations();
+    showStatus(dom.status, 'Fetching video details…', 'progress');
+    await backfillDetails();
     recompute();
 
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
@@ -434,25 +462,31 @@ function updateChannelsFromSubs(subs) {
 }
 
 /**
- * Fill in durationSeconds for currently-visible videos that lack one (covers
- * both newly fetched videos and backfill of older ones), via a batched
- * videos.list. Durations are cosmetic (a thumbnail badge), so failures are
- * swallowed — a refresh is never failed over them.
+ * Fill in durationSeconds + embeddable for currently-visible videos that lack
+ * either (covers both newly fetched videos and backfill of older ones), via a
+ * batched videos.list. These are enhancements (badges + playability), so
+ * failures are swallowed — a refresh is never failed over them.
  */
-async function backfillDurations() {
+async function backfillDetails() {
   const missing = computeVisible(state.records, state.floor)
-    .filter((r) => typeof r.durationSeconds !== 'number')
+    .filter(
+      (r) =>
+        typeof r.durationSeconds !== 'number' || typeof r.embeddable !== 'boolean'
+    )
     .map((r) => r.videoId);
   if (missing.length === 0) return;
   try {
-    const durations = await getVideoDurations(missing);
-    if (durations.size === 0) return;
+    const details = await getVideoDetails(missing);
+    if (details.size === 0) return;
     for (const r of state.records) {
-      if (durations.has(r.videoId)) r.durationSeconds = durations.get(r.videoId);
+      const d = details.get(r.videoId);
+      if (!d) continue;
+      if (typeof d.durationSeconds === 'number') r.durationSeconds = d.durationSeconds;
+      if (typeof d.embeddable === 'boolean') r.embeddable = d.embeddable;
     }
     await putVideos(state.records);
   } catch {
-    /* durations are cosmetic; never fail a refresh over them */
+    /* enhancements only; never fail a refresh over them */
   }
 }
 
@@ -468,7 +502,13 @@ async function markVideo(videoId, newState, opts = {}) {
   // Toggle semantics: acting on a state the card is already in reverts it to
   // 'new', so a mis-mark can be corrected straight from the still-usable buttons
   // (or with the w/x key), and switching watched<->not_interested just re-marks.
-  const nextState = prevState === newState ? STATE_NEW : newState;
+  // `opts.force` (used by auto-mark when a video ENDS) always SETS newState, so a
+  // just-finished video is never accidentally toggled back to 'new'.
+  const nextState = opts.force
+    ? newState
+    : prevState === newState
+      ? STATE_NEW
+      : newState;
 
   const card = findCard(videoId);
 
@@ -630,6 +670,125 @@ function nextRowAfter(card) {
 }
 
 // ---------------------------------------------------------------------------
+// On-page player (right pane): play, auto-advance + auto-mark, speed
+// ---------------------------------------------------------------------------
+
+/** Create the YT.Player once, on first entry to the main app. */
+function ensurePlayer() {
+  if (state.playerInited) return;
+  state.playerInited = true;
+  initPlayer({
+    mountId: 'player-mount',
+    onEnded: onPlayerEnded,
+    onReady: () => updateRateButtons(),
+  });
+  updateRateButtons();
+}
+
+/**
+ * Play a video in the embedded right-pane player. Non-embeddable videos can't be
+ * framed, so fall back to opening them on YouTube with a brief notice.
+ * @param {string} videoId
+ */
+function playVideo(videoId) {
+  const rec = state.records.find((r) => r.videoId === videoId);
+  if (!rec) return;
+  if (rec.embeddable === false) {
+    openOnYouTube(videoId);
+    showStatus(dom.status, 'That video can’t be embedded — opened it on YouTube.', 'info');
+    return;
+  }
+  ensurePlayer();
+  state.playing = videoId;
+  playerLoad(videoId);
+  setPlayerNowPlaying(rec);
+  markPlayingCard(videoId);
+}
+
+function openOnYouTube(videoId) {
+  const url = 'https://www.youtube.com/watch?v=' + encodeURIComponent(videoId);
+  window.open(url, '_blank', 'noopener');
+}
+
+/**
+ * Fired when the current video ENDS: auto-mark it 'watched' via the EXISTING
+ * markVideo path (force = never toggle), so the cutoff marker + greying +
+ * persistence all update; then auto-play the NEXT eligible video — the first one
+ * after it that is still 'new' (skips 'watched' AND 'not_interested') and is
+ * embeddable — or show the caught-up state when none remain.
+ * @param {string} endedId
+ */
+function onPlayerEnded(endedId) {
+  if (!endedId) return;
+  markVideo(endedId, STATE_WATCHED, { force: true });
+  const next = nextPlayable(state.visible, endedId);
+  if (next) playVideo(next.videoId);
+  else showPlayerEmpty(true);
+}
+
+function setPlayerNowPlaying(rec) {
+  if (dom.playerTitle) dom.playerTitle.textContent = rec ? rec.title : ''; // safe text
+  // Channel avatar + name + posted date, like the queue cards (updated on every
+  // load, incl. auto-advance).
+  renderPlayerMeta(dom.playerMeta, rec, state.channels);
+  setVisible(dom.playerEmpty, false);
+  if (dom.skipBtn) dom.skipBtn.disabled = false;
+}
+
+/** Show the player's empty state ("select" initially, "caught up" after a run). */
+function showPlayerEmpty(caughtUp) {
+  state.playing = null;
+  if (dom.playerTitle) dom.playerTitle.textContent = '';
+  renderPlayerMeta(dom.playerMeta, null);
+  if (dom.playerEmpty) {
+    dom.playerEmpty.textContent = caughtUp
+      ? 'All caught up — nothing left to play.'
+      : 'Select a video to play';
+    setVisible(dom.playerEmpty, true);
+  }
+  if (dom.skipBtn) dom.skipBtn.disabled = true;
+  markPlayingCard(null);
+}
+
+/** Move the .row--playing highlight to the card for `videoId` (or clear it). */
+function markPlayingCard(videoId) {
+  for (const row of dom.queueList.querySelectorAll('.row--playing')) {
+    row.classList.remove('row--playing');
+  }
+  if (videoId) {
+    const card = findCard(videoId);
+    if (card) card.classList.add('row--playing');
+  }
+}
+
+function onRate(rate) {
+  state.rate = rate;
+  playerSetRate(rate);
+  updateRateButtons();
+}
+
+function updateRateButtons() {
+  const rates = [
+    [dom.rate1x, 1],
+    [dom.rate15x, 1.5],
+    [dom.rate2x, 2],
+  ];
+  for (const [btn, r] of rates) {
+    if (!btn) continue;
+    btn.classList.toggle('is-active', state.rate === r);
+    btn.setAttribute('aria-pressed', String(state.rate === r));
+  }
+}
+
+/**
+ * Skip button: mark the CURRENT video watched and advance — reusing the EXACT
+ * same path as auto-advance-on-end (forced markVideo + nextPlayable).
+ */
+function onSkipNext() {
+  if (state.playing) onPlayerEnded(state.playing);
+}
+
+// ---------------------------------------------------------------------------
 // Derivation + rendering
 // ---------------------------------------------------------------------------
 
@@ -657,9 +816,13 @@ function render() {
     {
       onWatched: (id) => markVideo(id, STATE_WATCHED),
       onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
+      onPlay: (id) => playVideo(id),
     },
     state.channels
   );
+
+  // Re-apply the now-playing highlight after the list is rebuilt.
+  if (state.playing) markPlayingCard(state.playing);
 }
 
 /**

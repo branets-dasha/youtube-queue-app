@@ -14,6 +14,7 @@
 //     publishedAt:  string,   // ISO 8601 timestamp
 //     thumbnailUrl: string,
 //     durationSeconds: number, // optional; video length, backfilled via videos.list
+//     embeddable:   boolean,   // optional; can be played in the on-page player
 //     state:        'new' | 'watched' | 'not_interested'
 //   }
 
@@ -155,6 +156,27 @@ export function computeQueue(records, cutoff) {
 export function computeVisible(records, cutoff) {
   const filtered = records.filter((r) => isAfterCutoff(r, cutoff));
   return sortAscending(filtered);
+}
+
+/**
+ * The next auto-play candidate AFTER `currentVideoId` in an ascending
+ * (oldest->newest) list: the first record whose state === 'new' (which skips
+ * BOTH 'watched' and 'not_interested') AND is embeddable (embeddable !== false).
+ * If `currentVideoId` is not in the list, the search starts from the beginning
+ * (graceful). Returns null when nothing eligible remains. Pure.
+ * @param {Array<object>} sorted visible records, ascending by publishedAt
+ * @param {string} currentVideoId
+ * @returns {object|null}
+ */
+export function nextPlayable(sorted, currentVideoId) {
+  const list = Array.isArray(sorted) ? sorted : [];
+  const idx = list.findIndex((r) => r && r.videoId === currentVideoId);
+  const start = idx < 0 ? 0 : idx + 1;
+  for (let k = start; k < list.length; k++) {
+    const r = list[k];
+    if (r && r.state === STATE_NEW && r.embeddable !== false) return r;
+  }
+  return null;
 }
 
 /**

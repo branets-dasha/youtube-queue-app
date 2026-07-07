@@ -190,6 +190,7 @@ main {
   background: var(--surface);
   color: var(--text);
   font-size: 0.95rem;
+  text-decoration: none; /* anchors styled as buttons (e.g. YouTube ↗) */
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
 }
@@ -334,12 +335,10 @@ main {
   list-style: none;
   margin: 0;
   padding: 0;
-  /* Responsive card grid: several ~400px+ columns on desktop, collapsing to a
-     single column on narrow screens. min(100%, --card-min) keeps the minimum
-     track from ever exceeding the container, so there is no horizontal overflow. */
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr));
-  gap: 20px;
+  /* ONE card per row in the (independently scrolling) left pane. */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .row {
@@ -347,6 +346,7 @@ main {
      title/channel/time body, then the actions footer. */
   display: flex;
   flex-direction: column;
+  width: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -364,19 +364,31 @@ main {
   outline-offset: 2px;
 }
 
-.row__thumb-link {
+.row__thumb-btn {
   display: block;
-  position: relative; /* anchor for the absolute duration / SHORTS overlays */
+  position: relative; /* THE 16:9 box; anchors the img + duration/SHORTS/play overlays */
+  width: 100%;
+  aspect-ratio: 16 / 9; /* box is exactly 16:9 at the column width (~400x225) */
+  padding: 0;
+  border: 0;
+  background: var(--surface-2);
+  overflow: hidden;
   line-height: 0;
+  cursor: pointer;
   transition: opacity 0.12s ease, filter 0.12s ease;
 }
+.row__thumb-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
 .row__thumb {
-  /* Uniform, undistorted 16:9 regardless of the source image's real aspect. */
-  display: block;
+  /* Fill the 16:9 box and show the ENTIRE image (contain) — never cropped in any
+     direction. A true 16:9 source fits the 16:9 box exactly with no bars. */
+  position: absolute;
+  inset: 0;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
-  background: var(--surface-2);
+  height: 100%;
+  object-fit: contain;
 }
 
 /* Thumbnail overlays are ABSOLUTE, so they never change card height. */
@@ -407,6 +419,34 @@ main {
   letter-spacing: 0.04em;
   line-height: 1.2;
   pointer-events: none;
+}
+
+/* Play (▶) overlay — revealed on hover of the thumbnail button. */
+.row__play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.row__thumb-btn:hover .row__play {
+  opacity: 1;
+}
+.row__play-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  line-height: 1;
+  padding-left: 3px; /* optically centre the ▶ glyph */
 }
 
 .row__meta {
@@ -471,7 +511,22 @@ main {
   padding: 8px 14px 14px;
 }
 .row__actions .btn {
-  flex: 1 1 0; /* equal-width action buttons across the footer */
+  flex: 1 1 0; /* four equal-width icon buttons on ONE row */
+}
+.btn--icon {
+  padding: 7px 10px;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+.btn--play {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn--play:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.btn--yt {
+  color: var(--text-dim);
 }
 
 /* ---- Handled (marked) cards ---- */
@@ -481,7 +536,7 @@ main {
    class is set (no lag), regardless of whether a button inside it still holds
    focus or the pointer. opacity/filter change no layout, so card height is
    identical in every state. */
-.row--handled .row__thumb-link {
+.row--handled .row__thumb-btn {
   opacity: 0.5;
   filter: grayscale(0.7);
 }
@@ -509,6 +564,198 @@ main {
 .btn--not[aria-pressed='true']:hover:not(:disabled) {
   background: var(--not);
   filter: brightness(1.06);
+}
+
+/* ---- Two-pane workspace (queue + player) ---- */
+
+/* Full-height app view: the PAGE does not scroll — only the left queue pane
+   scrolls, so the right player is always visible. Scoped to body.app-active so
+   the onboarding panels still scroll normally. */
+body.app-active {
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+body.app-active .topbar {
+  flex: 0 0 auto;
+  max-width: none; /* align header with the full-width, left-stuck workspace */
+}
+body.app-active main {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none; /* NO centering — span the full viewport width, flush left */
+  width: 100%;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px 12px;
+}
+body.app-active .footer {
+  display: none; /* reclaim vertical space for the two-pane view */
+}
+body.app-active #app-main.app {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  /* Fixed ~400px queue on the LEFT; the player takes ALL remaining width. */
+  grid-template-columns: 400px minmax(0, 1fr);
+  gap: 20px;
+}
+.workspace__queue {
+  min-height: 0;
+  overflow-y: auto; /* the queue pane's OWN scrollbar */
+  padding-right: 6px;
+}
+/* Status/log pinned at the top of the scrolling queue pane. */
+.workspace__queue > .status {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.workspace__player {
+  min-height: 0;
+  overflow-y: auto; /* if player + info exceed the pane, scroll here — never clip */
+}
+
+.player {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.player__frame {
+  position: sticky; /* video stays visible at the top while the info can scroll */
+  top: 0;
+  /* 16:9, responsive to the wide player column, but height-capped so the video
+     PLUS the title/meta fit the viewport: on large screens the width derives from
+     the available height, keeping the box 16:9 with no letterboxing. */
+  width: min(100%, calc((100dvh - 420px) * 16 / 9));
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* The YT iframe replaces #player-mount; it and the empty overlay fill the box. */
+.player__frame iframe,
+.player__frame > * {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.player__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  color: var(--text-dim);
+  background: var(--surface-2);
+}
+/* An author display value overrides the UA [hidden] rule, so hide explicitly. */
+.player__empty[hidden] {
+  display: none;
+}
+.player__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  justify-content: space-between;
+}
+.player__info {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.player__title {
+  margin: 0;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* Player info meta row (avatar + channel + date), mirroring a card's meta row. */
+.player__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.player__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.player__rates {
+  display: flex;
+  gap: 6px;
+}
+.btn--rate {
+  padding: 6px 12px;
+}
+.btn--rate.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--primary-text);
+}
+.btn--rate.is-active:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.06);
+}
+
+/* Now-playing card highlight. */
+.row--playing {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+/* Stack below this width: player sticky on top, queue below; release the
+   full-height lock so the page scrolls normally. */
+@media (max-width: 900px) {
+  body.app-active {
+    height: auto;
+    overflow: visible;
+    display: block;
+  }
+  body.app-active main {
+    display: block;
+    max-width: var(--maxw-wide);
+  }
+  body.app-active .footer {
+    display: block;
+  }
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .player__frame {
+    width: 100%; /* full-width player when stacked (the page scrolls here) */
+  }
+  .workspace__queue {
+    overflow: visible;
+    padding-right: 0;
+  }
+  .workspace__player {
+    order: -1; /* player above the queue */
+  }
+  .player {
+    z-index: 5;
+    background: var(--bg);
+    padding-bottom: 6px;
+  }
 }
 
 /* ---- Empty state ---- */

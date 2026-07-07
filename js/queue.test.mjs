@@ -11,6 +11,7 @@ import {
   computeVisible,
   computeCutoff,
   videosToClean,
+  nextPlayable,
   compareIso,
   parseIsoDuration,
   formatDuration,
@@ -178,6 +179,47 @@ test('isShort: positive and <= SHORTS_MAX_SECONDS is short; above / 0 / unknown 
   assert.equal(isShort(0), false); // zero/unknown length
   assert.equal(isShort(undefined), false);
   assert.equal(isShort(-5), false);
+});
+
+// --- nextPlayable: auto-advance selection (skips watched/not_interested/non-embeddable) ---
+
+const play = (videoId, state, embeddable) => ({
+  videoId,
+  state,
+  embeddable, // undefined | true | false
+  publishedAt: '2026-01-01T00:00:00Z',
+  title: videoId,
+});
+
+test('nextPlayable skips not_interested, watched, and non-embeddable; returns first eligible new', () => {
+  const sorted = [
+    play('cur', 'watched', true),
+    play('ni', 'not_interested', true), // skip (not_interested)
+    play('w', 'watched', true), // skip (watched)
+    play('ne', 'new', false), // skip (non-embeddable)
+    play('ok', 'new', true), // <- first eligible after cur
+    play('ok2', 'new', true),
+  ];
+  assert.equal(nextPlayable(sorted, 'cur').videoId, 'ok');
+});
+
+test('nextPlayable treats embeddable === undefined as playable', () => {
+  const sorted = [play('cur', 'watched', true), play('u', 'new', undefined)];
+  assert.equal(nextPlayable(sorted, 'cur').videoId, 'u');
+});
+
+test('nextPlayable returns null at the end of the list', () => {
+  const sorted = [play('a', 'new', true), play('cur', 'new', true)];
+  assert.equal(nextPlayable(sorted, 'cur'), null);
+  // ...and null when nothing after current is eligible
+  const sorted2 = [play('cur', 'new', true), play('w', 'watched', true)];
+  assert.equal(nextPlayable(sorted2, 'cur'), null);
+});
+
+test('nextPlayable handles a current id not present (searches from the start)', () => {
+  const sorted = [play('a', 'watched', true), play('b', 'new', true)];
+  assert.equal(nextPlayable(sorted, 'ZZZ').videoId, 'b'); // graceful: first eligible
+  assert.equal(nextPlayable([], 'ZZZ'), null); // empty list -> null
 });
 
 console.log(`\n${passed} passed`);

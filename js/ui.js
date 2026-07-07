@@ -209,9 +209,37 @@ function buildAvatar(rec, channels) {
 }
 
 /**
+ * Render the player's info meta row (avatar + channel + posted date) for `rec`
+ * into `container`, mirroring a card's meta row and reusing the same avatar
+ * rendering + channels map. Pass rec = null to clear it. XSS-safe (textContent,
+ * img.src, encodeURIComponent via buildAvatar/formatters).
+ * @param {HTMLElement} container
+ * @param {object|null} rec video record
+ * @param {Record<string,{title:string,avatarUrl:string}>} [channels]
+ */
+export function renderPlayerMeta(container, rec, channels = {}) {
+  if (!container) return;
+  clear(container);
+  if (!rec) return;
+  container.append(
+    buildAvatar(rec, channels),
+    el('span', { class: 'row__channel', text: rec.channelTitle || '' }),
+    el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
+    el('time', {
+      class: 'row__time-abs',
+      datetime: rec.publishedAt,
+      text: formatAbsolute(rec.publishedAt),
+      title: rec.publishedAt,
+    }),
+    el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
+    el('span', { class: 'row__time-rel', text: formatRelative(rec.publishedAt) })
+  );
+}
+
+/**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
- * @param {object} handlers { onWatched(id), onNotInterested(id) }
+ * @param {object} handlers { onWatched(id), onNotInterested(id), onPlay(id) }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  * @returns {HTMLLIElement}
  */
@@ -225,23 +253,29 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     width: '480',
     height: '270',
   });
-  // Thumbnails must stay sharp at 400px+ card widths. The stored thumbnailUrl may
-  // be a low-res (medium/320px) URL from an older fetch, so we self-heal by
-  // deriving a reliably-available high-res image straight from the video id:
-  // hqdefault (480x360) is essentially always present, and CSS object-fit: cover
-  // crops it to the card's 16:9 box. If it ever 404s, fall back once to the
-  // stored URL (or mqdefault). img.src ONLY — no innerHTML, no background-image.
+  // Show the FULL frame with NO vertical crop: use genuinely 16:9 sources ONLY
+  // (never the 4:3 hqdefault/sddefault). maxresdefault (1280x720) is sharp and
+  // 16:9 but not always present — a missing maxres loads as a tiny gray 120x90
+  // stub WITHOUT firing onerror, so we detect that in onload (naturalWidth < 320)
+  // and swap to mqdefault (320x180, 16:9, essentially always present). onerror
+  // covers hard failures. img.src ONLY — no innerHTML, no background-image.
   const vid = rec.videoId ? encodeURIComponent(rec.videoId) : '';
-  const hiResSrc = vid ? `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` : '';
-  const fallbackSrc =
-    rec.thumbnailUrl || (vid ? `https://i.ytimg.com/vi/${vid}/mqdefault.jpg` : '');
-  thumb.onerror = () => {
-    thumb.onerror = null; // one-shot: never loop on a broken fallback
-    if (fallbackSrc && thumb.getAttribute('src') !== fallbackSrc) {
-      thumb.src = fallbackSrc;
+  const maxresSrc = vid ? `https://i.ytimg.com/vi/${vid}/maxresdefault.jpg` : '';
+  const mqSrc = vid ? `https://i.ytimg.com/vi/${vid}/mqdefault.jpg` : '';
+  const swapToMq = () => {
+    if (mqSrc && thumb.getAttribute('src') !== mqSrc) {
+      thumb.onerror = null; // one-shot: never loop on a broken fallback
+      thumb.src = mqSrc;
     }
   };
-  const primarySrc = hiResSrc || fallbackSrc;
+  thumb.onload = () => {
+    if (thumb.naturalWidth && thumb.naturalWidth < 320) swapToMq();
+  };
+  thumb.onerror = () => {
+    thumb.onerror = null;
+    swapToMq();
+  };
+  const primarySrc = maxresSrc || mqSrc;
   if (primarySrc) thumb.src = primarySrc; // img.src only
 
   // Absolute-positioned thumbnail overlays — no layout impact, so card height is
@@ -257,17 +291,24 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     overlays.push(el('span', { class: 'row__shorts', 'aria-hidden': 'true', text: 'SHORTS' }));
   }
 
-  const thumbLink = el(
-    'a',
+  // Play-in-embedded-player overlay (▶), revealed on hover of the thumbnail.
+  const playOverlay = el('span', { class: 'row__play', 'aria-hidden': 'true' }, [
+    el('span', { class: 'row__play-icon', text: '▶' }),
+  ]);
+
+  // The thumbnail is a mouse-convenience PLAY trigger (loads the embedded
+  // player). It is aria-hidden / out of the tab order because the footer "Play"
+  // button is the accessible, keyboard-reachable equivalent.
+  const thumbBtn = el(
+    'button',
     {
-      class: 'row__thumb-link',
-      href: watchUrl,
-      target: '_blank',
-      rel: 'noopener',
+      class: 'row__thumb-btn',
+      type: 'button',
       tabindex: '-1',
       'aria-hidden': 'true',
+      onclick: () => handlers.onPlay && handlers.onPlay(rec.videoId),
     },
-    [thumb, ...overlays]
+    [thumb, ...overlays, playOverlay]
   );
 
   const titleLink = el('a', {
@@ -304,24 +345,51 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     ]),
   ]);
 
+  // Compact ICON actions on ONE row. Glyphs are static unicode (never API data);
+  // each carries an aria-label AND a title tooltip. Watched/Not keep their
+  // classes so setCardState's aria-pressed + the active-colour CSS still apply.
+  const playBtn = el('button', {
+    class: 'btn btn--icon btn--play',
+    type: 'button',
+    'aria-label': `Play "${rec.title}" in the player`,
+    title: 'Play',
+    text: '▶',
+    onclick: () => handlers.onPlay && handlers.onPlay(rec.videoId),
+  });
+  const ytLink = el('a', {
+    class: 'btn btn--icon btn--yt',
+    href: watchUrl,
+    target: '_blank',
+    rel: 'noopener',
+    'aria-label': `Open "${rec.title}" on YouTube`,
+    title: 'Open on YouTube',
+    text: '↗',
+  });
   const watchedBtn = el('button', {
-    class: 'btn btn--watched',
+    class: 'btn btn--icon btn--watched',
     type: 'button',
     'aria-label': `Mark "${rec.title}" as watched`,
     'aria-pressed': 'false',
-    text: 'Watched',
+    title: 'Watched',
+    text: '✓',
     onclick: () => handlers.onWatched(rec.videoId),
   });
   const notBtn = el('button', {
-    class: 'btn btn--not',
+    class: 'btn btn--icon btn--not',
     type: 'button',
     'aria-label': `Mark "${rec.title}" as not interested`,
     'aria-pressed': 'false',
-    text: 'Not interested',
+    title: 'Not interested',
+    text: '✕',
     onclick: () => handlers.onNotInterested(rec.videoId),
   });
 
-  const actions = el('div', { class: 'row__actions' }, [watchedBtn, notBtn]);
+  const actions = el('div', { class: 'row__actions' }, [
+    playBtn,
+    ytLink,
+    watchedBtn,
+    notBtn,
+  ]);
 
   const li = el(
     'li',
@@ -332,7 +400,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
       dataset: { videoId: rec.videoId },
       'aria-label': `${rec.title}, ${rec.channelTitle || 'unknown channel'}`,
     },
-    [thumbLink, meta, actions]
+    [thumbBtn, meta, actions]
   );
 
   // Reflect the record's initial state (marked videos render greyed on load).
