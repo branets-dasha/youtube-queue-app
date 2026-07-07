@@ -3,7 +3,7 @@
 // PURE queue logic. This module intentionally references NO browser globals
 // (no window, document, fetch, localStorage, IndexedDB) at module scope or
 // inside its functions, so it can be imported directly by a Node.js test
-// runner:  import { advanceCutoff, computeQueue, ... } from './js/queue.js'
+// runner:  import { computeCutoff, computeQueue, ... } from './js/queue.js'
 //
 // A "video record" is a plain object of the shape:
 //   {
@@ -158,99 +158,64 @@ export function computeVisible(records, cutoff) {
 }
 
 /**
- * Advance the start cutoff across the contiguous handled prefix.
+ * Compute the live CUTOFF marker: the boundary of the contiguous handled prefix
+ * among the currently-present videos — "everything up to here is handled; the
+ * first UNMARKED video is just after it."
  *
- * Algorithm (pinned by spec):
- *   1. Sort all records ascending by publishedAt.
- *   2. Walk from the oldest. While the current oldest record's state !== 'new',
- *      set newCutoff = that record's publishedAt and mark it prunable.
- *   3. Stop at the first record whose state === 'new'. Never advance past a
- *      still-'new' older video. Because ISO timestamps have only second
- *      precision, a handled record can share the EXACT publishedAt of a still-
- *      'new' record. To avoid pruning that 'new' video (data loss), the cutoff
- *      is never advanced onto (or past) the earliest still-'new' timestamp:
- *      newCutoff is the newest handled-prefix timestamp that is STRICTLY older
- *      than the earliest still-'new' record.
- *   4. After determining newCutoff, prune EVERY record whose publishedAt <=
- *      newCutoff (strictly-greater-than stays; == is pruned).
+ * Sort ascending (tie-safe). Walk from the oldest present video (strictly after
+ * `floor`): while it is handled (watched / not_interested) advance the result to
+ * its publishedAt; stop at the first 'new'. TIE-SAFETY: the result is always
+ * STRICTLY LESS than the earliest still-'new' video's publishedAt, so a handled
+ * video sharing a timestamp with a 'new' one never pulls the cutoff onto (or
+ * past) that 'new' video. If the oldest present video is 'new' (or there are no
+ * records), returns `floor`. The result is ALWAYS >= floor.
  *
- * Returns { newCutoff, prunedIds } and does not mutate inputs.
- *   - newCutoff: the advanced cutoff (or the original cutoff if nothing at the
- *     head is handled). May be null if the original cutoff was null and no
- *     prefix was handled.
- *   - prunedIds: array of videoIds that should be deleted from the store.
+ * Unlike a forward-only advance, this recomputes from `floor` every call, so it
+ * can move BACK when a video inside the handled prefix is un-marked. Pure.
  *
  * @param {Array<object>} records
- * @param {string|null|undefined} cutoff current ISO cutoff
- * @returns {{ newCutoff: (string|null), prunedIds: Array<string> }}
+ * @param {string|null|undefined} floor deletion/fetch boundary (lower bound)
+ * @returns {string|null} the cutoff marker ISO (>= floor)
  */
-export function advanceCutoff(records, cutoff) {
+export function computeCutoff(records, floor) {
+  const base = floor == null ? null : floor;
   const sorted = sortAscending(records);
 
-  let newCutoff = cutoff == null ? null : cutoff;
-
-  // First, find the earliest still-'new' record within the active window. The
-  // cutoff must never advance onto (or past) its publishedAt, even if a handled
-  // record shares the exact same timestamp (second-precision ties), otherwise
-  // that 'new' video would be pruned and permanently lost.
+  // Earliest still-'new' record strictly after the floor — the cutoff must never
+  // reach it (tie-safety).
   let firstNewTs = null;
   for (const rec of sorted) {
-    if (!isAfterCutoff(rec, cutoff)) continue;
+    if (!isAfterCutoff(rec, base)) continue;
     if (rec.state === STATE_NEW) {
       firstNewTs = rec.publishedAt;
       break;
     }
   }
 
-  // Walk the contiguous handled prefix, but only consider records that are in
-  // the active window (newer than the current cutoff). Anything at or before
-  // the existing cutoff is already handled/pruned and is ignored here.
+  // Walk the contiguous handled prefix (only records strictly after the floor).
+  let result = base;
   for (const rec of sorted) {
-    if (!isAfterCutoff(rec, cutoff)) {
-      // Already at/behind the cutoff; skip without breaking the prefix walk.
-      continue;
-    }
-    if (rec.state === STATE_NEW) {
-      // First still-'new' record in the active window: stop advancing.
-      break;
-    }
+    if (!isAfterCutoff(rec, base)) continue; // at/before floor: ignore
+    if (rec.state === STATE_NEW) break; // first unmarked video: stop
     if (firstNewTs != null && compareIso(rec.publishedAt, firstNewTs) >= 0) {
-      // This handled record ties (or is newer than) the earliest still-'new'
-      // record. Advancing the cutoff onto its timestamp would prune that 'new'
-      // video, so stop here without advancing onto that boundary.
+      // Ties (or is newer than) the earliest 'new' video: don't advance onto it.
       break;
     }
-    // Handled record at the head of the active window: advance the cutoff to
-    // it. Because we advance to the NEWEST handled record in the contiguous
-    // prefix, we keep overwriting newCutoff as we walk forward.
-    newCutoff = rec.publishedAt;
+    result = rec.publishedAt;
   }
-
-  // Determine which records to prune: everything at or before the new cutoff.
-  const prunedIds = [];
-  if (newCutoff != null) {
-    for (const rec of records) {
-      if (compareIso(rec.publishedAt, newCutoff) <= 0) {
-        prunedIds.push(rec.videoId);
-      }
-    }
-  }
-
-  return { newCutoff, prunedIds };
+  return result;
 }
 
 /**
- * Convenience helper: given records and a cutoff, apply advanceCutoff and
- * return the surviving records plus the new cutoff. Pure; does not mutate.
+ * The deletion set for CLEANUP: every record with publishedAt <= cutoff. Pure;
+ * does not mutate.
  * @param {Array<object>} records
  * @param {string|null|undefined} cutoff
- * @returns {{ records: Array<object>, newCutoff: (string|null), prunedIds: Array<string> }}
+ * @returns {Array<object>} records to delete
  */
-export function pruneWithCutoff(records, cutoff) {
-  const { newCutoff, prunedIds } = advanceCutoff(records, cutoff);
-  const prunedSet = new Set(prunedIds);
-  const surviving = records.filter((r) => !prunedSet.has(r.videoId));
-  return { records: surviving, newCutoff, prunedIds };
+export function videosToClean(records, cutoff) {
+  if (cutoff == null) return [];
+  return records.filter((r) => compareIso(r.publishedAt, cutoff) <= 0);
 }
 
 /**

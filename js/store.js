@@ -12,6 +12,7 @@
 import {
   LS_CLIENT_ID,
   LS_START_CUTOFF,
+  LS_CUTOFF,
   LS_VIDEOS_FALLBACK,
   LS_CHANNELS,
   IDB_NAME,
@@ -57,6 +58,24 @@ export function setStartCutoff(iso) {
     localStorage.removeItem(LS_START_CUTOFF);
   } else {
     localStorage.setItem(LS_START_CUTOFF, iso);
+  }
+}
+
+// The live cutoff marker (yqa_cutoff). Distinct from the floor above.
+
+export function getCutoff() {
+  try {
+    return localStorage.getItem(LS_CUTOFF) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setCutoff(iso) {
+  if (iso == null) {
+    localStorage.removeItem(LS_CUTOFF);
+  } else {
+    localStorage.setItem(LS_CUTOFF, iso);
   }
 }
 

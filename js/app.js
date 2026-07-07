@@ -10,6 +10,8 @@ import {
   setClientId,
   getStartCutoff,
   setStartCutoff,
+  getCutoff,
+  setCutoff,
   getAllVideos,
   putVideos,
   putVideo,
@@ -35,7 +37,8 @@ import {
   upsertVideos,
   computeQueue,
   computeVisible,
-  advanceCutoff,
+  computeCutoff,
+  videosToClean,
   daysAgoIso,
 } from './queue.js';
 import {
@@ -54,11 +57,12 @@ import {
 
 const state = {
   clientId: null,
-  cutoff: null,
+  floor: null, // deletion + fetch boundary (yqa_start_cutoff); moves forward only, on cleanup
+  cutoff: null, // live handled-prefix marker (yqa_cutoff); displayed; cleanup deletes up to it
   records: [], // all stored video records
   channels: {}, // channelId -> { title, avatarUrl } for card avatars (persisted)
-  visible: [], // derived: computeVisible(records, cutoff) — render list (any state)
-  queue: [], // derived: computeQueue(records, cutoff) — still-'new' subset, for the count
+  visible: [], // derived: computeVisible(records, FLOOR) — render list (any state)
+  queue: [], // derived: computeQueue(records, FLOOR) — still-'new' subset, for the count
   handledThisSession: 0,
   lastAction: null, // { videoId, prevState } for undo
   refreshing: false,
@@ -78,7 +82,8 @@ async function init() {
   bindEvents();
 
   state.clientId = getClientId();
-  state.cutoff = getStartCutoff();
+  state.floor = getStartCutoff(); // deletion/fetch boundary
+  state.cutoff = getCutoff(); // live marker (may be absent on older installs)
 
   // Show the current origin in the setup instructions so the user can copy the
   // exact "Authorized JavaScript origins" value.
@@ -95,11 +100,15 @@ async function init() {
   // avatars appear immediately for already-stored videos (zero API cost).
   state.channels = loadChannels();
 
-  // Reload-time cleanup (a): on page load, advance the cutoff across any
-  // contiguous handled prefix and prune it BEFORE the first render.
-  if (state.cutoff) {
+  // INIT is one of the three CLEANUP sites. Migrate installs that predate the
+  // cutoff key (derive it from floor), then run cleanup BEFORE the first render.
+  if (state.floor) {
+    if (!state.cutoff) {
+      state.cutoff = computeCutoff(state.records, state.floor);
+      setCutoff(state.cutoff);
+    }
     try {
-      await reconcileCutoff();
+      await cleanup();
     } catch {
       // Non-fatal: fall through and render whatever we have.
     }
@@ -125,6 +134,7 @@ function cacheDom() {
   dom.signoutBtn = byId('signout-btn');
   dom.authStatus = byId('auth-status');
   dom.refreshBtn = byId('refresh-btn');
+  dom.cleanupBtn = byId('cleanup-btn');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
   dom.changeClientBtn = byId('change-client-btn');
 
@@ -150,6 +160,7 @@ function bindEvents() {
   dom.signinBtn.addEventListener('click', onSignIn);
   dom.signoutBtn.addEventListener('click', onSignOut);
   dom.refreshBtn.addEventListener('click', onRefresh);
+  dom.cleanupBtn.addEventListener('click', onCleanup);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
   dom.undoBtn.addEventListener('click', onUndo);
@@ -172,7 +183,7 @@ function routeFirstRun() {
     openSetupPanel();
     return;
   }
-  if (!state.cutoff) {
+  if (!state.floor) {
     openCutoffPanel();
     return;
   }
@@ -189,12 +200,13 @@ function openSetupPanel() {
 
 function openCutoffPanel() {
   setVisible(dom.cutoffPanel, true);
-  // Default the datetime-local input to 7 days ago (or the existing cutoff).
-  const seed = state.cutoff || daysAgoIso(7, Date.now());
+  // This panel sets the FLOOR (start boundary). Seed with the existing floor,
+  // else 7 days ago.
+  const seed = state.floor || daysAgoIso(7, Date.now());
   dom.cutoffInput.value = isoToLocalInput(seed);
-  // Keep the main app visible behind if we already have a cutoff (this is a
+  // Keep the main app visible behind if we already have a floor (this is a
   // "change cutoff" re-open); otherwise hide it.
-  if (!state.cutoff) {
+  if (!state.floor) {
     setVisible(dom.appMain, false);
     setVisible(dom.setupPanel, false);
   }
@@ -226,7 +238,7 @@ function onSaveClientId() {
   state.clientId = value;
   setVisible(dom.setupPanel, false);
 
-  if (!state.cutoff) {
+  if (!state.floor) {
     openCutoffPanel();
   } else {
     showMainApp();
@@ -235,20 +247,23 @@ function onSaveClientId() {
 
 function onSaveCutoff() {
   const raw = dom.cutoffInput.value;
+  let floor;
   if (!raw) {
     // Fall back to 7 days ago if the user cleared it.
-    state.cutoff = daysAgoIso(7, Date.now());
+    floor = daysAgoIso(7, Date.now());
   } else {
     // datetime-local yields local wall-clock; convert to ISO (UTC).
     const d = new Date(raw);
-    state.cutoff = Number.isNaN(d.getTime())
-      ? daysAgoIso(7, Date.now())
-      : d.toISOString();
+    floor = Number.isNaN(d.getTime()) ? daysAgoIso(7, Date.now()) : d.toISOString();
   }
-  setStartCutoff(state.cutoff);
+  state.floor = floor;
+  setStartCutoff(floor);
+  // Derive + persist the live cutoff marker from the present records.
+  state.cutoff = computeCutoff(state.records, state.floor);
+  setCutoff(state.cutoff);
   setVisible(dom.cutoffPanel, false);
 
-  // Re-derive queue with the (possibly) new cutoff and re-render.
+  // Re-derive the render list against the (possibly) new floor and re-render.
   recompute();
   showMainApp();
 }
@@ -272,6 +287,7 @@ function updateAuthUi() {
   setVisible(dom.signinBtn, !signed);
   setVisible(dom.signoutBtn, signed);
   dom.refreshBtn.disabled = !signed || state.refreshing;
+  updateCleanupUi();
 }
 
 async function onSignIn() {
@@ -327,7 +343,8 @@ async function onRefresh() {
     // channel's avatar in snippet.thumbnails. Capture + persist the channel map.
     updateChannelsFromSubs(subs);
 
-    const cutoff = state.cutoff;
+    // The fetch is bounded by the FLOOR (everything <= floor is gone for good).
+    const floor = state.floor;
     const collected = [];
     let skipped = 0;
 
@@ -341,7 +358,7 @@ async function onRefresh() {
       try {
         const vids = await getChannelVideosSince(
           sub.channelId,
-          cutoff,
+          floor,
           sub.channelTitle
         );
         for (const v of vids) collected.push(v);
@@ -363,13 +380,13 @@ async function onRefresh() {
 
     await mergeAndPersist(collected);
 
-    // Reload-time cleanup (b): after fetching newer videos, advance the cutoff
-    // across the contiguous handled prefix and prune.
-    await reconcileCutoff();
+    // SYNC is a CLEANUP site: after upserting, recompute the marker, delete the
+    // handled prefix, and advance the floor.
+    await cleanup();
 
     // Durations are not in playlistItems: batch videos.list?part=contentDetails
-    // (<=50 ids/call, 1 unit each) for visible videos lacking one — this covers
-    // newly fetched videos and backfills any older ones. Then the final render.
+    // (<=50 ids/call, 1 unit each) for the surviving visible videos lacking one
+    // (covers newly fetched + backfill of older ones). Then the final render.
     showStatus(dom.status, 'Fetching video lengths…', 'progress');
     await backfillDurations();
     recompute();
@@ -423,7 +440,7 @@ function updateChannelsFromSubs(subs) {
  * swallowed — a refresh is never failed over them.
  */
 async function backfillDurations() {
-  const missing = computeVisible(state.records, state.cutoff)
+  const missing = computeVisible(state.records, state.floor)
     .filter((r) => typeof r.durationSeconds !== 'number')
     .map((r) => r.videoId);
   if (missing.length === 0) return;
@@ -463,7 +480,10 @@ async function markVideo(videoId, newState, opts = {}) {
   applyHandledDelta(prevState, nextState);
   state.lastAction = { videoId, prevState };
   if (card) setCardState(card, nextState);
-  updateStats();
+  // The handled prefix may have changed: recompute the live cutoff marker
+  // (persist if it moved) + refresh the display/counts/Cleanup button. NO list
+  // re-render or deletion — marked videos stay visible until CLEANUP.
+  refreshMarkerAndStats();
   showUndoBar();
   if (opts.advanceFocus && card) {
     const next = nextRowAfter(card);
@@ -477,7 +497,7 @@ async function markVideo(videoId, newState, opts = {}) {
     rec.state = prevState;
     applyHandledDelta(nextState, prevState);
     if (card) setCardState(card, prevState);
-    updateStats();
+    refreshMarkerAndStats();
     if (state.lastAction && state.lastAction.videoId === videoId) {
       state.lastAction = null;
     }
@@ -499,22 +519,46 @@ function applyHandledDelta(fromState, toState) {
 }
 
 /**
- * Reload-time cutoff cleanup (NOT run on individual marks). Advances the cutoff
- * across the contiguous handled prefix, deletes the pruned records, and persists
- * the new cutoff. Pure derivation via advanceCutoff; does not render.
+ * CLEANUP — the ONLY place videos are deleted and the FLOOR advances. Recompute
+ * the live cutoff marker, delete every present video with publishedAt <= cutoff,
+ * advance the floor to the cutoff, and persist both. Runs in exactly three
+ * places: page load (init), sync-with-YouTube, and the Cleanup button. It does
+ * NOT render — callers recompute()/render afterwards.
  */
-async function reconcileCutoff() {
-  const { newCutoff, prunedIds } = advanceCutoff(state.records, state.cutoff);
+async function cleanup() {
+  const cutoff = computeCutoff(state.records, state.floor);
 
-  if (prunedIds.length > 0) {
-    const prunedSet = new Set(prunedIds);
-    state.records = state.records.filter((r) => !prunedSet.has(r.videoId));
-    await deleteVideos(prunedIds);
+  const toClean = videosToClean(state.records, cutoff);
+  if (toClean.length > 0) {
+    const ids = toClean.map((r) => r.videoId);
+    const idSet = new Set(ids);
+    state.records = state.records.filter((r) => !idSet.has(r.videoId));
+    await deleteVideos(ids);
   }
 
-  if (newCutoff && newCutoff !== state.cutoff) {
-    state.cutoff = newCutoff;
-    setStartCutoff(newCutoff);
+  // The floor advances to the deletion boundary; persist it.
+  if (cutoff && cutoff !== state.floor) {
+    state.floor = cutoff;
+    setStartCutoff(cutoff);
+  }
+
+  // With the handled prefix gone, recompute + persist the marker (now == floor).
+  state.cutoff = computeCutoff(state.records, state.floor);
+  setCutoff(state.cutoff);
+}
+
+/**
+ * Cleanup button handler: run CLEANUP() then re-render. The only user-triggered
+ * deletion of handled videos.
+ */
+async function onCleanup() {
+  if (state.refreshing) return;
+  try {
+    await cleanup();
+    recompute();
+    showStatus(dom.status, 'Cleaned up handled videos.', 'success');
+  } catch (err) {
+    handleError(err);
   }
 }
 
@@ -537,7 +581,9 @@ async function onUndo() {
   rec.state = action.prevState;
   applyHandledDelta(curState, action.prevState);
   if (card) setCardState(card, action.prevState);
-  updateStats();
+  // Un-marking a video inside the handled prefix moves the cutoff BACK (to the
+  // floor if it was the oldest); that video stays visible in the queue.
+  refreshMarkerAndStats();
   state.lastAction = null;
   hideUndoBar();
 
@@ -548,7 +594,7 @@ async function onUndo() {
     rec.state = curState;
     applyHandledDelta(action.prevState, curState);
     if (card) setCardState(card, curState);
-    updateStats();
+    refreshMarkerAndStats();
     handleError(err);
   }
 }
@@ -588,10 +634,11 @@ function nextRowAfter(card) {
 // ---------------------------------------------------------------------------
 
 function recompute() {
-  // The render list includes ALL in-window videos (any state); the queue is the
-  // still-'new' subset used only for the "Queued" count.
-  state.visible = computeVisible(state.records, state.cutoff);
-  state.queue = computeQueue(state.records, state.cutoff);
+  // The render list is FLOOR-based and includes ALL in-window videos (any state)
+  // — so a marked video with publishedAt > floor stays visible (greyed) and does
+  // NOT disappear on marking. The queue is the still-'new' subset for the count.
+  state.visible = computeVisible(state.records, state.floor);
+  state.queue = computeQueue(state.records, state.floor);
   render();
 }
 
@@ -616,11 +663,27 @@ function render() {
 }
 
 /**
- * Refresh only the header stats (counts + cutoff) without touching the list, so
- * marking a card in place never re-renders or reorders the queue.
+ * Recompute the live cutoff marker from the present records + floor; persist it
+ * if it moved. Then refresh the header stats and the Cleanup button. Called on
+ * every mark/unmark so the DISPLAYED cutoff updates LIVE — no list re-render.
+ */
+function refreshMarkerAndStats() {
+  const next = computeCutoff(state.records, state.floor);
+  if (next !== state.cutoff) {
+    state.cutoff = next;
+    setCutoff(next);
+  }
+  updateStats();
+}
+
+/**
+ * Refresh the header stats (counts + displayed cutoff marker) and the Cleanup
+ * button without touching the list, so marking a card never re-renders the queue.
+ * The queued count and render list are FLOOR-based; the displayed "Cutoff" shows
+ * the live marker.
  */
 function updateStats() {
-  state.queue = computeQueue(state.records, state.cutoff);
+  state.queue = computeQueue(state.records, state.floor);
   renderStats(
     {
       queuedCountEl: dom.queuedCount,
@@ -633,6 +696,19 @@ function updateStats() {
       cutoff: state.cutoff,
     }
   );
+  updateCleanupUi();
+}
+
+/**
+ * Update the Cleanup button's label + disabled state. Count = present videos
+ * with publishedAt <= cutoff (the set CLEANUP would delete); disabled at 0 or
+ * while a refresh is running.
+ */
+function updateCleanupUi() {
+  if (!dom.cleanupBtn) return;
+  const n = videosToClean(state.records, state.cutoff).length;
+  dom.cleanupBtn.textContent = `Clean up (${n})`;
+  dom.cleanupBtn.disabled = n === 0 || state.refreshing;
 }
 
 function showUndoBar() {

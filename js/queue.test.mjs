@@ -9,10 +9,13 @@ import assert from 'node:assert';
 import {
   computeQueue,
   computeVisible,
-  advanceCutoff,
+  computeCutoff,
+  videosToClean,
+  compareIso,
   parseIsoDuration,
   formatDuration,
   isShort,
+  SHORTS_MAX_SECONDS,
 } from './queue.js';
 
 let passed = 0;
@@ -74,59 +77,74 @@ test('computeQueue still returns only still-new videos', () => {
   assert.deepEqual(computeQueue(recs, null).map((r) => r.videoId), ['b']);
 });
 
-// --- advanceCutoff: prunes only the contiguous handled prefix, stops at 1st new ---
+// --- computeCutoff: contiguous handled-prefix marker, floor-bounded, tie-safe ---
 
-test('advanceCutoff prunes the contiguous handled prefix and stops at first new', () => {
+const FLOOR = '2026-01-01T00:00:00Z';
+const T1 = '2026-01-02T00:00:00Z';
+const T2 = '2026-01-03T00:00:00Z';
+const T3 = '2026-01-04T00:00:00Z';
+const T4 = '2026-01-05T00:00:00Z';
+
+test('computeCutoff advances over a contiguous handled prefix and stops at first new', () => {
   const recs = [
-    rec('a', '2026-01-01T00:00:00Z', 'watched'),
-    rec('b', '2026-01-02T00:00:00Z', 'not_interested'),
-    rec('c', '2026-01-03T00:00:00Z', 'new'),
-    rec('d', '2026-01-04T00:00:00Z', 'watched'),
+    rec('a', T1, 'watched'),
+    rec('b', T2, 'not_interested'),
+    rec('c', T3, 'new'),
+    rec('d', T4, 'watched'), // handled but AFTER the first new -> does not count
   ];
-  const { newCutoff, prunedIds } = advanceCutoff(recs, '2025-12-31T00:00:00Z');
-  assert.equal(newCutoff, '2026-01-02T00:00:00Z'); // advanced across a, b
-  assert.deepEqual(prunedIds.sort(), ['a', 'b']); // d NOT pruned (sits after new c)
+  assert.equal(computeCutoff(recs, FLOOR), T2); // stops at c (first new)
 });
 
-test('advanceCutoff does not advance when the oldest in-window video is new', () => {
-  const recs = [
-    rec('a', '2026-01-01T00:00:00Z', 'new'),
-    rec('b', '2026-01-02T00:00:00Z', 'watched'),
-  ];
-  const { newCutoff, prunedIds } = advanceCutoff(recs, '2025-12-31T00:00:00Z');
-  assert.equal(newCutoff, '2025-12-31T00:00:00Z'); // unchanged
-  assert.deepEqual(prunedIds, []); // nothing pruned
+test('computeCutoff returns floor when the oldest present is new (or no records)', () => {
+  assert.equal(
+    computeCutoff([rec('a', T1, 'new'), rec('b', T2, 'watched')], FLOOR),
+    FLOOR
+  );
+  assert.equal(computeCutoff([], FLOOR), FLOOR);
 });
 
-// --- The coordinator's concrete example, end to end ---
-
-test('reload example: [A watched, B new, C watched, D new] -> only A pruned', () => {
-  const recs = [
-    rec('A', '2026-02-01T00:00:00Z', 'watched'),
-    rec('B', '2026-02-02T00:00:00Z', 'new'),
-    rec('C', '2026-02-03T00:00:00Z', 'watched'),
-    rec('D', '2026-02-04T00:00:00Z', 'new'),
-  ];
-  const cutoff = '2026-01-01T00:00:00Z';
-  const { newCutoff, prunedIds } = advanceCutoff(recs, cutoff);
-  assert.deepEqual(prunedIds, ['A']); // ONLY A deleted
-  assert.equal(newCutoff, '2026-02-01T00:00:00Z'); // cutoff moves up to just after A
-
-  const surviving = recs.filter((r) => !prunedIds.includes(r.videoId));
-  const visibleIds = computeVisible(surviving, newCutoff).map((r) => r.videoId);
-  assert.deepEqual(visibleIds, ['B', 'C', 'D']); // C (watched) remains, greyed in UI
+test('computeCutoff tie-safety: never reaches a new video tying a handled one; result >= floor', () => {
+  const T = '2026-02-01T00:00:00Z';
+  const recs = [rec('h', T, 'watched'), rec('n', T, 'new')]; // same timestamp
+  const c = computeCutoff(recs, FLOOR);
+  assert.equal(c, FLOOR); // cannot advance onto the tie
+  assert.ok(compareIso(c, T) < 0, 'cutoff must be strictly before the new video');
 });
 
-// --- tie-safety: a handled record sharing a timestamp with a still-new one ---
+test('cutoff retreats on un-mark and returns on re-mark', () => {
+  const A = rec('A', T1, 'watched');
+  const B = rec('B', T2, 'watched');
+  const C = rec('C', T3, 'new');
+  const recs = [A, B, C];
+  assert.equal(computeCutoff(recs, FLOOR), T2); // cutoff = B
+  A.state = 'new'; // un-mark A (inside the handled prefix)
+  assert.equal(computeCutoff(recs, FLOOR), FLOOR); // retreats to floor
+  A.state = 'watched'; // re-mark A
+  assert.equal(computeCutoff(recs, FLOOR), T2); // back to B
+});
 
-test('advanceCutoff never prunes a new video that ties a handled timestamp', () => {
-  const recs = [
-    rec('h', '2026-03-01T00:00:00Z', 'watched'),
-    rec('n', '2026-03-01T00:00:00Z', 'new'), // same second as h, still new
-  ];
-  const { newCutoff, prunedIds } = advanceCutoff(recs, '2026-02-01T00:00:00Z');
-  assert.ok(!prunedIds.includes('n'), 'the still-new video must survive');
-  assert.equal(newCutoff, '2026-02-01T00:00:00Z'); // cannot advance onto the tie
+// --- videosToClean + cleanup semantics + FLOOR-based visibility ---
+
+test('videosToClean is exactly the <= cutoff set; after cleanup floor=cutoff excludes them', () => {
+  const recs = [rec('a', T1, 'watched'), rec('b', T2, 'watched'), rec('c', T3, 'new')];
+  const cutoff = computeCutoff(recs, FLOOR); // T2
+  const cleaned = videosToClean(recs, cutoff)
+    .map((r) => r.videoId)
+    .sort();
+  assert.deepEqual(cleaned, ['a', 'b']);
+
+  const remaining = recs.filter((r) => !cleaned.includes(r.videoId));
+  const newFloor = cutoff; // cleanup sets floor = cutoff
+  const visibleIds = computeVisible(remaining, newFloor).map((r) => r.videoId);
+  assert.deepEqual(visibleIds, ['c']); // cleaned a,b gone; c remains
+});
+
+test('computeVisible is FLOOR-based: marked videos after the floor still appear', () => {
+  const recs = [rec('a', T1, 'watched'), rec('b', T2, 'new')];
+  // On mark, the render list uses FLOOR (not the cutoff marker), so the watched
+  // 'a' stays visible/greyed and does NOT disappear.
+  const visibleIds = computeVisible(recs, FLOOR).map((r) => r.videoId);
+  assert.deepEqual(visibleIds, ['a', 'b']);
 });
 
 // --- duration helpers ---
@@ -153,10 +171,10 @@ test('formatDuration formats M:SS and H:MM:SS', () => {
   assert.equal(formatDuration(0), '0:00');
 });
 
-test('isShort: positive and <=60s is short; 61s / 0 / unknown are not', () => {
-  assert.equal(isShort(60), true); // boundary: 60 is short
+test('isShort: positive and <= SHORTS_MAX_SECONDS is short; above / 0 / unknown are not', () => {
+  assert.equal(isShort(SHORTS_MAX_SECONDS), true); // boundary: threshold itself is short
   assert.equal(isShort(1), true);
-  assert.equal(isShort(61), false); // boundary: 61 is not
+  assert.equal(isShort(SHORTS_MAX_SECONDS + 1), false); // just over -> not short
   assert.equal(isShort(0), false); // zero/unknown length
   assert.equal(isShort(undefined), false);
   assert.equal(isShort(-5), false);

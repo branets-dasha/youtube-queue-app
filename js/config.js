@@ -13,7 +13,11 @@ export const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
 // localStorage keys. All app keys are namespaced with the `yqa_` prefix.
 export const LS_CLIENT_ID = 'yqa_client_id';
+// FLOOR: deletion + fetch boundary (moves forward only, on cleanup). Reuses the
+// original start-cutoff key so existing installs migrate seamlessly.
 export const LS_START_CUTOFF = 'yqa_start_cutoff';
+// CUTOFF: live handled-prefix marker (updates on mark/unmark; always >= floor).
+export const LS_CUTOFF = 'yqa_cutoff';
 // Fallback video store key, used only when IndexedDB is unavailable.
 export const LS_VIDEOS_FALLBACK = 'yqa_videos_fallback';
 // Persisted channel map (channelId -> { title, avatarUrl }) for card avatars.
