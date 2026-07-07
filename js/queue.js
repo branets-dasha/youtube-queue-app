@@ -17,6 +17,7 @@
 //     embeddable:   boolean,   // optional; can be played in the on-page player
 //     positionSeconds: number, // optional; last watch position, for resume
 //     liked:        boolean,   // optional; locally-tracked YouTube like state
+//     preferredRate: number,   // optional; per-video preferred speed (1 | 1.5 | 2)
 //     state:        'new' | 'watched' | 'not_interested'
 //   }
 
@@ -344,4 +345,22 @@ export function resumeStart(positionSeconds, durationSeconds) {
     return 0; // at/near the end (or past the duration): start over
   }
   return Math.floor(pos);
+}
+
+/**
+ * The playback rate to use when a video plays, in PRIORITY order:
+ *   1. the video's per-video `preferredRate`, when it is a valid preset (1/1.5/2);
+ *   2. else the user's `defaultRate` setting, when it is a valid preset;
+ *   3. else `currentRate` — retain the speed carried over from the previous video.
+ * "valid" means exactly one of 1 / 1.5 / 2. Pure.
+ * @param {number|undefined|null} preferredRate per-video preference
+ * @param {number|undefined|null} defaultRate user's default-speed setting (null = unset)
+ * @param {number} currentRate the current/global rate (previous video's speed)
+ * @returns {number}
+ */
+export function effectiveRate(preferredRate, defaultRate, currentRate) {
+  const isPreset = (r) => r === 1 || r === 1.5 || r === 2;
+  if (isPreset(preferredRate)) return preferredRate;
+  if (isPreset(defaultRate)) return defaultRate;
+  return currentRate;
 }

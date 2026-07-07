@@ -18,6 +18,7 @@ import {
   isShort,
   SHORTS_MAX_SECONDS,
   resumeStart,
+  effectiveRate,
 } from './queue.js';
 
 let passed = 0;
@@ -244,6 +245,29 @@ test('resumeStart returns 0 near the start, near the end, past the end, or missi
 test('resumeStart resumes when duration is unknown (only the min threshold applies)', () => {
   assert.equal(resumeStart(100, undefined), 100);
   assert.equal(resumeStart(3, undefined), 0);
+});
+
+// --- effectiveRate: preferred > default > current, with preset validation ---
+
+test('effectiveRate: a valid preferredRate always wins', () => {
+  assert.equal(effectiveRate(2, 1.5, 1), 2); // preferred beats default + current
+  assert.equal(effectiveRate(1.5, 2, 2), 1.5);
+  assert.equal(effectiveRate(1, 2, 1.5), 1);
+  assert.equal(effectiveRate(2, null, 1), 2); // preferred wins with no default
+});
+
+test('effectiveRate: falls back to a valid default when there is no preferred', () => {
+  assert.equal(effectiveRate(undefined, 2, 1), 2); // no preferred -> default
+  assert.equal(effectiveRate(null, 1.5, 1), 1.5);
+  assert.equal(effectiveRate(3, 2, 1), 2); // invalid preferred -> default
+  assert.equal(effectiveRate('2', 1.5, 1), 1.5); // wrong-type preferred -> default
+});
+
+test('effectiveRate: retains currentRate when neither preferred nor default is valid', () => {
+  assert.equal(effectiveRate(undefined, null, 1.5), 1.5); // both unset -> current
+  assert.equal(effectiveRate(null, undefined, 2), 2);
+  assert.equal(effectiveRate(3, 0, 1), 1); // both invalid presets -> current
+  assert.equal(effectiveRate('2', '1.5', 2), 2); // wrong types -> current
 });
 
 console.log(`\n${passed} passed`);

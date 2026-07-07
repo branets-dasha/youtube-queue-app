@@ -542,6 +542,17 @@ main {
 .row__channel {
   font-weight: 500;
 }
+/* The channel name links to the channel (card + player). Keep the muted inline
+   look — inherit the sub-line colour rather than the bright accent link colour —
+   and reveal the affordance with an underline on hover/focus. */
+a.row__channel {
+  color: inherit;
+  text-decoration: none;
+}
+a.row__channel:hover,
+a.row__channel:focus-visible {
+  text-decoration: underline;
+}
 .row__dot {
   opacity: 0.6;
 }
@@ -571,6 +582,7 @@ main {
 .row__actions {
   display: flex;
   flex-direction: row;
+  align-items: center;
   gap: 8px;
   padding: 8px 14px 14px;
 }
@@ -578,10 +590,14 @@ main {
    rest with a uniform size; a subtle neutral fill on hover; and the SEMANTIC
    colour on hover — green (Watched) / red (Not interested) / accent (Play). */
 .row__actions .btn {
-  flex: 1 1 0; /* four equal-width icon buttons on ONE row */
   border-color: transparent;
   background: transparent;
   color: var(--text-dim);
+}
+/* Direct-child action icons (▶ ✓ ✕) share the row evenly; the speed group and
+   its compact buttons keep their natural size, on ONE line. */
+.row__actions > .btn {
+  flex: 1 1 0;
 }
 .row__actions .btn:hover:not(:disabled) {
   background: var(--surface-2);
@@ -603,6 +619,34 @@ main {
   padding: 7px 10px;
   font-size: 1.05rem;
   line-height: 1;
+}
+/* Per-video preferred-speed group: compact, tightly grouped, with a subtle
+   divider before the ✓ ✕ icons. */
+.row__rates {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid var(--border);
+}
+.btn--cardrate {
+  flex: 0 0 auto;
+  padding: 6px 6px;
+  font-size: 0.76rem;
+  line-height: 1;
+}
+/* Active preference uses the SAME deep-blue accent as the player speed/like buttons. */
+.row__actions .btn--cardrate.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--primary-text);
+}
+.row__actions .btn--cardrate.is-active:hover:not(:disabled) {
+  /* Keep the glyph light on hover; only nudge the fill a touch darker. */
+  background: color-mix(in srgb, var(--accent) 90%, #000);
+  color: var(--primary-text);
 }
 
 /* ---- Handled (marked) cards ---- */
@@ -629,8 +673,9 @@ main {
   color: var(--primary-text);
 }
 .row__actions .btn--watched[aria-pressed='true']:hover:not(:disabled) {
-  background: var(--watched);
-  filter: brightness(1.06);
+  /* Keep the check icon light on hover; only nudge the fill a touch darker. */
+  background: color-mix(in srgb, var(--watched) 90%, #000);
+  color: var(--primary-text);
 }
 .row__actions .btn--not[aria-pressed='true'] {
   background: var(--not);
@@ -638,8 +683,9 @@ main {
   color: var(--primary-text);
 }
 .row__actions .btn--not[aria-pressed='true']:hover:not(:disabled) {
-  background: var(--not);
-  filter: brightness(1.06);
+  /* Keep the cross icon light on hover; only nudge the fill a touch darker. */
+  background: color-mix(in srgb, var(--not) 90%, #000);
+  color: var(--primary-text);
 }
 
 /* ---- Two-pane workspace (queue + player) ---- */
@@ -801,8 +847,8 @@ body.app-active #app-main.app {
   color: var(--primary-text);
 }
 .btn--rate.is-active:hover:not(:disabled) {
-  background: var(--accent);
-  filter: brightness(1.06);
+  background: color-mix(in srgb, var(--accent) 90%, #000);
+  color: var(--primary-text);
 }
 
 /* Like button: outline at rest; when liked, the SAME deep-blue accent fill as
@@ -813,8 +859,8 @@ body.app-active #app-main.app {
   color: var(--primary-text);
 }
 .btn--like.is-active:hover:not(:disabled) {
-  background: var(--accent);
-  filter: brightness(1.06);
+  background: color-mix(in srgb, var(--accent) 90%, #000);
+  color: var(--primary-text);
 }
 
 /* "Show all (N)" row at the bottom of the windowed queue. */

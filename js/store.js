@@ -16,6 +16,7 @@ import {
   LS_VIDEOS_FALLBACK,
   LS_CHANNELS,
   LS_PLAYBACK_RATE,
+  LS_DEFAULT_RATE,
   LS_HIDE_MARKED,
   IDB_NAME,
   IDB_VERSION,
@@ -96,6 +97,27 @@ export function getPlaybackRate() {
 export function setPlaybackRate(rate) {
   try {
     localStorage.setItem(LS_PLAYBACK_RATE, String(rate));
+  } catch {
+    /* ignore */
+  }
+}
+
+// The persisted DEFAULT-speed setting (yqa_default_rate). Returns a Number, or
+// null when unset/unreadable (caller validates against the 1/1.5/2 presets).
+
+export function getDefaultRate() {
+  try {
+    const raw = localStorage.getItem(LS_DEFAULT_RATE);
+    return raw == null ? null : Number(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function setDefaultRate(rate) {
+  try {
+    if (rate == null) localStorage.removeItem(LS_DEFAULT_RATE);
+    else localStorage.setItem(LS_DEFAULT_RATE, String(rate));
   } catch {
     /* ignore */
   }

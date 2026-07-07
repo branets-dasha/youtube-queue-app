@@ -27,6 +27,8 @@ import {
   saveChannels,
   getPlaybackRate,
   setPlaybackRate,
+  getDefaultRate,
+  setDefaultRate,
   getHideMarked,
   setHideMarked,
 } from './store.js';
@@ -52,6 +54,7 @@ import {
   videosToClean,
   nextPlayable,
   resumeStart,
+  effectiveRate,
   daysAgoIso,
 } from './queue.js';
 import {
@@ -62,6 +65,7 @@ import {
   renderStats,
   renderPlayerMeta,
   setCardState,
+  setCardRate,
   setVisible,
 } from './ui.js';
 import {
@@ -94,6 +98,7 @@ const state = {
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
   rate: 1, // player playback rate (1 / 1.5 / 2)
+  defaultRate: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
   hideMarked: false, // view filter: hide watched/not-interested videos (persisted)
 };
@@ -137,6 +142,12 @@ async function init() {
   state.rate = [1, 1.5, 2].includes(storedRate) ? storedRate : DEFAULT_PLAYBACK_RATE;
   playerSetRate(state.rate);
 
+  // Restore the persisted DEFAULT-speed setting (validated; unset unless 1/1.5/2)
+  // and reflect the toolbar button label.
+  const storedDefault = getDefaultRate();
+  state.defaultRate = [1, 1.5, 2].includes(storedDefault) ? storedDefault : null;
+  updateDefaultRateButton();
+
   // Restore the persisted "hide handled" view toggle and reflect the button.
   state.hideMarked = getHideMarked();
   updateHideMarkedButton();
@@ -177,6 +188,7 @@ function cacheDom() {
   dom.refreshBtn = byId('refresh-btn');
   dom.cleanupBtn = byId('cleanup-btn');
   dom.hideMarkedBtn = byId('hide-marked-btn');
+  dom.defaultRateBtn = byId('default-rate-btn');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
   dom.changeClientBtn = byId('change-client-btn');
 
@@ -211,6 +223,7 @@ function bindEvents() {
   dom.refreshBtn.addEventListener('click', onRefresh);
   dom.cleanupBtn.addEventListener('click', onCleanup);
   if (dom.hideMarkedBtn) dom.hideMarkedBtn.addEventListener('click', onToggleHideMarked);
+  if (dom.defaultRateBtn) dom.defaultRateBtn.addEventListener('click', onCycleDefaultRate);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
   if (dom.rate1x) dom.rate1x.addEventListener('click', () => onRate(1));
@@ -755,6 +768,11 @@ function playVideo(videoId) {
   }
   ensurePlayer();
   state.playing = videoId;
+  // Apply the EFFECTIVE rate before loading — via onRate, so the player +
+  // speed-button highlight + the persisted global rate all update and carry
+  // forward. Priority: this video's preferredRate, else the user's default-speed
+  // setting, else the current rate (retain the previous video's speed).
+  onRate(effectiveRate(rec.preferredRate, state.defaultRate, state.rate));
   // Resume from the saved position when it's a meaningful mid-point, else start 0.
   const start = resumeStart(rec.positionSeconds, rec.durationSeconds);
   playerLoad(videoId, start);
@@ -841,6 +859,26 @@ function updateRateButtons() {
     btn.classList.toggle('is-active', state.rate === r);
     btn.setAttribute('aria-pressed', String(state.rate === r));
   }
+}
+
+/**
+ * Set/toggle a card's per-video preferred speed. Does NOT start playback: it
+ * persists `preferredRate` on the record and updates just that card's speed
+ * buttons in place. Clicking the active speed toggles it OFF. If the card IS the
+ * currently-playing video, SETTING a speed applies it live (unsetting does not).
+ * @param {string} videoId
+ * @param {number} rate 1 | 1.5 | 2
+ */
+function onCardRate(videoId, rate) {
+  const rec = state.records.find((r) => r.videoId === videoId);
+  if (!rec) return;
+  const wasActive = rec.preferredRate === rate;
+  rec.preferredRate = wasActive ? undefined : rate; // click active -> toggle off
+  putVideo(rec).catch(() => {}); // persist (whole-record write)
+  const card = findCard(videoId);
+  if (card) setCardRate(card, rec.preferredRate);
+  // Live-apply only when SETTING a speed for the currently-playing video.
+  if (!wasActive && state.playing === videoId) onRate(rate);
 }
 
 /**
@@ -993,6 +1031,7 @@ function render() {
       onWatched: (id) => markVideo(id, STATE_WATCHED),
       onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
       onPlay: (id) => playVideo(id),
+      onCardRate: (id, rate) => onCardRate(id, rate),
     },
     state.channels,
     more
@@ -1018,6 +1057,29 @@ function updateHideMarkedButton() {
   if (!dom.hideMarkedBtn) return;
   dom.hideMarkedBtn.textContent = state.hideMarked ? 'Show handled' : 'Hide handled';
   dom.hideMarkedBtn.setAttribute('aria-pressed', String(state.hideMarked));
+}
+
+/**
+ * Cycle the DEFAULT-speed setting on click: unset -> 1× -> 1.5× -> 2× -> unset.
+ * Persists the choice and updates the toolbar label. Does not touch the current
+ * playback rate — it only changes the fallback applied to future plays of videos
+ * that have no per-video preferred speed (via effectiveRate).
+ */
+function onCycleDefaultRate() {
+  const cycle = [null, 1, 1.5, 2];
+  const i = cycle.indexOf(state.defaultRate);
+  const next = cycle[(Math.max(0, i) + 1) % cycle.length];
+  state.defaultRate = next;
+  setDefaultRate(next); // null removes the key
+  updateDefaultRateButton();
+}
+
+/** Reflect the default-speed setting on the toolbar button ("off" when unset). */
+function updateDefaultRateButton() {
+  if (!dom.defaultRateBtn) return;
+  const dr = state.defaultRate;
+  const label = [1, 1.5, 2].includes(dr) ? `${dr}×` : 'off';
+  dom.defaultRateBtn.textContent = `Default speed: ${label}`;
 }
 
 function onShowAll() {
@@ -1144,6 +1206,14 @@ function onGlobalKeydown(e) {
     if (idx >= 0) {
       e.preventDefault();
       markVideo(rows[idx].dataset.videoId, STATE_NOT_INTERESTED, { advanceFocus: true });
+    }
+  } else if (key === '1' || key === '2') {
+    // Set the FOCUSED card's preferred speed. Reuses the card speed-button
+    // behavior: toggles off if already set, no playback, applies live only if
+    // the focused card is the one currently playing. (1.5× lives in the player.)
+    if (idx >= 0) {
+      e.preventDefault();
+      onCardRate(rows[idx].dataset.videoId, Number(key));
     }
   } else if (key === 'u') {
     e.preventDefault();

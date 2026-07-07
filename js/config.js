@@ -29,6 +29,10 @@ export const LS_CHANNELS = 'yqa_channels';
 // Persisted player playback rate (one of 1 / 1.5 / 2). Source of truth + default.
 export const LS_PLAYBACK_RATE = 'yqa_playback_rate';
 export const DEFAULT_PLAYBACK_RATE = 1;
+// Persisted DEFAULT-speed setting for newly played videos (one of 1 / 1.5 / 2, or
+// absent/null = unset). Distinct from LS_PLAYBACK_RATE (the live/current rate):
+// this is the fallback applied to a video that has no per-video preferredRate.
+export const LS_DEFAULT_RATE = 'yqa_default_rate';
 // Persisted "hide marked (watched / not-interested) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 

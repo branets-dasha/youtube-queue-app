@@ -163,6 +163,22 @@ export function setCardState(card, state) {
 }
 
 /**
+ * Reflect a record's per-video preferred speed on its card's speed buttons
+ * (active / deep-blue accent on the matching rate; none active when unset), in
+ * place — no full re-render. Attribute/class only (XSS-safe).
+ * @param {HTMLElement} card
+ * @param {number|undefined} preferredRate
+ */
+export function setCardRate(card, preferredRate) {
+  if (!card) return;
+  for (const b of card.querySelectorAll('.btn--cardrate')) {
+    const active = Number(b.dataset.rate) === preferredRate;
+    b.classList.toggle('is-active', active);
+    b.setAttribute('aria-pressed', String(active));
+  }
+}
+
+/**
  * A neutral circular placeholder avatar (first letter of the channel title),
  * used when a channel has no avatar so card height stays uniform.
  * @param {string} title channel title
@@ -209,6 +225,30 @@ function buildAvatar(rec, channels) {
 }
 
 /**
+ * Build the channel name element. When the record carries a channelId, render it
+ * as a link to that channel on YouTube (new tab, noopener); the id is passed
+ * through encodeURIComponent and the visible name via textContent (XSS-safe). A
+ * click is stopPropagation'd so it opens the channel even if an ancestor has a
+ * click-to-play handler. With no channelId, render plain text.
+ * @param {object} rec video record
+ * @returns {HTMLElement}
+ */
+function buildChannelLink(rec) {
+  const title = rec.channelTitle || '';
+  if (rec.channelId) {
+    return el('a', {
+      class: 'row__channel',
+      href: 'https://www.youtube.com/channel/' + encodeURIComponent(rec.channelId),
+      target: '_blank',
+      rel: 'noopener',
+      text: title, // safe
+      onclick: (e) => e.stopPropagation(),
+    });
+  }
+  return el('span', { class: 'row__channel', text: title });
+}
+
+/**
  * Render the player's info meta row (avatar + channel + posted date) for `rec`
  * into `container`, mirroring a card's meta row and reusing the same avatar
  * rendering + channels map. Pass rec = null to clear it. XSS-safe (textContent,
@@ -223,7 +263,7 @@ export function renderPlayerMeta(container, rec, channels = {}) {
   if (!rec) return;
   container.append(
     buildAvatar(rec, channels),
-    el('span', { class: 'row__channel', text: rec.channelTitle || '' }),
+    buildChannelLink(rec),
     el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
     el('time', {
       class: 'row__time-abs',
@@ -318,7 +358,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
   });
 
   const avatar = buildAvatar(rec, channels);
-  const channel = el('span', { class: 'row__channel', text: rec.channelTitle || '' });
+  const channel = buildChannelLink(rec);
 
   const timeAbs = el('time', {
     class: 'row__time-abs',
@@ -336,9 +376,11 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     ]),
   ]);
 
-  // Compact ICON actions on ONE row. Glyphs are static unicode (never API data);
-  // each carries an aria-label AND a title tooltip. Watched/Not keep their
-  // classes so setCardState's aria-pressed + the active-colour CSS still apply.
+  // Compact ICON actions on ONE row (▶ · 1× 2× · ✓ ✕). Glyphs are static unicode
+  // (never API data); each carries an aria-label AND a title tooltip. The card
+  // title itself is the link to the video on YouTube, so no separate ↗ button.
+  // Watched/Not keep their classes so setCardState's aria-pressed + the
+  // active-colour CSS still apply.
   const playBtn = el('button', {
     class: 'btn btn--icon btn--play',
     type: 'button',
@@ -346,15 +388,6 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     title: 'Play',
     text: '▶',
     onclick: () => handlers.onPlay && handlers.onPlay(rec.videoId),
-  });
-  const ytLink = el('a', {
-    class: 'btn btn--icon btn--yt',
-    href: watchUrl,
-    target: '_blank',
-    rel: 'noopener',
-    'aria-label': `Open "${rec.title}" on YouTube`,
-    title: 'Open on YouTube',
-    text: '↗',
   });
   const watchedBtn = el('button', {
     class: 'btn btn--icon btn--watched',
@@ -375,9 +408,34 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     onclick: () => handlers.onNotInterested(rec.videoId),
   });
 
+  // Per-video preferred-speed group (1× / 2×) placed right after Play. It sets a
+  // preference only — does NOT start playback. Glyphs are static text. (1.5× is a
+  // valid preset but is only exposed in the player controls, not on cards.)
+  const speedGroup = el(
+    'div',
+    {
+      class: 'row__rates',
+      role: 'group',
+      'aria-label': `Preferred speed for "${rec.title}"`,
+    },
+    [1, 2].map((r) => {
+      const label = `${r}×`;
+      return el('button', {
+        class: 'btn btn--cardrate',
+        type: 'button',
+        dataset: { rate: String(r) },
+        'aria-label': `Set ${label} speed for this video`,
+        'aria-pressed': 'false',
+        title: `${label} preferred speed`,
+        text: label,
+        onclick: () => handlers.onCardRate && handlers.onCardRate(rec.videoId, r),
+      });
+    })
+  );
+
   const actions = el('div', { class: 'row__actions' }, [
     playBtn,
-    ytLink,
+    speedGroup,
     watchedBtn,
     notBtn,
   ]);
@@ -396,6 +454,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
 
   // Reflect the record's initial state (marked videos render greyed on load).
   setCardState(li, rec.state);
+  setCardRate(li, rec.preferredRate);
 
   return li;
 }
