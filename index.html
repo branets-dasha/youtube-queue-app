@@ -157,7 +157,7 @@
         <div class="workspace">
           <!-- LEFT: the queue (its own scrollbar) -->
           <div class="workspace__queue">
-            <!-- Cleanup control pinned at the TOP of the queue pane. -->
+            <!-- Cleanup + hide-handled controls pinned at the TOP of the queue pane. -->
             <div class="queue-header">
               <button
                 id="cleanup-btn"
@@ -167,6 +167,14 @@
                 disabled
               >
                 Clean up (0)
+              </button>
+              <button
+                id="hide-marked-btn"
+                class="btn"
+                type="button"
+                aria-pressed="false"
+              >
+                Hide handled
               </button>
             </div>
             <ul id="queue-list" class="queue" role="list" aria-label="Video queue"></ul>

@@ -16,6 +16,7 @@ import {
   LS_VIDEOS_FALLBACK,
   LS_CHANNELS,
   LS_PLAYBACK_RATE,
+  LS_HIDE_MARKED,
   IDB_NAME,
   IDB_VERSION,
   IDB_STORE_VIDEOS,
@@ -95,6 +96,24 @@ export function getPlaybackRate() {
 export function setPlaybackRate(rate) {
   try {
     localStorage.setItem(LS_PLAYBACK_RATE, String(rate));
+  } catch {
+    /* ignore */
+  }
+}
+
+// The persisted "hide marked videos" view toggle (yqa_hide_marked). Default off.
+
+export function getHideMarked() {
+  try {
+    return localStorage.getItem(LS_HIDE_MARKED) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function setHideMarked(on) {
+  try {
+    localStorage.setItem(LS_HIDE_MARKED, on ? 'true' : 'false');
   } catch {
     /* ignore */
   }

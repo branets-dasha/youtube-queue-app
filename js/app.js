@@ -27,6 +27,8 @@ import {
   saveChannels,
   getPlaybackRate,
   setPlaybackRate,
+  getHideMarked,
+  setHideMarked,
 } from './store.js';
 import {
   waitForGis,
@@ -89,6 +91,7 @@ const state = {
   playerInited: false,
   rate: 1, // player playback rate (1 / 1.5 / 2)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
+  hideMarked: false, // view filter: hide watched/not-interested videos (persisted)
 };
 
 // DOM references, populated in init().
@@ -130,6 +133,10 @@ async function init() {
   state.rate = [1, 1.5, 2].includes(storedRate) ? storedRate : DEFAULT_PLAYBACK_RATE;
   playerSetRate(state.rate);
 
+  // Restore the persisted "hide handled" view toggle and reflect the button.
+  state.hideMarked = getHideMarked();
+  updateHideMarkedButton();
+
   // INIT is one of the three CLEANUP sites. Migrate installs that predate the
   // cutoff key (derive it from floor), then run cleanup BEFORE the first render.
   if (state.floor) {
@@ -165,6 +172,7 @@ function cacheDom() {
   dom.authStatus = byId('auth-status');
   dom.refreshBtn = byId('refresh-btn');
   dom.cleanupBtn = byId('cleanup-btn');
+  dom.hideMarkedBtn = byId('hide-marked-btn');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
   dom.changeClientBtn = byId('change-client-btn');
 
@@ -198,6 +206,7 @@ function bindEvents() {
   dom.signoutBtn.addEventListener('click', onSignOut);
   dom.refreshBtn.addEventListener('click', onRefresh);
   dom.cleanupBtn.addEventListener('click', onCleanup);
+  if (dom.hideMarkedBtn) dom.hideMarkedBtn.addEventListener('click', onToggleHideMarked);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
   if (dom.rate1x) dom.rate1x.addEventListener('click', () => onRate(1));
@@ -543,16 +552,31 @@ async function markVideo(videoId, newState, opts = {}) {
   rec.state = nextState;
   applyHandledDelta(prevState, nextState);
   state.lastAction = { videoId, prevState };
-  if (card) setCardState(card, nextState);
-  // The handled prefix may have changed: recompute the live cutoff marker
-  // (persist if it moved) + refresh the display/counts/Cleanup button. NO list
-  // re-render or deletion — marked videos stay visible until CLEANUP. No visible
-  // "Marked" notice; the `u` shortcut + toggle-off still undo silently.
-  refreshMarkerAndStats();
-  if (opts.advanceFocus && card) {
-    const next = nextRowAfter(card);
-    if (next) next.focus();
+
+  // When "hide handled" is ON and this video just became marked, REMOVE only its
+  // card (lightweight — no full re-render, no scroll jump), advancing focus to the
+  // next (or previous) card. Otherwise keep the grey-in-place behaviour: marked
+  // videos stay visible/greyed until CLEANUP; the `u` shortcut + toggle-off undo.
+  const removedCard = state.hideMarked && nextState !== STATE_NEW && !!card;
+  if (removedCard) {
+    let focusTarget = null;
+    if (opts.advanceFocus) {
+      const rows = Array.from(dom.queueList.querySelectorAll('.row'));
+      const i = rows.indexOf(card);
+      if (i >= 0) focusTarget = rows[i + 1] || rows[i - 1] || null;
+    }
+    card.remove();
+    if (focusTarget) focusTarget.focus();
+  } else if (card) {
+    setCardState(card, nextState);
+    if (opts.advanceFocus) {
+      const next = nextRowAfter(card);
+      if (next) next.focus();
+    }
   }
+  // Recompute the live cutoff marker (persist if it moved) + refresh the header
+  // counts / Cleanup button. No data re-render/deletion here.
+  refreshMarkerAndStats();
 
   try {
     await putVideo(rec);
@@ -560,7 +584,11 @@ async function markVideo(videoId, newState, opts = {}) {
     // Persistence failed: revert the optimistic changes so memory matches store.
     rec.state = prevState;
     applyHandledDelta(nextState, prevState);
-    if (card) setCardState(card, prevState);
+    if (removedCard) {
+      render(); // the card was removed; rebuild the (windowed) view to restore it
+    } else if (card) {
+      setCardState(card, prevState);
+    }
     refreshMarkerAndStats();
     if (state.lastAction && state.lastAction.videoId === videoId) {
       state.lastAction = null;
@@ -932,19 +960,23 @@ function recompute() {
 function render() {
   updateStats();
 
-  const total = state.visible.length;
+  // PURE view filter: "hide handled" shows only still-'new' videos. Applied to
+  // state.visible BEFORE the window/Show-all slice; floor/cutoff/cleanup/data and
+  // auto-advance (nextPlayable) are untouched (state.visible itself is unchanged).
+  const viewList = state.hideMarked
+    ? state.visible.filter((r) => r.state === STATE_NEW)
+    : state.visible;
+
+  const total = viewList.length;
   const hasItems = total > 0;
   setVisible(dom.queueList, hasItems);
   setVisible(dom.emptyState, !hasItems && isSignedIn());
 
-  // PURE display windowing: render only the first QUEUE_DISPLAY_LIMIT cards by
-  // default. state.visible (and nextPlayable/auto-advance) is untouched — only
-  // the rendered CARDS are limited. All re-render paths (cleanup, refresh, save
-  // cutoff) run through here, so after cleanup the window tops back up to the
-  // limit as the front handled prefix is removed.
-  const windowed = state.showAll
-    ? state.visible
-    : state.visible.slice(0, QUEUE_DISPLAY_LIMIT);
+  // PURE display windowing: render only the first QUEUE_DISPLAY_LIMIT cards of the
+  // (filtered) view by default; the "Show all (N)" count reflects the filtered
+  // total. state.visible and auto-advance are untouched — only rendered CARDS are
+  // limited. All re-render paths (cleanup, refresh, toggle) run through here.
+  const windowed = state.showAll ? viewList : viewList.slice(0, QUEUE_DISPLAY_LIMIT);
   const more =
     !state.showAll && total > QUEUE_DISPLAY_LIMIT ? { total, onShowAll } : null;
 
@@ -970,6 +1002,20 @@ function render() {
  * "Show all (N)" button: reveal the full queue for THIS session. In-memory only
  * (not persisted) — a page reload reverts to the first QUEUE_DISPLAY_LIMIT.
  */
+function onToggleHideMarked() {
+  state.hideMarked = !state.hideMarked;
+  setHideMarked(state.hideMarked); // persist across reloads
+  updateHideMarkedButton();
+  render(); // normal windowed re-render, applying/removing the filter
+}
+
+/** Reflect the hide-handled toggle's label + aria-pressed from state.hideMarked. */
+function updateHideMarkedButton() {
+  if (!dom.hideMarkedBtn) return;
+  dom.hideMarkedBtn.textContent = state.hideMarked ? 'Show handled' : 'Hide handled';
+  dom.hideMarkedBtn.setAttribute('aria-pressed', String(state.hideMarked));
+}
+
 function onShowAll() {
   state.showAll = true;
   render();

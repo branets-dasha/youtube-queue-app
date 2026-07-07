@@ -29,6 +29,8 @@ export const LS_CHANNELS = 'yqa_channels';
 // Persisted player playback rate (one of 1 / 1.5 / 2). Source of truth + default.
 export const LS_PLAYBACK_RATE = 'yqa_playback_rate';
 export const DEFAULT_PLAYBACK_RATE = 1;
+// Persisted "hide marked (watched / not-interested) videos" view toggle. Default off.
+export const LS_HIDE_MARKED = 'yqa_hide_marked';
 
 // IndexedDB configuration.
 export const IDB_NAME = 'yqa';
