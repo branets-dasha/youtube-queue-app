@@ -17,6 +17,11 @@
     <!-- Top-right toast notifications (progress, success, errors, info). -->
     <div id="toast-container" class="toasts" aria-live="polite"></div>
 
+    <!-- Privacy "curtain": a full-viewport solid overlay that slides down to hide
+         the whole page on demand (wheel-down outside the queue, or Esc). It sits
+         above everything (including toasts) and blocks interaction while up. -->
+    <div id="curtain" class="curtain" aria-hidden="true"></div>
+
     <header class="topbar">
       <h1 class="topbar__title">YouTube Queue</h1>
       <p class="topbar__tagline">Burn down your subscription feed, oldest first.</p>
@@ -166,6 +171,8 @@
           <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> seek &middot;
           <kbd>&minus;</kbd>/<kbd>+</kbd> speed &middot; <kbd>n</kbd> next &middot;
           <kbd>l</kbd> like &middot; <kbd>m</kbd> mute &middot; <kbd>f</kbd> fullscreen
+          &nbsp;&middot;&nbsp;
+          <strong>Other:</strong> <kbd>Esc</kbd> curtain
         </p>
 
         <div class="workspace">

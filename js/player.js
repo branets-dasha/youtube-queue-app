@@ -171,6 +171,21 @@ export function isReady() {
   return ready;
 }
 
+/**
+ * The <iframe> element YT.Player created, or null if the player isn't up yet.
+ * Used by app.js to detect (and undo) focus moving into the cross-origin frame,
+ * which would otherwise swallow the app's document-level keyboard shortcuts.
+ * @returns {HTMLIFrameElement|null}
+ */
+export function getIframe() {
+  if (!player || typeof player.getIframe !== 'function') return null;
+  try {
+    return player.getIframe();
+  } catch {
+    return null;
+  }
+}
+
 // --- Imperative playback controls (thin wrappers over the IFrame Player API) ---
 
 /** Toggle play/pause of the current video. No-op until the player exists. */

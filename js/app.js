@@ -77,6 +77,7 @@ import {
   seekBy,
   toggleMute,
   requestFullscreen,
+  getIframe as getPlayerIframe,
 } from './player.js';
 import { showToast } from './toast.js';
 
@@ -101,6 +102,7 @@ const state = {
   defaultRate: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
   hideMarked: false, // view filter: hide watched/not-interested videos (persisted)
+  curtain: false, // privacy curtain overlay: true = raised (covering the page)
 };
 
 // DOM references, populated in init().
@@ -198,6 +200,7 @@ function cacheDom() {
 
   dom.queueList = byId('queue-list');
   dom.emptyState = byId('empty-state');
+  dom.curtain = byId('curtain');
 
   // Player pane.
   dom.playerTitle = byId('player-title');
@@ -233,6 +236,14 @@ function bindEvents() {
   if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
 
   document.addEventListener('keydown', onGlobalKeydown);
+  window.addEventListener('wheel', onGlobalWheel, { passive: true });
+
+  // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
+  // which swallows keydown so the app's shortcuts (incl. the Esc curtain) stop
+  // firing. On window blur, if focus landed on the player iframe, hand it back to
+  // the document so keydown keeps reaching us. Guard against stealing focus when
+  // the user simply switched tab/app (page hidden / window not focused).
+  window.addEventListener('blur', onWindowBlur);
 
   // Save the current watch position on hide/unload so a reload can resume.
   window.addEventListener('pagehide', flushProgress);
@@ -1174,7 +1185,62 @@ function cyclePlaybackRate(dir) {
 // during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays allowed for '+').
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Privacy curtain: a full-viewport overlay that hides the whole page. Raised by
+// a wheel-DOWN anywhere outside the queue's own scroll area (or Esc), lifted by
+// a wheel-UP (or Esc). Visual only — the player is NOT paused.
+// ---------------------------------------------------------------------------
+
+/** Reflect state.curtain onto the overlay element (class + aria). */
+function setCurtain(up) {
+  state.curtain = up;
+  if (!dom.curtain) return;
+  dom.curtain.classList.toggle('is-up', up);
+  dom.curtain.setAttribute('aria-hidden', String(!up));
+}
+
+/** Wheel handler: scroll INSIDE the queue scrolls it; elsewhere it drives the
+ *  curtain — down raises, up lifts (binary by direction). While the curtain is
+ *  up it is on top, so a wheel event's target is the curtain (not the queue),
+ *  and a scroll-up over it lifts it. DISABLED in the stacked (<=900px) layout,
+ *  where the page scrolls as one column — there only Esc toggles the curtain. */
+function onGlobalWheel(e) {
+  // Stacked layout: the whole page scrolls, so a wheel trigger would fight normal
+  // scrolling. Reuse the same breakpoint as the player-above-queue stack.
+  if (window.matchMedia('(max-width: 900px)').matches) return;
+  const t = e.target;
+  // Let the queue's own scroll area scroll normally (never triggers the curtain).
+  if (t && typeof t.closest === 'function' && t.closest('.workspace__queue')) return;
+  if (e.deltaY > 0) {
+    if (!state.curtain) setCurtain(true); // scroll down -> raise
+  } else if (e.deltaY < 0) {
+    if (state.curtain) setCurtain(false); // scroll up -> lift
+  }
+}
+
+/** On window blur, if focus moved into the cross-origin player iframe, return it
+ *  to the document so the app keeps receiving keydown (Esc + shortcuts). Guarded
+ *  so alt-tabbing away (page hidden) doesn't yank focus back. */
+function onWindowBlur() {
+  // Defer so document.activeElement settles to the newly-focused iframe.
+  setTimeout(() => {
+    if (document.hidden) return; // switched tab/app: leave focus alone
+    const iframe = getPlayerIframe();
+    if (iframe && document.activeElement === iframe) {
+      iframe.blur(); // returns focus to document.body; keydown reaches us again
+    }
+  }, 0);
+}
+
 function onGlobalKeydown(e) {
+  // PANIC KEY: Esc toggles the curtain, handled BEFORE any guard so it works in
+  // every layout and even during onboarding. Ignore modifier combos.
+  if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    setCurtain(!state.curtain);
+    return;
+  }
+
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
   if (dom.appMain.hidden) return;
