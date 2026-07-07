@@ -767,6 +767,13 @@ body.app-active #app-main.app {
      in this wrapper, so the info aligns to the video's LEFT edge and the
      right-aligned controls align to the video's RIGHT edge (not the pane/screen). */
   width: min(100%, calc((100dvh - 420px) * 16 / 9));
+  /* Query container: whether the player__bar can hold info + controls side by
+     side depends on THIS wrapper's width (which tracks the video), NOT the
+     viewport — so the stack-order switch below is driven by a @container query,
+     firing in both the two-pane and the stacked (<900px) layouts. Width is set
+     explicitly above, so inline-size containment does not affect it. */
+  container-type: inline-size;
+  container-name: player;
 }
 .player__frame {
   position: sticky; /* video stays visible at the top while the info can scroll */
@@ -801,14 +808,19 @@ body.app-active #app-main.app {
 }
 .player__bar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  /* NOWRAP so the controls can NEVER wrap onto a line BELOW the title. As the
+     pane narrows, the info block (below) shrinks and the title wraps to multiple
+     lines within the remaining width while the controls stay pinned right. The
+     ONLY way controls leave this row is the @container query near the bottom of
+     this file, which stacks them ABOVE the title (never below). */
+  flex-wrap: nowrap;
+  align-items: flex-start; /* multi-line title top-aligns with the controls */
   gap: 10px;
   justify-content: space-between;
 }
 .player__info {
-  min-width: 0;
-  flex: 1 1 auto;
+  min-width: 0; /* allow the flex item to shrink below its content's width */
+  flex: 1 1 0; /* shrink/grow from a 0 basis so the title wraps instead of pushing */
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -817,6 +829,10 @@ body.app-active #app-main.app {
   margin: 0;
   min-width: 0;
   font-weight: 600;
+  /* Wrap a long title onto MULTIPLE lines (never nowrap/ellipsis/clamp) so it
+     can't blow out the side-by-side layout at medium widths — the full title
+     stays visible and the container query handles the stack point. */
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 /* Player info meta row (avatar + channel + date), mirroring a card's meta row. */
@@ -837,6 +853,12 @@ body.app-active #app-main.app {
 .player__rates {
   display: flex;
   gap: 6px;
+}
+/* Uniform width across ALL player control buttons (like / skip / 1× 1.5× 2×) so
+   they line up as an even row. min-width is sized to the widest label ("1.5×");
+   the base .btn already centres its content, so height/styling are unchanged. */
+.player__controls .btn {
+  min-width: 3.5rem;
 }
 .btn--rate {
   padding: 6px 12px;
@@ -944,6 +966,28 @@ body.app-active #app-main.app {
   .toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+}
+
+/* Player bar stack-order, driven by the PLAYER PANE width (see container-type on
+   .player), so it fires wherever the bar is too narrow to hold info + controls on
+   one line — including the two-pane layout at ~900–950px viewports where the
+   player column is already narrow, which a viewport media query would miss.
+   Threshold: the equal-width controls (5 buttons × min-width 3.5rem + the 8px/6px
+   gaps ≈ 19.5rem) plus a comfortable title/channel area stop fitting side by side
+   around the mid-30s rem. 38rem reliably catches a ~550–600px pane (the failing
+   screenshot sits at ~34.4rem, right on the old 34rem edge) while keeping genuinely
+   wide panes side by side (e.g. a ~620px / ~38.75rem laptop pane, and far wider
+   desktop panes). Erring toward "stacked / controls-above" is the desired
+   direction. Above it, the wide info-left / controls-right layout and the
+   equal-width buttons are unchanged. */
+@container player (max-width: 38rem) {
+  .player__bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .player__controls {
+    order: -1;
   }
 }
 
