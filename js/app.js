@@ -1066,7 +1066,7 @@ function updateStats() {
 function updateCleanupUi() {
   if (!dom.cleanupBtn) return;
   const n = videosToClean(state.records, state.cutoff).length;
-  dom.cleanupBtn.textContent = `Clean up (${n})`;
+  dom.cleanupBtn.textContent = `Trim front (${n})`;
   dom.cleanupBtn.disabled = n === 0 || state.refreshing;
 }
 
