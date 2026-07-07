@@ -16,6 +16,8 @@ export const LS_CLIENT_ID = 'yqa_client_id';
 export const LS_START_CUTOFF = 'yqa_start_cutoff';
 // Fallback video store key, used only when IndexedDB is unavailable.
 export const LS_VIDEOS_FALLBACK = 'yqa_videos_fallback';
+// Persisted channel map (channelId -> { title, avatarUrl }) for card avatars.
+export const LS_CHANNELS = 'yqa_channels';
 
 // IndexedDB configuration.
 export const IDB_NAME = 'yqa';

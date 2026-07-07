@@ -13,12 +13,17 @@
 //     channelTitle: string,
 //     publishedAt:  string,   // ISO 8601 timestamp
 //     thumbnailUrl: string,
+//     durationSeconds: number, // optional; video length, backfilled via videos.list
 //     state:        'new' | 'watched' | 'not_interested'
 //   }
 
 export const STATE_NEW = 'new';
 export const STATE_WATCHED = 'watched';
 export const STATE_NOT_INTERESTED = 'not_interested';
+
+// A video whose length is at most this many seconds is treated as a "Short".
+// Heuristic only — the API exposes no isShort flag to the client.
+export const SHORTS_MAX_SECONDS = 60;
 
 /**
  * Compare two ISO timestamps. Returns a negative number if a < b, positive if
@@ -272,4 +277,57 @@ export function uploadsPlaylistId(channelId) {
 export function daysAgoIso(days, nowMs) {
   const base = typeof nowMs === 'number' ? nowMs : 0;
   return new Date(base - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// Duration helpers (video length badge + Shorts heuristic)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse an ISO-8601 duration (YouTube's contentDetails.duration, e.g. "PT1H2M3S",
+ * "PT4M13S", "PT45S") into a whole number of seconds. Returns 0 for missing,
+ * zero, or unparseable input. Pure.
+ * @param {string} iso
+ * @returns {number} seconds
+ */
+export function parseIsoDuration(iso) {
+  if (typeof iso !== 'string') return 0;
+  const m = iso.match(/^(-)?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
+  if (!m) return 0;
+  const sign = m[1] ? -1 : 1;
+  const days = parseInt(m[2] || '0', 10);
+  const hours = parseInt(m[3] || '0', 10);
+  const mins = parseInt(m[4] || '0', 10);
+  const secs = parseInt(m[5] || '0', 10);
+  return sign * (((days * 24 + hours) * 60 + mins) * 60 + secs);
+}
+
+/**
+ * Format a number of seconds as "M:SS" (under an hour) or "H:MM:SS". Pure.
+ * @param {number} seconds
+ * @returns {string}
+ */
+export function formatDuration(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const ss = String(s).padStart(2, '0');
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${ss}`;
+  return `${m}:${ss}`;
+}
+
+/**
+ * Heuristic: treat a video as a YouTube Short when it has a known, positive
+ * duration no longer than SHORTS_MAX_SECONDS. There is no client-visible isShort
+ * flag, so this is only an approximation. Pure.
+ * @param {number} durationSeconds
+ * @returns {boolean}
+ */
+export function isShort(durationSeconds) {
+  return (
+    typeof durationSeconds === 'number' &&
+    durationSeconds > 0 &&
+    durationSeconds <= SHORTS_MAX_SECONDS
+  );
 }

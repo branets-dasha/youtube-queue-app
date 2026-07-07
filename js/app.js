@@ -15,6 +15,8 @@ import {
   putVideo,
   deleteVideos,
   replaceAllVideos,
+  loadChannels,
+  saveChannels,
 } from './store.js';
 import {
   waitForGis,
@@ -23,7 +25,12 @@ import {
   isSignedIn,
   revoke,
 } from './auth.js';
-import { getSubscriptions, getChannelVideosSince, ApiError } from './api.js';
+import {
+  getSubscriptions,
+  getChannelVideosSince,
+  getVideoDurations,
+  ApiError,
+} from './api.js';
 import {
   upsertVideos,
   computeQueue,
@@ -49,6 +56,7 @@ const state = {
   clientId: null,
   cutoff: null,
   records: [], // all stored video records
+  channels: {}, // channelId -> { title, avatarUrl } for card avatars (persisted)
   visible: [], // derived: computeVisible(records, cutoff) — render list (any state)
   queue: [], // derived: computeQueue(records, cutoff) — still-'new' subset, for the count
   handledThisSession: 0,
@@ -82,6 +90,10 @@ async function init() {
   } catch {
     state.records = [];
   }
+
+  // Load the persisted channel avatar/title map BEFORE the first render so
+  // avatars appear immediately for already-stored videos (zero API cost).
+  state.channels = loadChannels();
 
   // Reload-time cleanup (a): on page load, advance the cutoff across any
   // contiguous handled prefix and prune it BEFORE the first render.
@@ -311,6 +323,10 @@ async function onRefresh() {
       return;
     }
 
+    // Zero extra quota: subscriptions.list already returned each subscribed
+    // channel's avatar in snippet.thumbnails. Capture + persist the channel map.
+    updateChannelsFromSubs(subs);
+
     const cutoff = state.cutoff;
     const collected = [];
     let skipped = 0;
@@ -348,8 +364,14 @@ async function onRefresh() {
     await mergeAndPersist(collected);
 
     // Reload-time cleanup (b): after fetching newer videos, advance the cutoff
-    // across the contiguous handled prefix, prune, then re-render.
+    // across the contiguous handled prefix and prune.
     await reconcileCutoff();
+
+    // Durations are not in playlistItems: batch videos.list?part=contentDetails
+    // (<=50 ids/call, 1 unit each) for visible videos lacking one — this covers
+    // newly fetched videos and backfills any older ones. Then the final render.
+    showStatus(dom.status, 'Fetching video lengths…', 'progress');
+    await backfillDurations();
     recompute();
 
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
@@ -372,6 +394,49 @@ async function mergeAndPersist(incoming) {
   state.records = upsertVideos(state.records, incoming);
   await putVideos(state.records);
   recompute();
+}
+
+/**
+ * Merge the channel avatar/title map from a subscriptions fetch and persist it.
+ * Zero extra quota — the avatars ride along in subscriptions.list snippets.
+ * @param {Array<{channelId:string,channelTitle:string,avatarUrl:string}>} subs
+ */
+function updateChannelsFromSubs(subs) {
+  let changed = false;
+  for (const s of subs) {
+    if (!s.channelId) continue;
+    const prev = state.channels[s.channelId];
+    const title = s.channelTitle || (prev && prev.title) || '';
+    const avatarUrl = s.avatarUrl || (prev && prev.avatarUrl) || '';
+    if (!prev || prev.title !== title || prev.avatarUrl !== avatarUrl) {
+      state.channels[s.channelId] = { title, avatarUrl };
+      changed = true;
+    }
+  }
+  if (changed) saveChannels(state.channels);
+}
+
+/**
+ * Fill in durationSeconds for currently-visible videos that lack one (covers
+ * both newly fetched videos and backfill of older ones), via a batched
+ * videos.list. Durations are cosmetic (a thumbnail badge), so failures are
+ * swallowed — a refresh is never failed over them.
+ */
+async function backfillDurations() {
+  const missing = computeVisible(state.records, state.cutoff)
+    .filter((r) => typeof r.durationSeconds !== 'number')
+    .map((r) => r.videoId);
+  if (missing.length === 0) return;
+  try {
+    const durations = await getVideoDurations(missing);
+    if (durations.size === 0) return;
+    for (const r of state.records) {
+      if (durations.has(r.videoId)) r.durationSeconds = durations.get(r.videoId);
+    }
+    await putVideos(state.records);
+  } catch {
+    /* durations are cosmetic; never fail a refresh over them */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -539,10 +604,15 @@ function render() {
 
   // Button clicks are mouse-driven, so they don't advance focus; keyboard w/x
   // (in onGlobalKeydown) pass advanceFocus for rapid down-the-list marking.
-  renderQueue(dom.queueList, state.visible, {
-    onWatched: (id) => markVideo(id, STATE_WATCHED),
-    onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
-  });
+  renderQueue(
+    dom.queueList,
+    state.visible,
+    {
+      onWatched: (id) => markVideo(id, STATE_WATCHED),
+      onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
+    },
+    state.channels
+  );
 }
 
 /**
@@ -573,8 +643,8 @@ function hideUndoBar() {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts:  w = watched, x = not interested, j/k = move focus,
-// u = undo. Shortcuts are ignored while typing in an input.
+// Keyboard shortcuts:  w = watched, x = not interested, j = move back (older,
+// up), k = move forward (newer, down), u = undo. Ignored while typing in an input.
 // ---------------------------------------------------------------------------
 
 function onGlobalKeydown(e) {
@@ -590,12 +660,14 @@ function onGlobalKeydown(e) {
   let idx = rows.indexOf(active);
 
   if (key === 'j') {
-    e.preventDefault();
-    if (idx < rows.length - 1) rows[idx + 1].focus();
-    else if (idx === -1 && rows.length) rows[0].focus();
-  } else if (key === 'k') {
+    // j = move BACK (previous/older card, upward in the oldest->newest list).
     e.preventDefault();
     if (idx > 0) rows[idx - 1].focus();
+    else if (idx === -1 && rows.length) rows[0].focus();
+  } else if (key === 'k') {
+    // k = move FORWARD (next/newer card, downward).
+    e.preventDefault();
+    if (idx < rows.length - 1) rows[idx + 1].focus();
     else if (idx === -1 && rows.length) rows[0].focus();
   } else if (key === 'w') {
     if (idx >= 0) {

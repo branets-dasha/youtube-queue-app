@@ -6,6 +6,7 @@
 // encodeURIComponent on the id, and thumbnails are set via img.src only.
 
 import { STATE_WATCHED, STATE_NOT_INTERESTED } from './config.js';
+import { formatDuration, isShort } from './queue.js';
 
 // ---------------------------------------------------------------------------
 // Small DOM helpers
@@ -162,12 +163,59 @@ export function setCardState(card, state) {
 }
 
 /**
+ * A neutral circular placeholder avatar (first letter of the channel title),
+ * used when a channel has no avatar so card height stays uniform.
+ * @param {string} title channel title
+ * @returns {HTMLElement}
+ */
+function avatarPlaceholder(title) {
+  const letter = ((title || '').trim().charAt(0) || '?').toUpperCase();
+  return el('span', {
+    class: 'row__avatar row__avatar--placeholder',
+    'aria-hidden': 'true',
+    text: letter, // safe text
+  });
+}
+
+/**
+ * Build the channel avatar for a card, looked up by channelId in the channels
+ * map (decoupled from the video record, so it self-heals for already-stored
+ * videos once the map is populated). Falls back to a placeholder circle.
+ * img.src ONLY; alt = channel title.
+ * @param {object} rec video record
+ * @param {Record<string,{title:string,avatarUrl:string}>} channels
+ * @returns {HTMLElement}
+ */
+function buildAvatar(rec, channels) {
+  const ch = channels && rec.channelId ? channels[rec.channelId] : null;
+  const title = rec.channelTitle || (ch && ch.title) || '';
+  const avatarUrl = ch && ch.avatarUrl ? ch.avatarUrl : '';
+  if (!avatarUrl) return avatarPlaceholder(title);
+
+  const img = el('img', {
+    class: 'row__avatar',
+    alt: title, // channel title
+    loading: 'lazy',
+    width: '24',
+    height: '24',
+  });
+  // If the avatar fails to load, swap in the placeholder so height stays uniform.
+  img.onerror = () => {
+    img.onerror = null;
+    img.replaceWith(avatarPlaceholder(title));
+  };
+  img.src = avatarUrl; // img.src only
+  return img;
+}
+
+/**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
  * @param {object} handlers { onWatched(id), onNotInterested(id) }
+ * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  * @returns {HTMLLIElement}
  */
-export function buildQueueRow(rec, handlers) {
+export function buildQueueRow(rec, handlers, channels = {}) {
   const watchUrl = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
 
   const thumb = el('img', {
@@ -196,6 +244,19 @@ export function buildQueueRow(rec, handlers) {
   const primarySrc = hiResSrc || fallbackSrc;
   if (primarySrc) thumb.src = primarySrc; // img.src only
 
+  // Absolute-positioned thumbnail overlays — no layout impact, so card height is
+  // unchanged: video length bottom-right, and a SHORTS tag for likely Shorts.
+  const overlays = [];
+  const durSecs = rec.durationSeconds;
+  if (typeof durSecs === 'number' && durSecs > 0) {
+    overlays.push(
+      el('span', { class: 'row__duration', 'aria-hidden': 'true', text: formatDuration(durSecs) })
+    );
+  }
+  if (isShort(durSecs)) {
+    overlays.push(el('span', { class: 'row__shorts', 'aria-hidden': 'true', text: 'SHORTS' }));
+  }
+
   const thumbLink = el(
     'a',
     {
@@ -206,7 +267,7 @@ export function buildQueueRow(rec, handlers) {
       tabindex: '-1',
       'aria-hidden': 'true',
     },
-    [thumb]
+    [thumb, ...overlays]
   );
 
   const titleLink = el('a', {
@@ -217,6 +278,7 @@ export function buildQueueRow(rec, handlers) {
     text: rec.title, // safe
   });
 
+  const avatar = buildAvatar(rec, channels);
   const channel = el('span', { class: 'row__channel', text: rec.channelTitle || '' });
 
   const timeAbs = el('time', {
@@ -233,6 +295,7 @@ export function buildQueueRow(rec, handlers) {
   const meta = el('div', { class: 'row__meta' }, [
     titleLink,
     el('div', { class: 'row__sub' }, [
+      avatar,
       channel,
       el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
       timeAbs,
@@ -283,11 +346,12 @@ export function buildQueueRow(rec, handlers) {
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
  * @param {object} handlers { onWatched, onNotInterested }
+ * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  */
-export function renderQueue(listEl, queue, handlers) {
+export function renderQueue(listEl, queue, handlers, channels = {}) {
   clear(listEl);
   for (const rec of queue) {
-    listEl.append(buildQueueRow(rec, handlers));
+    listEl.append(buildQueueRow(rec, handlers, channels));
   }
 }
 

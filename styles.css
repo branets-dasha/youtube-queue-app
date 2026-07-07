@@ -352,10 +352,10 @@ main {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden; /* clips the thumbnail to the card's rounded top corners */
-  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
 .row:hover {
-  transform: translateY(-2px);
+  /* Non-layout cue only — NO transform, so the card and its buttons never move. */
   box-shadow: var(--shadow-hover);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
@@ -366,7 +366,9 @@ main {
 
 .row__thumb-link {
   display: block;
+  position: relative; /* anchor for the absolute duration / SHORTS overlays */
   line-height: 0;
+  transition: opacity 0.12s ease, filter 0.12s ease;
 }
 .row__thumb {
   /* Uniform, undistorted 16:9 regardless of the source image's real aspect. */
@@ -377,10 +379,41 @@ main {
   background: var(--surface-2);
 }
 
+/* Thumbnail overlays are ABSOLUTE, so they never change card height. */
+.row__duration {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.row__shorts {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
 .row__meta {
   min-width: 0;
   flex: 1 1 auto; /* grow so the actions footer sits at the bottom of the card */
   padding: 12px 14px 6px;
+  transition: opacity 0.12s ease;
 }
 .row__title {
   font-weight: 600;
@@ -410,6 +443,28 @@ main {
   opacity: 0.6;
 }
 
+/* Channel avatar (always present — image or letter placeholder — so the sub-row,
+   and therefore the card, keeps a uniform height in every state). */
+.row__avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-2);
+  flex: 0 0 auto; /* never grow/shrink in the flex sub-row */
+}
+.row__avatar--placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 .row__actions {
   display: flex;
   flex-direction: row;
@@ -427,14 +482,12 @@ main {
    class is set (no lag), regardless of whether a button inside it still holds
    focus or the pointer. opacity/filter change no layout, so card height is
    identical in every state. */
-.row--handled .row__thumb {
+.row--handled .row__thumb-link {
   opacity: 0.5;
   filter: grayscale(0.7);
-  transition: opacity 0.12s ease, filter 0.12s ease;
 }
 .row--handled .row__meta {
   opacity: 0.55;
-  transition: opacity 0.12s ease;
 }
 
 /* Taken-action indicator: a solid state-coloured button background driven by the
@@ -493,8 +546,5 @@ main {
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
-  }
-  .row:hover {
-    transform: none; /* no lift when the user prefers reduced motion */
   }
 }

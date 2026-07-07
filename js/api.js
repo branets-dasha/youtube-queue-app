@@ -4,12 +4,13 @@
 // https://www.googleapis.com/youtube/v3 with an Authorization: Bearer header
 // carrying the in-memory OAuth access token. No API key is used.
 //
-// Cost awareness: subscriptions.list and playlistItems.list each cost 1 quota
-// unit per page. search.list is NEVER used.
+// Cost awareness: subscriptions.list, playlistItems.list and videos.list each
+// cost 1 quota unit per call (videos.list batches up to 50 ids/call, so fetching
+// durations stays cheap). search.list is NEVER used.
 
 import { API_BASE, PAGE_SIZE } from './config.js';
 import { ensureToken, getToken, requestToken } from './auth.js';
-import { uploadsPlaylistId, compareIso } from './queue.js';
+import { uploadsPlaylistId, compareIso, parseIsoDuration } from './queue.js';
 
 /**
  * Error thrown for API-level failures, carrying a machine-usable `kind`:
@@ -126,9 +127,10 @@ async function apiGet(path, params, _retried = false) {
 
 /**
  * Fetch ALL of the signed-in user's subscriptions.
- * Returns an array of { channelId, channelTitle }.
+ * Returns an array of { channelId, channelTitle, avatarUrl }. The avatar rides
+ * along in snippet.thumbnails at NO extra quota cost.
  * @param {(fetched:number)=>void} [onProgress] called with running count
- * @returns {Promise<Array<{channelId:string, channelTitle:string}>>}
+ * @returns {Promise<Array<{channelId:string, channelTitle:string, avatarUrl:string}>>}
  */
 export async function getSubscriptions(onProgress) {
   const results = [];
@@ -151,6 +153,7 @@ export async function getSubscriptions(onProgress) {
         results.push({
           channelId,
           channelTitle: snip.title || '',
+          avatarUrl: channelAvatar(snip.thumbnails),
         });
       }
     }
@@ -271,4 +274,46 @@ function bestThumbnail(thumbnails) {
     if (thumbnails[key] && thumbnails[key].url) return thumbnails[key].url;
   }
   return '';
+}
+
+/**
+ * Pick a channel avatar URL from a subscriptions snippet.thumbnails object.
+ * Prefers medium (240px) then default (88px) then high — ample for a small
+ * circular avatar. Returns '' if none present.
+ * @param {object|undefined} thumbnails
+ * @returns {string}
+ */
+function channelAvatar(thumbnails) {
+  if (!thumbnails) return '';
+  for (const key of ['medium', 'default', 'high']) {
+    if (thumbnails[key] && thumbnails[key].url) return thumbnails[key].url;
+  }
+  for (const key of Object.keys(thumbnails)) {
+    if (thumbnails[key] && thumbnails[key].url) return thumbnails[key].url;
+  }
+  return '';
+}
+
+/**
+ * Batch-fetch video durations via videos.list?part=contentDetails, UP TO 50 ids
+ * per call (1 quota unit each). Returns a Map videoId -> durationSeconds. IDs the
+ * API omits (deleted/private) are simply absent from the map.
+ * @param {Array<string>} videoIds
+ * @returns {Promise<Map<string, number>>}
+ */
+export async function getVideoDurations(videoIds) {
+  const out = new Map();
+  const ids = Array.from(new Set((videoIds || []).filter(Boolean)));
+  for (let i = 0; i < ids.length; i += 50) {
+    const batch = ids.slice(i, i + 50);
+    const data = await apiGet('videos', {
+      part: 'contentDetails',
+      id: batch.join(','),
+    });
+    for (const item of data.items || []) {
+      const iso = item.contentDetails && item.contentDetails.duration;
+      if (item.id && iso) out.set(item.id, parseIsoDuration(iso));
+    }
+  }
+  return out;
 }

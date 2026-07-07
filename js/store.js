@@ -13,6 +13,7 @@ import {
   LS_CLIENT_ID,
   LS_START_CUTOFF,
   LS_VIDEOS_FALLBACK,
+  LS_CHANNELS,
   IDB_NAME,
   IDB_VERSION,
   IDB_STORE_VIDEOS,
@@ -56,6 +57,40 @@ export function setStartCutoff(iso) {
     localStorage.removeItem(LS_START_CUTOFF);
   } else {
     localStorage.setItem(LS_START_CUTOFF, iso);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// localStorage: channel map (channelId -> { title, avatarUrl }) for avatars
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the persisted channel map, or {} if absent/unparseable.
+ * @returns {Record<string,{title:string,avatarUrl:string}>}
+ */
+export function loadChannels() {
+  try {
+    const raw = localStorage.getItem(LS_CHANNELS);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist the channel map. Best-effort — avatars are cosmetic, so quota /
+ * serialization failures are ignored.
+ * @param {Record<string,{title:string,avatarUrl:string}>} map
+ */
+export function saveChannels(map) {
+  try {
+    localStorage.setItem(LS_CHANNELS, JSON.stringify(map || {}));
+  } catch {
+    /* ignore */
   }
 }
 

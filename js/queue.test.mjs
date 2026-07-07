@@ -10,6 +10,9 @@ import {
   computeQueue,
   computeVisible,
   advanceCutoff,
+  parseIsoDuration,
+  formatDuration,
+  isShort,
 } from './queue.js';
 
 let passed = 0;
@@ -124,6 +127,39 @@ test('advanceCutoff never prunes a new video that ties a handled timestamp', () 
   const { newCutoff, prunedIds } = advanceCutoff(recs, '2026-02-01T00:00:00Z');
   assert.ok(!prunedIds.includes('n'), 'the still-new video must survive');
   assert.equal(newCutoff, '2026-02-01T00:00:00Z'); // cannot advance onto the tie
+});
+
+// --- duration helpers ---
+
+test('parseIsoDuration parses H/M/S forms', () => {
+  assert.equal(parseIsoDuration('PT1H2M3S'), 3723);
+  assert.equal(parseIsoDuration('PT4M13S'), 253);
+  assert.equal(parseIsoDuration('PT45S'), 45);
+  assert.equal(parseIsoDuration('PT1H'), 3600);
+});
+
+test('parseIsoDuration returns 0 for zero/missing/invalid', () => {
+  assert.equal(parseIsoDuration('PT0S'), 0);
+  assert.equal(parseIsoDuration('P0D'), 0);
+  assert.equal(parseIsoDuration(''), 0);
+  assert.equal(parseIsoDuration('garbage'), 0);
+  assert.equal(parseIsoDuration(undefined), 0);
+});
+
+test('formatDuration formats M:SS and H:MM:SS', () => {
+  assert.equal(formatDuration(59), '0:59'); // 59s
+  assert.equal(formatDuration(60), '1:00'); // 60s
+  assert.equal(formatDuration(3723), '1:02:03'); // 1h 2m 3s
+  assert.equal(formatDuration(0), '0:00');
+});
+
+test('isShort: positive and <=60s is short; 61s / 0 / unknown are not', () => {
+  assert.equal(isShort(60), true); // boundary: 60 is short
+  assert.equal(isShort(1), true);
+  assert.equal(isShort(61), false); // boundary: 61 is not
+  assert.equal(isShort(0), false); // zero/unknown length
+  assert.equal(isShort(undefined), false);
+  assert.equal(isShort(-5), false);
 });
 
 console.log(`\n${passed} passed`);
