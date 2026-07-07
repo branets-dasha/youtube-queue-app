@@ -269,6 +269,31 @@ export function daysAgoIso(days, nowMs) {
   return new Date(base - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
+/**
+ * Lower bound for an INCREMENTAL refresh: only pull uploads newer than what we
+ * already have. Returns `floor` when there are no stored records (so the first
+ * run behaves like a full refresh). Otherwise takes the NEWEST stored
+ * publishedAt, subtracts `bufferMs` (a lag safety margin), and returns the LATER
+ * of that and `floor` — the result is ALWAYS >= floor. Pure.
+ * @param {Array<object>} records stored video records
+ * @param {string|null|undefined} floor the deletion/fetch floor (lower bound)
+ * @param {number} bufferMs safety buffer subtracted from the newest timestamp
+ * @returns {string|null} ISO lower bound (>= floor), or floor when no records
+ */
+export function incrementalSince(records, floor, bufferMs) {
+  let newestMs = null;
+  for (const rec of records || []) {
+    const t = rec && rec.publishedAt ? Date.parse(rec.publishedAt) : NaN;
+    if (!Number.isNaN(t) && (newestMs === null || t > newestMs)) newestMs = t;
+  }
+  if (newestMs === null) return floor; // no dated records: full refresh from floor
+
+  const buffered = new Date(newestMs - (Number(bufferMs) || 0)).toISOString();
+  // Clamp to the floor: never fetch below it.
+  if (floor == null) return buffered;
+  return compareIso(buffered, floor) >= 0 ? buffered : floor;
+}
+
 // ---------------------------------------------------------------------------
 // Duration helpers (video length badge + Shorts heuristic)
 // ---------------------------------------------------------------------------

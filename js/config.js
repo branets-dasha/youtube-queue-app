@@ -55,6 +55,12 @@ export const QUEUE_DISPLAY_LIMIT = 100;
 // expiring, so an in-flight batch of requests does not fail mid-refresh.
 export const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 
+// Safety buffer for the INCREMENTAL refresh ("Refresh new"): its per-channel
+// lower bound is (newest stored publishedAt − this), clamped to the floor. The
+// buffer covers YouTube's uploads-playlist lag so a video that appeared slightly
+// out of order isn't missed. Tunable. Default: 6 hours.
+export const INCREMENTAL_REFRESH_BUFFER_MS = 6 * 60 * 60 * 1000;
+
 // Valid video states.
 export const STATE_NEW = 'new';
 export const STATE_WATCHED = 'watched';

@@ -10,6 +10,7 @@ import {
   STATE_NOT_INTERESTED,
   QUEUE_DISPLAY_LIMIT,
   DEFAULT_PLAYBACK_RATE,
+  INCREMENTAL_REFRESH_BUFFER_MS,
 } from './config.js';
 import {
   getClientId,
@@ -56,6 +57,7 @@ import {
   resumeStart,
   effectiveRate,
   daysAgoIso,
+  incrementalSince,
 } from './queue.js';
 import {
   el,
@@ -188,6 +190,7 @@ function cacheDom() {
   dom.signoutBtn = byId('signout-btn');
   dom.authStatus = byId('auth-status');
   dom.refreshBtn = byId('refresh-btn');
+  dom.refreshNewBtn = byId('refresh-new-btn');
   dom.cleanupBtn = byId('cleanup-btn');
   dom.hideMarkedBtn = byId('hide-marked-btn');
   dom.defaultRateBtn = byId('default-rate-btn');
@@ -224,6 +227,7 @@ function bindEvents() {
   dom.signinBtn.addEventListener('click', onSignIn);
   dom.signoutBtn.addEventListener('click', onSignOut);
   dom.refreshBtn.addEventListener('click', onRefresh);
+  if (dom.refreshNewBtn) dom.refreshNewBtn.addEventListener('click', onRefreshNew);
   dom.cleanupBtn.addEventListener('click', onCleanup);
   if (dom.hideMarkedBtn) dom.hideMarkedBtn.addEventListener('click', onToggleHideMarked);
   if (dom.defaultRateBtn) dom.defaultRateBtn.addEventListener('click', onCycleDefaultRate);
@@ -375,6 +379,7 @@ function updateAuthUi() {
   setVisible(dom.signinBtn, !signed);
   setVisible(dom.signoutBtn, signed);
   dom.refreshBtn.disabled = !signed || state.refreshing;
+  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = !signed || state.refreshing;
   updateCleanupUi();
   updateLikeButton(); // re-evaluate: signing out disables it (visual liked stays)
 }
@@ -405,13 +410,43 @@ async function onSignOut() {
 // Refresh (fetch newer)
 // ---------------------------------------------------------------------------
 
+/**
+ * "Refresh all" (full): the per-channel lower bound is the FLOOR, so every
+ * channel is paged down to the floor (the full back-catalog since the cutoff).
+ */
 async function onRefresh() {
+  return runRefresh(state.floor);
+}
+
+/**
+ * "Refresh new" (incremental): the per-channel lower bound is the newest stored
+ * publishedAt minus a lag buffer (clamped to the floor), so each channel is
+ * usually paged just one page — only genuinely newer uploads are pulled. On the
+ * first-ever run (no records) the bound is the floor, i.e. a full refresh.
+ * KNOWN LIMITATION: back-catalog of channels subscribed since the last full
+ * refresh (older than the bound) is NOT pulled — use "Refresh all" for that.
+ */
+async function onRefreshNew() {
+  const bound = incrementalSince(state.records, state.floor, INCREMENTAL_REFRESH_BUFFER_MS);
+  return runRefresh(bound);
+}
+
+/**
+ * Shared refresh pipeline. `bound` is the per-channel lower bound passed to the
+ * uploads fetch — the ONLY thing that differs between "Refresh all" (floor) and
+ * "Refresh new" (incremental). Everything else — subscriptions + avatars, the
+ * per-channel uploads paging, details backfill, upsert, cleanup, render, the
+ * progress toast and the summary — is identical.
+ * @param {string|null} bound ISO lower bound for the per-channel uploads fetch
+ */
+async function runRefresh(bound) {
   if (state.refreshing) return;
   if (!isSignedIn()) {
     return onSignIn();
   }
   state.refreshing = true;
   dom.refreshBtn.disabled = true;
+  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = true;
   hideProgress();
 
   try {
@@ -432,8 +467,8 @@ async function onRefresh() {
     // channel's avatar in snippet.thumbnails. Capture + persist the channel map.
     updateChannelsFromSubs(subs);
 
-    // The fetch is bounded by the FLOOR (everything <= floor is gone for good).
-    const floor = state.floor;
+    // Per-channel uploads are paged only until they reach `bound` (floor for a
+    // full refresh, newest-minus-buffer for an incremental one).
     const collected = [];
     let skipped = 0;
 
@@ -444,7 +479,7 @@ async function onRefresh() {
       try {
         const vids = await getChannelVideosSince(
           sub.channelId,
-          floor,
+          bound,
           sub.channelTitle
         );
         for (const v of vids) collected.push(v);

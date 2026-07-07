@@ -122,13 +122,22 @@
           </div>
           <div class="toolbar__actions">
             <button
+              id="refresh-new-btn"
+              class="btn"
+              type="button"
+              aria-label="Fetch only videos newer than what you already have"
+              disabled
+            >
+              Fetch new
+            </button>
+            <button
               id="refresh-btn"
               class="btn"
               type="button"
-              aria-label="Fetch newer videos"
+              aria-label="Fetch all videos down to the cutoff"
               disabled
             >
-              Refresh (fetch newer)
+              Refresh all
             </button>
             <button id="change-cutoff-btn" class="btn btn--ghost" type="button">
               Change cutoff

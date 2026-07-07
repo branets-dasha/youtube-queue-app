@@ -19,6 +19,7 @@ import {
   SHORTS_MAX_SECONDS,
   resumeStart,
   effectiveRate,
+  incrementalSince,
 } from './queue.js';
 
 let passed = 0;
@@ -268,6 +269,44 @@ test('effectiveRate: retains currentRate when neither preferred nor default is v
   assert.equal(effectiveRate(null, undefined, 2), 2);
   assert.equal(effectiveRate(3, 0, 1), 1); // both invalid presets -> current
   assert.equal(effectiveRate('2', '1.5', 2), 2); // wrong types -> current
+});
+
+// --- incrementalSince: cheap lower bound for "Refresh new" ---
+
+const HOUR = 60 * 60 * 1000;
+
+test('incrementalSince returns the floor when there are no dated records', () => {
+  const floor = '2026-01-01T00:00:00.000Z';
+  assert.equal(incrementalSince([], floor, 6 * HOUR), floor);
+  assert.equal(incrementalSince(undefined, floor, 6 * HOUR), floor);
+  // Records present but none carry a parseable publishedAt -> still the floor.
+  assert.equal(incrementalSince([{ videoId: 'x' }], floor, 6 * HOUR), floor);
+});
+
+test('incrementalSince uses the NEWEST publishedAt minus the buffer', () => {
+  const floor = '2026-01-01T00:00:00.000Z';
+  const recs = [
+    { videoId: 'a', publishedAt: '2026-06-10T00:00:00.000Z' },
+    { videoId: 'b', publishedAt: '2026-06-12T12:00:00.000Z' }, // newest
+    { videoId: 'c', publishedAt: '2026-06-11T00:00:00.000Z' },
+  ];
+  // newest (Jun 12 12:00) minus 6h = Jun 12 06:00.
+  assert.equal(incrementalSince(recs, floor, 6 * HOUR), '2026-06-12T06:00:00.000Z');
+});
+
+test('incrementalSince clamps to the floor when the buffer would dip below it', () => {
+  const floor = '2026-06-12T09:00:00.000Z';
+  const recs = [{ videoId: 'a', publishedAt: '2026-06-12T12:00:00.000Z' }];
+  // newest minus 6h = 06:00, which is < floor (09:00) -> clamp to floor.
+  assert.equal(incrementalSince(recs, floor, 6 * HOUR), floor);
+});
+
+test('incrementalSince is always >= floor', () => {
+  const floor = '2026-06-12T00:00:00.000Z';
+  const recs = [{ videoId: 'a', publishedAt: '2026-06-12T03:00:00.000Z' }];
+  const bound = incrementalSince(recs, floor, 6 * HOUR); // 3h - 6h would be < floor
+  assert.ok(compareIso(bound, floor) >= 0);
+  assert.equal(bound, floor);
 });
 
 console.log(`\n${passed} passed`);
