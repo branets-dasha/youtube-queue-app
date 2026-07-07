@@ -388,15 +388,3 @@ export async function rateVideo(videoId, rating) {
   if (resp.ok) return; // 204 No Content
   await throwApiError(resp);
 }
-
-/**
- * Get the signed-in user's rating for a video: GET videos/getRating?id=<id>.
- * Returns 'like' | 'dislike' | 'none' | 'unspecified'. Quota 1 unit.
- * @param {string} videoId
- * @returns {Promise<string>}
- */
-export async function getVideoRating(videoId) {
-  const data = await apiGet('videos/getRating', { id: videoId });
-  const item = (data.items || [])[0];
-  return item && item.rating ? item.rating : 'none';
-}

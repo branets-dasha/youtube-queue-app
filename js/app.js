@@ -37,7 +37,6 @@ import {
   getChannelVideosSince,
   getVideoDetails,
   rateVideo,
-  getVideoRating,
   ApiError,
 } from './api.js';
 import {
@@ -86,7 +85,6 @@ const state = {
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
   rate: 1, // player playback rate (1 / 1.5 / 2)
-  likeRating: null, // current video's like state ('like' | 'none' | null)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
 };
 
@@ -331,6 +329,7 @@ function updateAuthUi() {
   setVisible(dom.signoutBtn, signed);
   dom.refreshBtn.disabled = !signed || state.refreshing;
   updateCleanupUi();
+  updateLikeButton(); // re-evaluate: signing out disables it (visual liked stays)
 }
 
 async function onSignIn() {
@@ -341,8 +340,8 @@ async function onSignIn() {
     await requestToken({ interactive: true });
     hideProgress();
     updateAuthUi();
-    // Kick off an initial refresh automatically on first sign-in.
-    onRefresh();
+    // Do NOT auto-fetch here: signing in only updates auth/UI state. Videos load
+    // only when the user explicitly clicks Refresh (onRefresh).
   } catch (err) {
     handleError(err);
     updateAuthUi();
@@ -719,7 +718,7 @@ function playVideo(videoId) {
   playerLoad(videoId, start);
   setPlayerNowPlaying(rec);
   markPlayingCard(videoId);
-  syncLikeButton(videoId);
+  updateLikeButton(); // from the record's local `liked` flag (no fetch)
 }
 
 function openOnYouTube(videoId) {
@@ -767,8 +766,7 @@ function showPlayerEmpty(caughtUp) {
     setVisible(dom.playerEmpty, true);
   }
   if (dom.skipBtn) dom.skipBtn.disabled = true;
-  state.likeRating = null;
-  updateLikeButton('none'); // state.playing is null -> disabled
+  updateLikeButton(); // state.playing is null -> disabled, not liked
   markPlayingCard(null);
 }
 
@@ -833,26 +831,20 @@ function flushProgress() {
 
 // --- Like button (player only) ---
 
-/** Fetch the current video's rating (1 quota unit) and reflect it on the button. */
-async function syncLikeButton(videoId) {
-  state.likeRating = 'none';
-  updateLikeButton('none');
-  try {
-    const rating = await getVideoRating(videoId);
-    if (state.playing !== videoId) return; // switched away while fetching
-    state.likeRating = rating === 'like' ? 'like' : 'none';
-    updateLikeButton(state.likeRating);
-  } catch {
-    // getRating failed (e.g. write scope not granted yet). Leave neutral; a Like
-    // click will do the write + trigger re-consent.
-    if (state.playing === videoId) updateLikeButton('none');
-  }
+/** The record currently loaded in the player, or null. */
+function playingRecord() {
+  return state.playing ? state.records.find((r) => r.videoId === state.playing) : null;
 }
 
-/** Reflect like state on the button: active/filled + aria-pressed + tooltip. */
-function updateLikeButton(rating) {
+/**
+ * Reflect the Like button from the CURRENT record's LOCAL `liked` flag (no API
+ * fetch). The VISUAL filled/active state is informational and shown even when
+ * signed out; the button is ENABLED only when signed in AND a video is playing.
+ */
+function updateLikeButton() {
   if (!dom.likeBtn) return;
-  const liked = rating === 'like';
+  const rec = playingRecord();
+  const liked = !!(rec && rec.liked);
   dom.likeBtn.classList.toggle('is-active', liked);
   dom.likeBtn.setAttribute('aria-pressed', String(liked));
   dom.likeBtn.title = liked ? 'Remove like' : 'Like';
@@ -860,30 +852,37 @@ function updateLikeButton(rating) {
     'aria-label',
     liked ? 'Remove like from this video' : 'Like this video'
   );
-  dom.likeBtn.disabled = !state.playing;
+  // Enabled only when SIGNED IN and a video is playing (visual state is separate).
+  dom.likeBtn.disabled = !state.playing || !isSignedIn();
 }
 
 /**
- * Toggle the current video's like: like -> rateVideo(id,'like'), already liked ->
- * rateVideo(id,'none'). Optimistic; reverts on error. A scope error (401/403,
- * write scope not granted) triggers a fresh interactive consent, then retries.
+ * Toggle the current video's like: rateVideo(id,'like'|'none') writes to YouTube;
+ * on success the local `liked` flag is set + PERSISTED (so it survives reload
+ * with no fetch/quota). Optimistic; reverts the flag on error. A scope error
+ * (401/403) triggers a fresh interactive consent, then retries once.
  */
 async function onLike() {
   const videoId = state.playing;
   if (!videoId || !dom.likeBtn || dom.likeBtn.disabled) return;
-  const wasLiked = state.likeRating === 'like';
-  const nextRating = wasLiked ? 'none' : 'like';
+  const rec = state.records.find((r) => r.videoId === videoId);
+  if (!rec) return;
+
+  const wasLiked = !!rec.liked;
+  const nextLiked = !wasLiked;
+  const nextRating = nextLiked ? 'like' : 'none';
   const revert = () => {
-    state.likeRating = wasLiked ? 'like' : 'none';
-    updateLikeButton(state.likeRating);
+    rec.liked = wasLiked;
+    updateLikeButton();
   };
 
-  // Optimistic.
-  state.likeRating = nextRating === 'like' ? 'like' : 'none';
-  updateLikeButton(state.likeRating);
+  // Optimistic (visual) update.
+  rec.liked = nextLiked;
+  updateLikeButton();
 
   try {
-    await rateVideo(videoId, nextRating); // ~50 quota units
+    await rateVideo(videoId, nextRating); // ~50 quota units; writes to YouTube
+    putVideo(rec).catch(() => {}); // persist the local liked flag on success
   } catch (err) {
     if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
       // Write scope not granted yet: re-consent for the new scope, then retry once.
@@ -893,7 +892,8 @@ async function onLike() {
         initAuth(state.clientId);
         await requestToken({ interactive: true });
         await rateVideo(videoId, nextRating);
-        return; // success; optimistic state stands
+        putVideo(rec).catch(() => {}); // persist on success
+        return;
       } catch (e2) {
         revert();
         handleError(e2);

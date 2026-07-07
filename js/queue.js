@@ -16,6 +16,7 @@
 //     durationSeconds: number, // optional; video length, backfilled via videos.list
 //     embeddable:   boolean,   // optional; can be played in the on-page player
 //     positionSeconds: number, // optional; last watch position, for resume
+//     liked:        boolean,   // optional; locally-tracked YouTube like state
 //     state:        'new' | 'watched' | 'not_interested'
 //   }
 
