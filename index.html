@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>YouTube Queue</title>
+    <link rel="stylesheet" href="styles.css" />
+    <!-- Google Identity Services (OAuth token model). Async; auth.js waits for it. -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- App logic as ES modules. -->
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#queue-list">Skip to queue</a>
+
+    <header class="topbar">
+      <h1 class="topbar__title">YouTube Queue</h1>
+      <p class="topbar__tagline">Burn down your subscription feed, oldest first.</p>
+    </header>
+
+    <main>
+      <!-- ===== First-run: Client ID setup ===== -->
+      <section id="setup-panel" class="panel" hidden aria-labelledby="setup-heading">
+        <h2 id="setup-heading">One-time setup: OAuth Client ID</h2>
+        <p>
+          This app talks to YouTube directly from your browser using your own
+          Google OAuth 2.0 <strong>Client ID</strong>. Nothing is sent to any
+          server we control, and no client secret or API key is needed.
+        </p>
+        <ol class="steps">
+          <li>
+            Open the
+            <a
+              href="https://console.cloud.google.com/apis/credentials"
+              target="_blank"
+              rel="noopener"
+              >Google Cloud Console &rarr; Credentials</a
+            >
+            and create (or select) a project.
+          </li>
+          <li>
+            Enable the <strong>YouTube Data API v3</strong> under
+            <em>APIs &amp; Services &rarr; Library</em>.
+          </li>
+          <li>
+            Create credentials &rarr; <strong>OAuth client ID</strong> &rarr;
+            application type <strong>Web application</strong>.
+          </li>
+          <li>
+            Under <strong>Authorized JavaScript origins</strong>, add this exact
+            origin:
+            <code id="origin-hint" class="origin">http://localhost:5173</code>
+          </li>
+          <li>
+            Add yourself as a <strong>Test user</strong> on the OAuth consent
+            screen (or publish it), then copy the generated Client ID and paste
+            it below.
+          </li>
+        </ol>
+
+        <label class="field">
+          <span class="field__label">OAuth 2.0 Client ID</span>
+          <input
+            id="client-id-input"
+            class="field__input"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="1234567890-abcdefg.apps.googleusercontent.com"
+          />
+        </label>
+        <div id="setup-error" class="status" role="alert" hidden></div>
+        <div class="panel__actions">
+          <button id="save-client-id-btn" class="btn btn--primary" type="button">
+            Save Client ID
+          </button>
+        </div>
+      </section>
+
+      <!-- ===== First-run: start cutoff ===== -->
+      <section id="cutoff-panel" class="panel" hidden aria-labelledby="cutoff-heading">
+        <h2 id="cutoff-heading">Pick your starting point</h2>
+        <p>
+          Videos published <strong>at or before</strong> this moment are treated
+          as already handled and will not appear in your queue. A good default
+          is one week ago.
+        </p>
+        <label class="field">
+          <span class="field__label">Start cutoff</span>
+          <input id="cutoff-input" class="field__input" type="datetime-local" />
+        </label>
+        <div class="panel__actions">
+          <button id="save-cutoff-btn" class="btn btn--primary" type="button">
+            Save &amp; continue
+          </button>
+        </div>
+      </section>
+
+      <!-- ===== Main app ===== -->
+      <section id="app-main" class="app" hidden>
+        <div class="toolbar">
+          <div class="toolbar__auth">
+            <span id="auth-status" class="auth-status" aria-live="polite"
+              >Not signed in</span
+            >
+            <button id="signin-btn" class="btn btn--primary" type="button">
+              Sign in
+            </button>
+            <button id="signout-btn" class="btn" type="button" hidden>
+              Sign out
+            </button>
+          </div>
+          <div class="toolbar__actions">
+            <button
+              id="refresh-btn"
+              class="btn"
+              type="button"
+              aria-label="Fetch newer videos"
+              disabled
+            >
+              Refresh (fetch newer)
+            </button>
+            <button id="change-cutoff-btn" class="btn btn--ghost" type="button">
+              Change cutoff
+            </button>
+            <button id="change-client-btn" class="btn btn--ghost" type="button">
+              Change Client ID
+            </button>
+          </div>
+        </div>
+
+        <dl class="stats" aria-label="Queue statistics">
+          <div class="stats__item">
+            <dt>Queued</dt>
+            <dd id="queued-count">0</dd>
+          </div>
+          <div class="stats__item">
+            <dt>Handled this session</dt>
+            <dd id="handled-count">0</dd>
+          </div>
+          <div class="stats__item">
+            <dt>Cutoff</dt>
+            <dd><time id="cutoff-display">not set</time></dd>
+          </div>
+        </dl>
+
+        <div id="status" class="status" hidden></div>
+
+        <div id="undo-bar" class="undo-bar" hidden>
+          <span>Marked.</span>
+          <button id="undo-btn" class="btn btn--ghost" type="button">
+            Undo (u)
+          </button>
+        </div>
+
+        <p class="shortcuts" aria-hidden="false">
+          Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move &middot; <kbd>w</kbd> watched
+          &middot; <kbd>x</kbd> not interested &middot; <kbd>u</kbd> undo
+        </p>
+
+        <ul id="queue-list" class="queue" role="list" aria-label="Video queue"></ul>
+
+        <div id="empty-state" class="empty" hidden>
+          <p class="empty__title">You're all caught up</p>
+          <p class="empty__sub">
+            Nothing newer than your cutoff. Hit <strong>Refresh</strong> to check
+            for new uploads.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Runs entirely in your browser. Access token stays in memory; only your
+        Client ID and cutoff are saved locally.
+      </p>
+    </footer>
+  </body>
+</html>
