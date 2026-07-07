@@ -323,3 +323,80 @@ export async function getVideoDetails(videoIds) {
   }
   return out;
 }
+
+/**
+ * Classify a non-2xx response and throw an ApiError (no token retry). Shared by
+ * the rating write call.
+ * @param {Response} resp
+ */
+async function throwApiError(resp) {
+  let body = null;
+  try {
+    body = await resp.json();
+  } catch {
+    body = null;
+  }
+  const reason =
+    body && body.error && body.error.errors && body.error.errors[0]
+      ? body.error.errors[0].reason
+      : null;
+  const apiMessage =
+    (body && body.error && body.error.message) || resp.statusText || 'Error';
+
+  if (resp.status === 401) {
+    throw new ApiError(
+      'Your session expired or is missing a required permission.',
+      'auth',
+      401
+    );
+  }
+  if (resp.status === 403) {
+    if (reason === 'quotaExceeded' || reason === 'rateLimitExceeded' || reason === 'dailyLimitExceeded') {
+      throw new ApiError(
+        'YouTube daily quota reached. Try again after the quota resets (midnight Pacific time).',
+        'quota',
+        403
+      );
+    }
+    throw new ApiError(apiMessage, 'forbidden', 403);
+  }
+  if (resp.status === 404) throw new ApiError(apiMessage, 'notfound', 404);
+  throw new ApiError(apiMessage, 'http', resp.status);
+}
+
+/**
+ * Rate a video: POST videos/rate?id=<id>&rating=<like|none> (no body; 204 on
+ * success). Quota ~50 units. Throws ApiError on failure — a 401/403 means the
+ * write scope was not granted, so the caller should re-consent.
+ * @param {string} videoId
+ * @param {'like'|'none'} rating
+ * @returns {Promise<void>}
+ */
+export async function rateVideo(videoId, rating) {
+  let token = getToken();
+  if (!token) token = await ensureToken();
+  const url = buildUrl('videos/rate', { id: videoId, rating });
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+  } catch (netErr) {
+    throw new ApiError(`Network error contacting YouTube: ${netErr.message}`, 'network', 0);
+  }
+  if (resp.ok) return; // 204 No Content
+  await throwApiError(resp);
+}
+
+/**
+ * Get the signed-in user's rating for a video: GET videos/getRating?id=<id>.
+ * Returns 'like' | 'dislike' | 'none' | 'unspecified'. Quota 1 unit.
+ * @param {string} videoId
+ * @returns {Promise<string>}
+ */
+export async function getVideoRating(videoId) {
+  const data = await apiGet('videos/getRating', { id: videoId });
+  const item = (data.items || [])[0];
+  return item && item.rating ? item.rating : 'none';
+}

@@ -11,8 +11,10 @@ let player = null; // YT.Player instance (once created)
 let ready = false; // true once the player's onReady has fired
 let currentVideoId = null; // id of the video currently loaded
 let currentRate = 1; // playback rate, re-applied on each new video
-let pending = null; // a videoId requested before the player was ready
-let handlers = {}; // { onEnded(videoId), onReady() }
+let pending = null; // { videoId, startSeconds } requested before the player was ready
+let handlers = {}; // { onEnded(videoId), onReady(), onProgress(videoId, seconds) }
+let progressTimer = null; // interval polling getCurrentTime() while playing
+let justEnded = false; // set on ENDED so switching away won't re-capture end-time
 
 function loadApiScript() {
   if (window.YT && window.YT.Player) return; // already available
@@ -26,11 +28,12 @@ function loadApiScript() {
 /**
  * Initialize the player ONCE. Loads the IFrame API (if needed) and creates a
  * YT.Player in the element with id `mountId` (sized 16:9 responsively by CSS).
- * @param {{ mountId:string, onEnded?:(videoId:string)=>void, onReady?:()=>void }} opts
+ * @param {{ mountId:string, onEnded?:(videoId:string)=>void, onReady?:()=>void,
+ *          onProgress?:(videoId:string, seconds:number)=>void }} opts
  */
-export function initPlayer({ mountId, onEnded, onReady }) {
+export function initPlayer({ mountId, onEnded, onReady, onProgress }) {
   if (player) return;
-  handlers = { onEnded, onReady };
+  handlers = { onEnded, onReady, onProgress };
   // The IFrame API invokes this global once it finishes loading. Chain any
   // previously-registered callback so we do not clobber it.
   const prev = window.onYouTubeIframeAPIReady;
@@ -55,31 +58,43 @@ function createPlayer(mountId) {
         ready = true;
         applyRate();
         if (pending) {
-          const id = pending;
+          const p = pending;
           pending = null;
-          doLoad(id);
+          doLoad(p.videoId, p.startSeconds);
         }
         if (typeof handlers.onReady === 'function') handlers.onReady();
       },
       onStateChange: (e) => {
-        // ENDED === 0. Report the video that just finished (currentVideoId).
-        if (
-          e.data === window.YT.PlayerState.ENDED &&
-          typeof handlers.onEnded === 'function'
-        ) {
-          handlers.onEnded(currentVideoId);
+        const YT = window.YT;
+        if (e.data === YT.PlayerState.PLAYING) {
+          justEnded = false;
+          startProgressPoll(); // poll getCurrentTime() ~every 5s while playing
+        } else if (e.data === YT.PlayerState.PAUSED) {
+          captureProgress();
+          stopProgressPoll();
+        } else if (e.data === YT.PlayerState.ENDED) {
+          justEnded = true;
+          stopProgressPoll();
+          // ENDED === 0. Report the video that just finished (currentVideoId).
+          if (typeof handlers.onEnded === 'function') handlers.onEnded(currentVideoId);
         }
       },
     },
   });
 }
 
-function doLoad(videoId) {
+function doLoad(videoId, startSeconds = 0) {
+  // Capture the OUTGOING video's position before switching away — UNLESS it just
+  // ended (its position was reset; capturing would re-store the end-time).
+  if (currentVideoId && currentVideoId !== videoId && !justEnded) captureProgress();
+  justEnded = false;
+  stopProgressPoll();
   currentVideoId = videoId;
   try {
-    // Attempts autoplay; a browser that blocks it simply loads the video paused
-    // (an acceptable fallback). The session begins from a user gesture (Play).
-    player.loadVideoById(videoId);
+    // Object form supports startSeconds (resume). Attempts autoplay; a browser
+    // that blocks it simply loads the video paused (an acceptable fallback). The
+    // session begins from a user gesture (Play).
+    player.loadVideoById(startSeconds > 0 ? { videoId, startSeconds } : { videoId });
     applyRate();
   } catch {
     /* ignore transient player errors */
@@ -87,18 +102,47 @@ function doLoad(videoId) {
 }
 
 /**
- * Load + play a video by id. If the player is not ready yet, the request is
- * queued and run on ready.
+ * Load + play a video by id, optionally resuming at `startSeconds`. If the
+ * player is not ready yet, the request is queued and run on ready.
  * @param {string} videoId
+ * @param {number} [startSeconds=0]
  */
-export function loadVideo(videoId) {
+export function loadVideo(videoId, startSeconds = 0) {
   if (!videoId) return;
   if (!ready || !player) {
-    pending = videoId;
+    pending = { videoId, startSeconds };
     currentVideoId = videoId;
     return;
   }
-  doLoad(videoId);
+  doLoad(videoId, startSeconds);
+}
+
+// --- Watch-progress tracking ---------------------------------------------
+
+function captureProgress() {
+  if (!player || !currentVideoId || typeof player.getCurrentTime !== 'function') return;
+  let t = 0;
+  try {
+    t = player.getCurrentTime() || 0;
+  } catch {
+    t = 0;
+  }
+  if (typeof handlers.onProgress === 'function') handlers.onProgress(currentVideoId, t);
+}
+function startProgressPoll() {
+  stopProgressPoll();
+  progressTimer = setInterval(captureProgress, 5000);
+}
+function stopProgressPoll() {
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+}
+
+/** Force a progress capture NOW (e.g. on page hide / unload). */
+export function capturePosition() {
+  captureProgress();
 }
 
 function applyRate() {

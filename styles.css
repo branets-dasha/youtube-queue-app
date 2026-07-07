@@ -777,6 +777,12 @@ body.app-active #app-main.app {
   filter: brightness(1.06);
 }
 
+/* Like button: outline at rest, accent-filled when the video is liked. */
+.btn--like.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+}
+
 /* Selected / now-playing card: a solid accent ring via box-shadow (no layout
    shift, and it won't collide with the focus-visible outline). */
 .row--playing {

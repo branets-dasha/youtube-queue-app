@@ -17,6 +17,7 @@ import {
   formatDuration,
   isShort,
   SHORTS_MAX_SECONDS,
+  resumeStart,
 } from './queue.js';
 
 let passed = 0;
@@ -220,6 +221,29 @@ test('nextPlayable handles a current id not present (searches from the start)', 
   const sorted = [play('a', 'watched', true), play('b', 'new', true)];
   assert.equal(nextPlayable(sorted, 'ZZZ').videoId, 'b'); // graceful: first eligible
   assert.equal(nextPlayable([], 'ZZZ'), null); // empty list -> null
+});
+
+// --- resumeStart: where to resume playback ---
+
+test('resumeStart resumes from a mid-video position', () => {
+  assert.equal(resumeStart(100, 600), 100);
+  assert.equal(resumeStart(6, 600), 6); // just over the min threshold
+  assert.equal(resumeStart(100.9, 600), 100); // floored
+});
+
+test('resumeStart returns 0 near the start, near the end, past the end, or missing', () => {
+  assert.equal(resumeStart(5, 600), 0); // == min threshold -> not worth it
+  assert.equal(resumeStart(3, 600), 0); // near start
+  assert.equal(resumeStart(590, 600), 0); // within 15s of the end
+  assert.equal(resumeStart(700, 600), 0); // past the duration
+  assert.equal(resumeStart(undefined, 600), 0); // missing position
+  assert.equal(resumeStart(0, 600), 0);
+  assert.equal(resumeStart(NaN, 600), 0);
+});
+
+test('resumeStart resumes when duration is unknown (only the min threshold applies)', () => {
+  assert.equal(resumeStart(100, undefined), 100);
+  assert.equal(resumeStart(3, undefined), 0);
 });
 
 console.log(`\n${passed} passed`);

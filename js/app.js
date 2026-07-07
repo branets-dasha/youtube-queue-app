@@ -31,6 +31,8 @@ import {
   getSubscriptions,
   getChannelVideosSince,
   getVideoDetails,
+  rateVideo,
+  getVideoRating,
   ApiError,
 } from './api.js';
 import {
@@ -40,6 +42,7 @@ import {
   computeCutoff,
   videosToClean,
   nextPlayable,
+  resumeStart,
   daysAgoIso,
 } from './queue.js';
 import {
@@ -56,6 +59,7 @@ import {
   initPlayer,
   loadVideo as playerLoad,
   setRate as playerSetRate,
+  capturePosition,
 } from './player.js';
 import { showToast } from './toast.js';
 
@@ -76,7 +80,8 @@ const state = {
   refreshing: false,
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
-  rate: 1, // player playback rate (1 or 2)
+  rate: 1, // player playback rate (1 / 1.5 / 2)
+  likeRating: null, // current video's like state ('like' | 'none' | null)
 };
 
 // DOM references, populated in init().
@@ -164,6 +169,7 @@ function cacheDom() {
   dom.rate15x = byId('rate-15x');
   dom.rate2x = byId('rate-2x');
   dom.skipBtn = byId('skip-btn');
+  dom.likeBtn = byId('like-btn');
 }
 
 function bindEvents() {
@@ -184,8 +190,15 @@ function bindEvents() {
   if (dom.rate15x) dom.rate15x.addEventListener('click', () => onRate(1.5));
   if (dom.rate2x) dom.rate2x.addEventListener('click', () => onRate(2));
   if (dom.skipBtn) dom.skipBtn.addEventListener('click', onSkipNext);
+  if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
 
   document.addEventListener('keydown', onGlobalKeydown);
+
+  // Save the current watch position on hide/unload so a reload can resume.
+  window.addEventListener('pagehide', flushProgress);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushProgress();
+  });
 
   // Safety net: never let an async failure vanish silently. Any unhandled
   // promise rejection is surfaced to the user via an error toast.
@@ -675,6 +688,7 @@ function ensurePlayer() {
     mountId: 'player-mount',
     onEnded: onPlayerEnded,
     onReady: () => updateRateButtons(),
+    onProgress: onPlayerProgress,
   });
   updateRateButtons();
 }
@@ -694,9 +708,12 @@ function playVideo(videoId) {
   }
   ensurePlayer();
   state.playing = videoId;
-  playerLoad(videoId);
+  // Resume from the saved position when it's a meaningful mid-point, else start 0.
+  const start = resumeStart(rec.positionSeconds, rec.durationSeconds);
+  playerLoad(videoId, start);
   setPlayerNowPlaying(rec);
   markPlayingCard(videoId);
+  syncLikeButton(videoId);
 }
 
 function openOnYouTube(videoId) {
@@ -714,7 +731,10 @@ function openOnYouTube(videoId) {
  */
 function onPlayerEnded(endedId) {
   if (!endedId) return;
-  markVideo(endedId, STATE_WATCHED, { force: true });
+  // Reset the saved position so a finished video won't resume at its very end.
+  const rec = state.records.find((r) => r.videoId === endedId);
+  if (rec) rec.positionSeconds = 0;
+  markVideo(endedId, STATE_WATCHED, { force: true }); // persists rec (incl. position)
   const next = nextPlayable(state.visible, endedId);
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
@@ -741,6 +761,8 @@ function showPlayerEmpty(caughtUp) {
     setVisible(dom.playerEmpty, true);
   }
   if (dom.skipBtn) dom.skipBtn.disabled = true;
+  state.likeRating = null;
+  updateLikeButton('none'); // state.playing is null -> disabled
   markPlayingCard(null);
 }
 
@@ -780,6 +802,101 @@ function updateRateButtons() {
  */
 function onSkipNext() {
   if (state.playing) onPlayerEnded(state.playing);
+}
+
+// --- Watch progress (track + resume) ---
+
+/**
+ * Persist the watch position reported by the player (~every 5s while playing,
+ * and on pause/switch/hide). Preserved through upsert via {...prev}; used by
+ * resumeStart on the next play.
+ */
+function onPlayerProgress(videoId, seconds) {
+  const rec = state.records.find((r) => r.videoId === videoId);
+  if (!rec) return;
+  const pos = Math.floor(seconds || 0);
+  if (rec.positionSeconds === pos) return;
+  rec.positionSeconds = pos;
+  putVideo(rec).catch(() => {}); // best-effort throttled persist
+}
+
+/** Best-effort capture + persist of the current position on page hide/unload. */
+function flushProgress() {
+  capturePosition(); // -> onPlayerProgress -> putVideo
+}
+
+// --- Like button (player only) ---
+
+/** Fetch the current video's rating (1 quota unit) and reflect it on the button. */
+async function syncLikeButton(videoId) {
+  state.likeRating = 'none';
+  updateLikeButton('none');
+  try {
+    const rating = await getVideoRating(videoId);
+    if (state.playing !== videoId) return; // switched away while fetching
+    state.likeRating = rating === 'like' ? 'like' : 'none';
+    updateLikeButton(state.likeRating);
+  } catch {
+    // getRating failed (e.g. write scope not granted yet). Leave neutral; a Like
+    // click will do the write + trigger re-consent.
+    if (state.playing === videoId) updateLikeButton('none');
+  }
+}
+
+/** Reflect like state on the button: active/filled + aria-pressed + tooltip. */
+function updateLikeButton(rating) {
+  if (!dom.likeBtn) return;
+  const liked = rating === 'like';
+  dom.likeBtn.classList.toggle('is-active', liked);
+  dom.likeBtn.setAttribute('aria-pressed', String(liked));
+  dom.likeBtn.title = liked ? 'Remove like' : 'Like';
+  dom.likeBtn.setAttribute(
+    'aria-label',
+    liked ? 'Remove like from this video' : 'Like this video'
+  );
+  dom.likeBtn.disabled = !state.playing;
+}
+
+/**
+ * Toggle the current video's like: like -> rateVideo(id,'like'), already liked ->
+ * rateVideo(id,'none'). Optimistic; reverts on error. A scope error (401/403,
+ * write scope not granted) triggers a fresh interactive consent, then retries.
+ */
+async function onLike() {
+  const videoId = state.playing;
+  if (!videoId || !dom.likeBtn || dom.likeBtn.disabled) return;
+  const wasLiked = state.likeRating === 'like';
+  const nextRating = wasLiked ? 'none' : 'like';
+  const revert = () => {
+    state.likeRating = wasLiked ? 'like' : 'none';
+    updateLikeButton(state.likeRating);
+  };
+
+  // Optimistic.
+  state.likeRating = nextRating === 'like' ? 'like' : 'none';
+  updateLikeButton(state.likeRating);
+
+  try {
+    await rateVideo(videoId, nextRating); // ~50 quota units
+  } catch (err) {
+    if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
+      // Write scope not granted yet: re-consent for the new scope, then retry once.
+      try {
+        showToast('Requesting YouTube access to like videos…', { type: 'info' });
+        await waitForGis();
+        initAuth(state.clientId);
+        await requestToken({ interactive: true });
+        await rateVideo(videoId, nextRating);
+        return; // success; optimistic state stands
+      } catch (e2) {
+        revert();
+        handleError(e2);
+        return;
+      }
+    }
+    revert();
+    handleError(err);
+  }
 }
 
 // ---------------------------------------------------------------------------

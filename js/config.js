@@ -5,8 +5,12 @@
 // access token via an Authorization: Bearer header (no API key needed).
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
 
-// OAuth 2.0 scope. Read-only access to the signed-in user's YouTube account.
-export const OAUTH_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
+// OAuth 2.0 scope. youtube.force-ssl authorizes BOTH the app's reads
+// (subscriptions, playlistItems, videos, getRating) AND writes (videos.rate —
+// the player's Like button). Access tokens are memory-only and re-requested, so
+// the next sign-in grants the scope; a rate call that hits 401/403 triggers a
+// fresh interactive consent.
+export const OAUTH_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 
 // Google Identity Services client library (loaded from index.html).
 export const GIS_SRC = 'https://accounts.google.com/gsi/client';

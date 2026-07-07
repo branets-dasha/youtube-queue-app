@@ -15,6 +15,7 @@
 //     thumbnailUrl: string,
 //     durationSeconds: number, // optional; video length, backfilled via videos.list
 //     embeddable:   boolean,   // optional; can be played in the on-page player
+//     positionSeconds: number, // optional; last watch position, for resume
 //     state:        'new' | 'watched' | 'not_interested'
 //   }
 
@@ -317,4 +318,29 @@ export function isShort(durationSeconds) {
     durationSeconds > 0 &&
     durationSeconds <= SHORTS_MAX_SECONDS
   );
+}
+
+// A saved position must be at least this many seconds in to be worth resuming,
+// and at least this many seconds before the end (so we don't resume at the tail).
+export const RESUME_MIN_SECONDS = 5;
+export const RESUME_END_MARGIN_SECONDS = 15;
+
+/**
+ * Where playback should START for resume. Returns `positionSeconds` only when it
+ * is a meaningful mid-point: strictly greater than RESUME_MIN_SECONDS and — when
+ * the duration is known — at least RESUME_END_MARGIN_SECONDS before the end.
+ * Otherwise returns 0 (start from the beginning). Handles missing / non-finite
+ * values gracefully. Pure.
+ * @param {number} positionSeconds
+ * @param {number} [durationSeconds]
+ * @returns {number} start-at seconds (0 = from the beginning)
+ */
+export function resumeStart(positionSeconds, durationSeconds) {
+  const pos = Number(positionSeconds);
+  if (!Number.isFinite(pos) || pos <= RESUME_MIN_SECONDS) return 0;
+  const dur = Number(durationSeconds);
+  if (Number.isFinite(dur) && dur > 0 && pos >= dur - RESUME_END_MARGIN_SECONDS) {
+    return 0; // at/near the end (or past the duration): start over
+  }
+  return Math.floor(pos);
 }
