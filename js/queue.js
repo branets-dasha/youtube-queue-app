@@ -23,7 +23,7 @@ export const STATE_NOT_INTERESTED = 'not_interested';
 
 // A video whose length is at most this many seconds is treated as a "Short".
 // Heuristic only — the API exposes no isShort flag to the client.
-export const SHORTS_MAX_SECONDS = 60;
+export const SHORTS_MAX_SECONDS = 90;
 
 /**
  * Compare two ISO timestamps. Returns a negative number if a < b, positive if

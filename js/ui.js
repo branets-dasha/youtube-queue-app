@@ -275,6 +275,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     href: watchUrl,
     target: '_blank',
     rel: 'noopener',
+    title: rec.title, // native tooltip showing the full (clamped) title; attribute, XSS-safe
     text: rec.title, // safe
   });
 
