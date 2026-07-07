@@ -102,6 +102,7 @@ code {
   max-width: var(--maxw-wide);
   margin: 0 auto;
   padding: 20px 16px 8px;
+  text-align: center; /* title + tagline share one centre axis */
 }
 .topbar__title {
   margin: 0;
@@ -411,10 +412,14 @@ main {
   box-shadow: var(--shadow-hover);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
-/* Keyboard focus: a distinct focus-coloured ring (outline never shifts layout). */
+/* Keyboard focus / selection: an even focus-coloured ring with a small gap, via
+   box-shadow so it follows the card radius uniformly on all sides and never
+   shifts layout. Distinct from the now-playing solid ring; the transparent
+   outline keeps it visible in forced-colors mode. */
 .row:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid transparent;
   outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus), var(--shadow);
 }
 
 .row__thumb-btn {
@@ -424,7 +429,9 @@ main {
   aspect-ratio: 16 / 9; /* box is exactly 16:9 at the column width (~400x225) */
   padding: 0;
   border: 0;
-  border-radius: var(--radius) var(--radius) 0 0; /* round top to match the card */
+  /* Nest inside the card's 1px border (radius - border) so the accent ring/border
+     hugs the thumbnail with NO corner gap. */
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
   background: var(--surface-2);
   overflow: hidden; /* clips the image/overlays to the rounded top corners */
   line-height: 0;
@@ -564,23 +571,35 @@ main {
   gap: 8px;
   padding: 8px 14px 14px;
 }
+/* Cohesive, understated icon buttons: ghost (transparent border, no fill) at
+   rest with a uniform size; a subtle neutral fill on hover; and the SEMANTIC
+   colour on hover — green (Watched) / red (Not interested) / accent (Play). */
 .row__actions .btn {
   flex: 1 1 0; /* four equal-width icon buttons on ONE row */
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+.row__actions .btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.row__actions .btn--play:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.row__actions .btn--watched:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--watched) 12%, transparent);
+  color: var(--watched);
+}
+.row__actions .btn--not:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--not) 12%, transparent);
+  color: var(--not);
 }
 .btn--icon {
   padding: 7px 10px;
   font-size: 1.05rem;
   line-height: 1;
-}
-.btn--play {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn--play:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.btn--yt {
-  color: var(--text-dim);
 }
 
 /* ---- Handled (marked) cards ---- */
@@ -601,21 +620,21 @@ main {
 /* Taken-action indicator: a solid state-coloured button background driven by the
    aria-pressed set (synchronously) by setCardState. Buttons are excluded from the
    greying above, so the colour stays clearly legible at rest on a handled card. */
-.btn--watched[aria-pressed='true'] {
+.row__actions .btn--watched[aria-pressed='true'] {
   background: var(--watched);
   border-color: var(--watched);
   color: var(--primary-text);
 }
-.btn--watched[aria-pressed='true']:hover:not(:disabled) {
+.row__actions .btn--watched[aria-pressed='true']:hover:not(:disabled) {
   background: var(--watched);
   filter: brightness(1.06);
 }
-.btn--not[aria-pressed='true'] {
+.row__actions .btn--not[aria-pressed='true'] {
   background: var(--not);
   border-color: var(--not);
   color: var(--primary-text);
 }
-.btn--not[aria-pressed='true']:hover:not(:disabled) {
+.row__actions .btn--not[aria-pressed='true']:hover:not(:disabled) {
   background: var(--not);
   filter: brightness(1.06);
 }
@@ -690,14 +709,16 @@ body.app-active #app-main.app {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Track the VIDEO's rendered width (the same 16:9 height-cap as the frame),
+     left-aligned in the pane. The frame, now-playing info, and controls all live
+     in this wrapper, so the info aligns to the video's LEFT edge and the
+     right-aligned controls align to the video's RIGHT edge (not the pane/screen). */
+  width: min(100%, calc((100dvh - 420px) * 16 / 9));
 }
 .player__frame {
   position: sticky; /* video stays visible at the top while the info can scroll */
   top: 0;
-  /* 16:9, responsive to the wide player column, but height-capped so the video
-     PLUS the title/meta fit the viewport: on large screens the width derives from
-     the available height, keeping the box 16:9 with no letterboxing. */
-  width: min(100%, calc((100dvh - 420px) * 16 / 9));
+  width: 100%; /* fills .player, which is height-capped to keep 16:9 + fit the viewport */
   aspect-ratio: 16 / 9;
   background: #000;
   border-radius: var(--radius);
@@ -777,10 +798,16 @@ body.app-active #app-main.app {
   filter: brightness(1.06);
 }
 
-/* Like button: outline at rest, accent-filled when the video is liked. */
+/* Like button: outline at rest; when liked, the SAME deep-blue accent fill as
+   the active speed button (shared --accent / --primary-text). */
 .btn--like.is-active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(--accent);
   border-color: var(--accent);
+  color: var(--primary-text);
+}
+.btn--like.is-active:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.06);
 }
 
 /* "Show all (N)" row at the bottom of the windowed queue. */
@@ -791,11 +818,13 @@ body.app-active #app-main.app {
   padding: 4px 0 8px;
 }
 
-/* Selected / now-playing card: a solid accent ring via box-shadow (no layout
-   shift, and it won't collide with the focus-visible outline). */
+/* Now-playing card: a clean SOLID accent ring hugging the card (box-shadow, no
+   gap, follows the radius — no layout shift) plus a subtle accent tint. Distinct
+   from the gapped focus ring, but part of the same accent system. */
 .row--playing {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent), var(--shadow);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
 .row--playing:hover {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow-hover);
@@ -819,9 +848,6 @@ body.app-active #app-main.app {
   .workspace {
     grid-template-columns: 1fr;
   }
-  .player__frame {
-    width: 100%; /* full-width player when stacked (the page scrolls here) */
-  }
   .workspace__queue {
     overflow: visible;
     padding-right: 0;
@@ -830,6 +856,7 @@ body.app-active #app-main.app {
     order: -1; /* player above the queue */
   }
   .player {
+    width: 100%; /* full-width player when stacked (the page scrolls here) */
     z-index: 5;
     background: var(--bg);
     padding-bottom: 6px;
