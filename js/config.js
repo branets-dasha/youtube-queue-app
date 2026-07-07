@@ -36,6 +36,12 @@ export const IDB_KEYPATH = 'videoId';
 // Paging size used for both subscriptions and playlistItems requests.
 export const PAGE_SIZE = 50;
 
+// Max number of queue CARDS rendered by default — a pure display window. All
+// videos are still fetched/stored and auto-advance runs over the full list; only
+// the rendered cards are limited. "Show all" reveals the rest for the session.
+// This is the single source of truth (and the default for a future user setting).
+export const QUEUE_DISPLAY_LIMIT = 100;
+
 // Re-request the access token when it is within this many milliseconds of
 // expiring, so an in-flight batch of requests does not fail mid-refresh.
 export const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;

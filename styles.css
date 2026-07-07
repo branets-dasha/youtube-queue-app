@@ -783,6 +783,14 @@ body.app-active #app-main.app {
   border-color: var(--accent);
 }
 
+/* "Show all (N)" row at the bottom of the windowed queue. */
+.queue-more {
+  list-style: none;
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
 /* Selected / now-playing card: a solid accent ring via box-shadow (no layout
    shift, and it won't collide with the focus-visible outline). */
 .row--playing {

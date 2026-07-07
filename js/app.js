@@ -4,7 +4,12 @@
 // event binding and first-run onboarding. This is the only module that reaches
 // into every layer.
 
-import { STATE_NEW, STATE_WATCHED, STATE_NOT_INTERESTED } from './config.js';
+import {
+  STATE_NEW,
+  STATE_WATCHED,
+  STATE_NOT_INTERESTED,
+  QUEUE_DISPLAY_LIMIT,
+} from './config.js';
 import {
   getClientId,
   setClientId,
@@ -82,6 +87,7 @@ const state = {
   playerInited: false,
   rate: 1, // player playback rate (1 / 1.5 / 2)
   likeRating: null, // current video's like state ('like' | 'none' | null)
+  showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
 };
 
 // DOM references, populated in init().
@@ -915,25 +921,47 @@ function recompute() {
 function render() {
   updateStats();
 
-  const hasItems = state.visible.length > 0;
+  const total = state.visible.length;
+  const hasItems = total > 0;
   setVisible(dom.queueList, hasItems);
   setVisible(dom.emptyState, !hasItems && isSignedIn());
+
+  // PURE display windowing: render only the first QUEUE_DISPLAY_LIMIT cards by
+  // default. state.visible (and nextPlayable/auto-advance) is untouched — only
+  // the rendered CARDS are limited. All re-render paths (cleanup, refresh, save
+  // cutoff) run through here, so after cleanup the window tops back up to the
+  // limit as the front handled prefix is removed.
+  const windowed = state.showAll
+    ? state.visible
+    : state.visible.slice(0, QUEUE_DISPLAY_LIMIT);
+  const more =
+    !state.showAll && total > QUEUE_DISPLAY_LIMIT ? { total, onShowAll } : null;
 
   // Button clicks are mouse-driven, so they don't advance focus; keyboard w/x
   // (in onGlobalKeydown) pass advanceFocus for rapid down-the-list marking.
   renderQueue(
     dom.queueList,
-    state.visible,
+    windowed,
     {
       onWatched: (id) => markVideo(id, STATE_WATCHED),
       onNotInterested: (id) => markVideo(id, STATE_NOT_INTERESTED),
       onPlay: (id) => playVideo(id),
     },
-    state.channels
+    state.channels,
+    more
   );
 
   // Re-apply the now-playing highlight after the list is rebuilt.
   if (state.playing) markPlayingCard(state.playing);
+}
+
+/**
+ * "Show all (N)" button: reveal the full queue for THIS session. In-memory only
+ * (not persisted) — a page reload reverts to the first QUEUE_DISPLAY_LIMIT.
+ */
+function onShowAll() {
+  state.showAll = true;
+  render();
 }
 
 /**

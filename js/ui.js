@@ -407,10 +407,21 @@ export function buildQueueRow(rec, handlers, channels = {}) {
  * @param {object} handlers { onWatched, onNotInterested }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  */
-export function renderQueue(listEl, queue, handlers, channels = {}) {
+export function renderQueue(listEl, queue, handlers, channels = {}, more = null) {
   clear(listEl);
   for (const rec of queue) {
     listEl.append(buildQueueRow(rec, handlers, channels));
+  }
+  // Optional "Show all (N)" button at the bottom (pure display windowing). It is
+  // NOT a .row, so keyboard j/k skip it. Text via textContent (XSS-safe).
+  if (more && typeof more.onShowAll === 'function') {
+    const btn = el('button', {
+      class: 'btn queue-more__btn',
+      type: 'button',
+      text: `Show all (${more.total})`,
+      onclick: more.onShowAll,
+    });
+    listEl.append(el('li', { class: 'queue-more', role: 'presentation' }, [btn]));
   }
 }
 
