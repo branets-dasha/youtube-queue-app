@@ -14,6 +14,9 @@
   <body>
     <a class="skip-link" href="#queue-list">Skip to queue</a>
 
+    <!-- Top-right toast notifications (progress, success, errors, info). -->
+    <div id="toast-container" class="toasts" aria-live="polite"></div>
+
     <header class="topbar">
       <h1 class="topbar__title">YouTube Queue</h1>
       <p class="topbar__tagline">Burn down your subscription feed, oldest first.</p>
@@ -122,15 +125,6 @@
             >
               Refresh (fetch newer)
             </button>
-            <button
-              id="cleanup-btn"
-              class="btn"
-              type="button"
-              aria-label="Remove handled videos up to the cutoff"
-              disabled
-            >
-              Clean up (0)
-            </button>
             <button id="change-cutoff-btn" class="btn btn--ghost" type="button">
               Change cutoff
             </button>
@@ -155,13 +149,6 @@
           </div>
         </dl>
 
-        <div id="undo-bar" class="undo-bar" hidden>
-          <span>Marked.</span>
-          <button id="undo-btn" class="btn btn--ghost" type="button">
-            Undo (u)
-          </button>
-        </div>
-
         <p class="shortcuts" aria-hidden="false">
           Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move &middot; <kbd>w</kbd> watched
           &middot; <kbd>x</kbd> not interested &middot; <kbd>u</kbd> undo
@@ -170,8 +157,18 @@
         <div class="workspace">
           <!-- LEFT: the queue (its own scrollbar) -->
           <div class="workspace__queue">
-            <!-- Status/log pinned at the TOP of the queue pane (not the player). -->
-            <div id="status" class="status" hidden></div>
+            <!-- Cleanup control pinned at the TOP of the queue pane. -->
+            <div class="queue-header">
+              <button
+                id="cleanup-btn"
+                class="btn"
+                type="button"
+                aria-label="Remove handled videos up to the cutoff"
+                disabled
+              >
+                Clean up (0)
+              </button>
+            </div>
             <ul id="queue-list" class="queue" role="list" aria-label="Video queue"></ul>
 
             <div id="empty-state" class="empty" hidden>

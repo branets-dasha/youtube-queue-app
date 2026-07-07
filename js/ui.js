@@ -230,9 +230,7 @@ export function renderPlayerMeta(container, rec, channels = {}) {
       datetime: rec.publishedAt,
       text: formatAbsolute(rec.publishedAt),
       title: rec.publishedAt,
-    }),
-    el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
-    el('span', { class: 'row__time-rel', text: formatRelative(rec.publishedAt) })
+    })
   );
 }
 
@@ -328,11 +326,6 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     text: formatAbsolute(rec.publishedAt),
     title: rec.publishedAt,
   });
-  const timeRel = el('span', {
-    class: 'row__time-rel',
-    text: formatRelative(rec.publishedAt),
-  });
-
   const meta = el('div', { class: 'row__meta' }, [
     titleLink,
     el('div', { class: 'row__sub' }, [
@@ -340,8 +333,6 @@ export function buildQueueRow(rec, handlers, channels = {}) {
       channel,
       el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
       timeAbs,
-      el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
-      timeRel,
     ]),
   ]);
 

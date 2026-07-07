@@ -57,6 +57,7 @@ import {
   loadVideo as playerLoad,
   setRate as playerSetRate,
 } from './player.js';
+import { showToast } from './toast.js';
 
 // ---------------------------------------------------------------------------
 // Application state (in-memory)
@@ -152,11 +153,8 @@ function cacheDom() {
   dom.handledCount = byId('handled-count');
   dom.cutoffDisplay = byId('cutoff-display');
 
-  dom.status = byId('status');
   dom.queueList = byId('queue-list');
   dom.emptyState = byId('empty-state');
-  dom.undoBtn = byId('undo-btn');
-  dom.undoBar = byId('undo-bar');
 
   // Player pane.
   dom.playerTitle = byId('player-title');
@@ -182,7 +180,6 @@ function bindEvents() {
   dom.cleanupBtn.addEventListener('click', onCleanup);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
-  dom.undoBtn.addEventListener('click', onUndo);
   if (dom.rate1x) dom.rate1x.addEventListener('click', () => onRate(1));
   if (dom.rate15x) dom.rate15x.addEventListener('click', () => onRate(1.5));
   if (dom.rate2x) dom.rate2x.addEventListener('click', () => onRate(2));
@@ -191,7 +188,7 @@ function bindEvents() {
   document.addEventListener('keydown', onGlobalKeydown);
 
   // Safety net: never let an async failure vanish silently. Any unhandled
-  // promise rejection is surfaced to the user via the status region.
+  // promise rejection is surfaced to the user via an error toast.
   window.addEventListener('unhandledrejection', (event) => {
     handleError(event.reason);
   });
@@ -321,9 +318,9 @@ async function onSignIn() {
   try {
     await waitForGis();
     initAuth(state.clientId);
-    showStatus(dom.status, 'Opening Google sign-in…', 'progress');
+    showProgress('Opening Google sign-in…');
     await requestToken({ interactive: true });
-    hideStatus(dom.status);
+    hideProgress();
     updateAuthUi();
     // Kick off an initial refresh automatically on first sign-in.
     onRefresh();
@@ -336,7 +333,7 @@ async function onSignIn() {
 async function onSignOut() {
   await revoke();
   updateAuthUi();
-  showStatus(dom.status, 'Signed out.', 'info');
+  showToast('Signed out.', { type: 'info' });
 }
 
 // ---------------------------------------------------------------------------
@@ -350,17 +347,17 @@ async function onRefresh() {
   }
   state.refreshing = true;
   dom.refreshBtn.disabled = true;
-  hideStatus(dom.status);
+  hideProgress();
 
   try {
     await waitForGis();
     initAuth(state.clientId);
 
-    showStatus(dom.status, 'Loading your subscriptions…', 'progress');
+    showProgress('Loading your subscriptions…');
     const subs = await getSubscriptions();
 
     if (subs.length === 0) {
-      showStatus(dom.status, 'No subscriptions found on this account.', 'info');
+      showToast('No subscriptions found on this account.', { type: 'info' });
       state.refreshing = false;
       updateAuthUi();
       return;
@@ -377,11 +374,8 @@ async function onRefresh() {
 
     for (let i = 0; i < subs.length; i++) {
       const sub = subs[i];
-      showStatus(
-        dom.status,
-        `Fetching channel ${i + 1} of ${subs.length}: ${sub.channelTitle}`,
-        'progress'
-      );
+      // Updates the SINGLE progress toast in place (no new toast per tick).
+      showProgress(`Fetching channel ${i + 1} of ${subs.length}: ${sub.channelTitle}`);
       try {
         const vids = await getChannelVideosSince(
           sub.channelId,
@@ -415,16 +409,18 @@ async function onRefresh() {
     // videos.list?part=contentDetails,status (<=50 ids/call, 1 unit each; adding
     // `status` is 0 extra quota) for the surviving visible videos lacking either
     // (covers newly fetched + backfill of older ones). Then the final render.
-    showStatus(dom.status, 'Fetching video details…', 'progress');
+    showProgress('Fetching video details…');
     await backfillDetails();
     recompute();
 
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
     if (skipped > 0) parts.push(`${skipped} channel(s) skipped (deleted/unavailable).`);
-    showStatus(dom.status, parts.join(' '), 'success');
+    showToast(parts.join(' '), { type: 'success' });
   } catch (err) {
     handleError(err);
   } finally {
+    // Always dismiss the progress toast when a refresh ends (success/error/early).
+    hideProgress();
     state.refreshing = false;
     updateAuthUi();
   }
@@ -522,9 +518,9 @@ async function markVideo(videoId, newState, opts = {}) {
   if (card) setCardState(card, nextState);
   // The handled prefix may have changed: recompute the live cutoff marker
   // (persist if it moved) + refresh the display/counts/Cleanup button. NO list
-  // re-render or deletion — marked videos stay visible until CLEANUP.
+  // re-render or deletion — marked videos stay visible until CLEANUP. No visible
+  // "Marked" notice; the `u` shortcut + toggle-off still undo silently.
   refreshMarkerAndStats();
-  showUndoBar();
   if (opts.advanceFocus && card) {
     const next = nextRowAfter(card);
     if (next) next.focus();
@@ -596,7 +592,7 @@ async function onCleanup() {
   try {
     await cleanup();
     recompute();
-    showStatus(dom.status, 'Cleaned up handled videos.', 'success');
+    showToast('Cleaned up handled videos.', { type: 'success' });
   } catch (err) {
     handleError(err);
   }
@@ -610,7 +606,6 @@ async function onUndo() {
   if (!rec) {
     // The video is no longer present (e.g. pruned by a reload). Nothing to undo.
     state.lastAction = null;
-    hideUndoBar();
     return;
   }
 
@@ -625,7 +620,6 @@ async function onUndo() {
   // floor if it was the oldest); that video stays visible in the queue.
   refreshMarkerAndStats();
   state.lastAction = null;
-  hideUndoBar();
 
   try {
     await putVideo(rec);
@@ -695,7 +689,7 @@ function playVideo(videoId) {
   if (!rec) return;
   if (rec.embeddable === false) {
     openOnYouTube(videoId);
-    showStatus(dom.status, 'That video can’t be embedded — opened it on YouTube.', 'info');
+    showToast('That video can’t be embedded — opened it on YouTube.', { type: 'info' });
     return;
   }
   ensurePlayer();
@@ -874,11 +868,22 @@ function updateCleanupUi() {
   dom.cleanupBtn.disabled = n === 0 || state.refreshing;
 }
 
-function showUndoBar() {
-  setVisible(dom.undoBar, true);
+// ---------------------------------------------------------------------------
+// Notifications (top-right toasts)
+// ---------------------------------------------------------------------------
+
+let progressToast = null;
+/** Show or UPDATE the single progress toast in place (sticky until hidden). */
+function showProgress(message) {
+  if (progressToast) progressToast.update(message);
+  else progressToast = showToast(message, { type: 'progress' });
 }
-function hideUndoBar() {
-  setVisible(dom.undoBar, false);
+/** Dismiss the progress toast if one is showing. */
+function hideProgress() {
+  if (progressToast) {
+    progressToast.dismiss();
+    progressToast = null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -931,24 +936,24 @@ function onGlobalKeydown(e) {
 function handleError(err) {
   if (err instanceof ApiError) {
     if (err.kind === 'auth') {
-      showStatus(dom.status, 'Your session expired. Please sign in again.', 'error');
+      showToast('Your session expired. Please sign in again.', { type: 'error' });
       updateAuthUi();
       return;
     }
     if (err.kind === 'quota') {
-      showStatus(dom.status, err.message, 'error');
+      showToast(err.message, { type: 'error' });
       return;
     }
     if (err.kind === 'network') {
-      showStatus(dom.status, 'Network error. Check your connection and try again.', 'error');
+      showToast('Network error. Check your connection and try again.', { type: 'error' });
       return;
     }
-    showStatus(dom.status, `Error: ${err.message}`, 'error');
+    showToast(`Error: ${err.message}`, { type: 'error' });
     return;
   }
   // Auth-cancellation and generic errors.
   const msg = (err && err.message) || 'Something went wrong.';
-  showStatus(dom.status, msg, 'error');
+  showToast(msg, { type: 'error' });
 }
 
 // ---------------------------------------------------------------------------
