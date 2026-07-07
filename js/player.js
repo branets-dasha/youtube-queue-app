@@ -170,3 +170,49 @@ export function getCurrentVideoId() {
 export function isReady() {
   return ready;
 }
+
+// --- Imperative playback controls (thin wrappers over the IFrame Player API) ---
+
+/** Toggle play/pause of the current video. No-op until the player exists. */
+export function togglePlay() {
+  if (!player || typeof player.getPlayerState !== 'function') return;
+  try {
+    if (player.getPlayerState() === window.YT.PlayerState.PLAYING) player.pauseVideo();
+    else player.playVideo();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Seek the current video by `deltaSeconds` (clamped at 0). */
+export function seekBy(deltaSeconds) {
+  if (!player || typeof player.seekTo !== 'function') return;
+  try {
+    const t = (player.getCurrentTime() || 0) + deltaSeconds;
+    player.seekTo(Math.max(0, t), true);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Toggle mute. */
+export function toggleMute() {
+  if (!player || typeof player.isMuted !== 'function') return;
+  try {
+    if (player.isMuted()) player.unMute();
+    else player.mute();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Request fullscreen on the player iframe (guard: player must exist). */
+export function requestFullscreen() {
+  if (!player || typeof player.getIframe !== 'function') return;
+  try {
+    const iframe = player.getIframe();
+    if (iframe && iframe.requestFullscreen) iframe.requestFullscreen();
+  } catch {
+    /* ignore */
+  }
+}

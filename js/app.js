@@ -69,6 +69,10 @@ import {
   loadVideo as playerLoad,
   setRate as playerSetRate,
   capturePosition,
+  togglePlay,
+  seekBy,
+  toggleMute,
+  requestFullscreen,
 } from './player.js';
 import { showToast } from './toast.js';
 
@@ -1088,22 +1092,38 @@ function hideProgress() {
   }
 }
 
+/**
+ * Step the playback rate up/down through the [1, 1.5, 2] presets (clamped, no
+ * wrap) via onRate (which sets, persists, and updates the buttons).
+ * @param {number} dir -1 (slower) or +1 (faster)
+ */
+function cyclePlaybackRate(dir) {
+  const rates = [1, 1.5, 2];
+  let i = rates.indexOf(state.rate);
+  if (i === -1) i = 0;
+  const next = rates[Math.min(rates.length - 1, Math.max(0, i + dir))];
+  if (next !== state.rate) onRate(next);
+}
+
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts:  w = watched, x = not interested, j = move back (older,
-// up), k = move forward (newer, down), u = undo. Ignored while typing in an input.
+// Keyboard shortcuts. QUEUE: j/k move, w watched, x not-interested, u undo,
+// Enter play focused card. PLAYER: Space play/pause, ←/→ seek, -/+ speed, n
+// next, l like, m mute, f fullscreen. Ignored while typing in an input/textarea,
+// during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays allowed for '+').
 // ---------------------------------------------------------------------------
 
 function onGlobalKeydown(e) {
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
   if (dom.appMain.hidden) return;
+  // Never hijack browser/OS shortcuts (Ctrl+U, Cmd+K, Alt+…). Shift stays allowed
+  // so '+' and other shifted keys still reach us.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   const key = e.key.toLowerCase();
   const rows = Array.from(dom.queueList.querySelectorAll('.row'));
-  if (rows.length === 0 && key !== 'u') return;
-
   const active = document.activeElement;
-  let idx = rows.indexOf(active);
+  const idx = rows.indexOf(active);
 
   if (key === 'j') {
     // j = move BACK (previous/older card, upward in the oldest->newest list).
@@ -1128,6 +1148,46 @@ function onGlobalKeydown(e) {
   } else if (key === 'u') {
     e.preventDefault();
     onUndo();
+  } else if (key === 'enter') {
+    // Play the FOCUSED card. If a button/link is focused (idx === -1) do nothing
+    // here, so Enter activates that control normally.
+    if (idx >= 0) {
+      e.preventDefault();
+      playVideo(rows[idx].dataset.videoId);
+    }
+  } else if (key === ' ') {
+    // Space must NEVER scroll the page — but yield to a focused interactive
+    // control (a11y). If not on such a control, always block the scroll, and
+    // toggle play/pause only when something is playing.
+    const t = active && active.tagName;
+    const interactive =
+      t === 'BUTTON' || t === 'A' || t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA';
+    if (!interactive) {
+      e.preventDefault();
+      if (state.playing) togglePlay();
+    }
+  } else if (key === 'arrowleft') {
+    if (state.playing) {
+      e.preventDefault(); // otherwise the arrow scrolls the queue
+      seekBy(-5);
+    }
+  } else if (key === 'arrowright') {
+    if (state.playing) {
+      e.preventDefault();
+      seekBy(5);
+    }
+  } else if (key === '-') {
+    cyclePlaybackRate(-1);
+  } else if (key === '=' || key === '+') {
+    cyclePlaybackRate(1);
+  } else if (key === 'n') {
+    onSkipNext();
+  } else if (key === 'l') {
+    onLike();
+  } else if (key === 'm') {
+    if (state.playing) toggleMute();
+  } else if (key === 'f') {
+    requestFullscreen();
   }
 }
 

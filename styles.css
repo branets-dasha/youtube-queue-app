@@ -374,8 +374,11 @@ main {
 
 .shortcuts {
   color: var(--text-dim);
-  font-size: 0.85rem;
-  margin: 0 0 12px;
+  font-size: 0.8rem;
+  margin: 0 0 8px;
+  /* Keep the full shortcut list on ONE row on normal widths; wrap only when
+     genuinely too narrow (vertical space is precious — it shrinks the player). */
+  white-space: normal;
 }
 
 /* ---- Queue list ---- */
