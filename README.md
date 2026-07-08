@@ -57,7 +57,10 @@ The app runs entirely in your browser, but YouTube still needs to know *which* O
 3. **Pick a start cutoff** (defaults to 7 days ago). Everything published **at or before** this instant is treated as already handled and will never enter your queue.
 4. Click **Sign in** and approve the YouTube permission in the Google popup. Because the app is unverified and the scope is sensitive, Google shows a **"Google hasn't verified this app"** screen — click **Advanced → continue**. Signing in only authorizes; it does **not** auto-fetch.
    - Since the OAuth token is **memory-only**, you'll re-approve on each fresh load of the page.
-5. Click **Fetch new** to pull your subscriptions and their recent uploads into the queue. The app does not auto-refresh, so you'll need to use the **Fetch new** button manually whenever you want to re-scan your subscriptions for newer videos. Alternatively, you can use the **Refresh all** button which loads videos all the way back to the cutoff, updating their data. Neither will duplicate the items or reset their status. "Fetch new" is cheaper in terms of quota.
+5. Click **Fetch new** or **Refresh all** to pull videos from your subscriptions into the queue. The app does not auto-refresh, so you'll need to use one of these buttons manually whenever you want to re-scan your subscriptions.
+    - **Fetch new** loads new videos to the point of the last saved video. It's cheaper in terms of quota.
+    - **Refresh all** loads videos all the way back to the cutoff. Use it to pull videos from newly subscribed channels, or if you want to update saved data.
+    - Neither button will duplicate the items or reset their status.
 
 ### Connect the player to your YouTube account (optional)
 
@@ -162,46 +165,3 @@ js/app.js           Wiring: auth → fetch → store → queue → ui/player, ev
 ```bash
 node js/queue.test.mjs
 ```
-
-It exercises the real exports. A minimal example using the current function names:
-
-```js
-// example.test.mjs
-import assert from 'node:assert';
-import {
-  computeCutoff,
-  videosToClean,
-  computeQueue,
-  computeVisible,
-  effectiveRate,
-} from './js/queue.js';
-
-const recs = [
-  { videoId: 'a', publishedAt: '2026-01-01T00:00:00Z', state: 'skipped' },
-  { videoId: 'b', publishedAt: '2026-01-02T00:00:00Z', state: 'skipped' },
-  { videoId: 'c', publishedAt: '2026-01-03T00:00:00Z', state: 'new' },
-];
-const floor = '2025-12-31T00:00:00Z';
-
-// The cutoff advances across the contiguous handled prefix (a, b) and stops at c.
-const cutoff = computeCutoff(recs, floor);
-assert.equal(cutoff, '2026-01-02T00:00:00Z');
-
-// Cleanup would delete everything at or before the cutoff (a, b).
-assert.deepEqual(videosToClean(recs, cutoff).map((r) => r.videoId).sort(), ['a', 'b']);
-
-// Queue = still-'new' videos strictly after the floor, oldest first.
-assert.deepEqual(computeQueue(recs, floor).map((r) => r.videoId), ['c']);
-
-// Render list = ALL in-window videos (any state), oldest first.
-assert.deepEqual(computeVisible(recs, floor).map((r) => r.videoId), ['a', 'b', 'c']);
-
-// Effective speed: per-card preferred > default > current.
-assert.equal(effectiveRate(2, 1.5, 1), 2); // per-card wins
-assert.equal(effectiveRate(undefined, 1.5, 1), 1.5); // default when no per-card
-assert.equal(effectiveRate(undefined, null, 1), 1); // else the current rate
-
-console.log('ok');
-```
-
-Run it with `node example.test.mjs`. </content>
