@@ -64,11 +64,11 @@ The app runs entirely in your browser, but YouTube still needs to know *which* O
 
 ### Connect the player to your YouTube account (optional)
 
-The embedded video player is a **cross-origin YouTube iframe** (from `youtube.com`), so it's a *third party* relative to the app's own origin. By default, modern browsers' tracking prevention / third-party-cookie blocking stops that iframe from seeing your YouTube login: the player runs **signed-out**, so it doesn't register the videos as watched by your account, and if you have YouTube Premium you'll still see ads.
+The embedded video player is a **cross-origin YouTube iframe** (from `youtube.com`), so it's a *third party* relative to the app's own origin. By default, modern browsers' tracking prevention / third-party-cookie blocking stops that iframe from seeing your YouTube login: the player runs **signed-out**, so it isn't tied to your account and, if you have YouTube Premium, you'll still see ads.
 
 This is separate from signing into the app. **Signing in** with Google OAuth only authorizes the **Data API** (your subscriptions, marking, likes) — it does **not** sign the *player* in. Whether the player recognizes your account and Premium depends entirely on whether your browser lets the `youtube.com` iframe use its cookies as a third party.
 
-This step is **optional** — playback works without it. It only affects account-connected / Premium (ad-free) playback, and it only relaxes protection for **this one site**; tracking prevention stays on everywhere else. To connect the player, allow YouTube's third-party cookies for the app:
+This step is **optional** — playback works without it. It only affects account-connected / Premium (ad-free) playback, and it only relaxes protection for **this one site**; tracking prevention stays on everywhere else. Note that connecting the player does **not** make your watches count toward a video's public view count — see Limitations. To connect the player, allow YouTube's third-party cookies for the app:
 
 - **Edge:** turn **off** Tracking prevention for `https://branets-dasha.github.io` — via the site-info / shield icon in the address bar, or **Settings → Privacy, search, and services → Tracking prevention → Exceptions**. Alternatively, allow-list `[*.]youtube.com` under cookies.
 - **Chrome / others:** allow **third-party cookies** for the site — via the cookie / tune icon in the address bar — or add a site exception for `[*.]youtube.com`.
@@ -111,6 +111,7 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Undo** is a **silent** revert of your most recent mark (`u`). It restores the video's previous state and rolls the live cutoff back, but a video already deleted by cleanup cannot be restored.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
+- **Watching a video here does not count toward its public view count.** YouTube only counts a playback that's [started with the player's **native play button**](https://developers.google.com/youtube/iframe_api_reference); this app starts playback programmatically (its own controls plus auto-advance) through the IFrame API, which that rule excludes. There's no way around it — the player is a cross-origin iframe the app can't reach into, and a synthetic click wouldn't count as a genuine play anyway.
 
 ## Part 2 — For developers: running it yourself
 
