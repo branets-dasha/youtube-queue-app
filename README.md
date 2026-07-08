@@ -111,7 +111,6 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Undo** is a **silent** revert of your most recent mark (`u`). It restores the video's previous state and rolls the live cutoff back, but a video already deleted by cleanup cannot be restored.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
-- Concurrent use in multiple tabs shares the same IndexedDB; if a second tab holds an older DB version open, the app falls back to `localStorage` for that session.
 
 ## Part 2 — For developers: running it yourself
 

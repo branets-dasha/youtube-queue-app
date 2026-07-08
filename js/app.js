@@ -31,6 +31,7 @@ import {
   setDefaultRate,
   getHideMarked,
   setHideMarked,
+  DbBlockedError,
 } from './store.js';
 import {
   waitForGis,
@@ -127,10 +128,17 @@ async function init() {
   // exact "Authorized JavaScript origins" value.
   if (dom.originHint) dom.originHint.textContent = window.location.origin;
 
-  // Load persisted videos up front.
+  // Load persisted videos up front. getAllVideos() is the first store call, so a
+  // DbBlockedError (another tab holds the DB at a different version) surfaces
+  // here: show a blocking full-screen error and HALT startup rather than run on a
+  // separate, empty localStorage store. Any other read failure is non-fatal.
   try {
     state.records = await getAllVideos();
-  } catch {
+  } catch (err) {
+    if (err instanceof DbBlockedError) {
+      showBlockedError();
+      return;
+    }
     state.records = [];
   }
 
@@ -1359,7 +1367,60 @@ function onGlobalKeydown(e) {
 // Error handling
 // ---------------------------------------------------------------------------
 
+/**
+ * Full-screen BLOCKING error shown when IndexedDB is blocked by another tab
+ * holding the database open at a different app/DB version (e.g. an old tab left
+ * open across a new deploy). We do NOT fall back to a separate localStorage
+ * store — the real data is in IndexedDB, just inaccessible — so startup halts
+ * here until the user closes the other tab(s) and reloads. Built with el()/text
+ * nodes (no innerHTML for the dynamic reload wiring), matching the panel look.
+ */
+function showBlockedError() {
+  const overlay = document.getElementById('blocked-overlay');
+  if (!overlay) {
+    // Defensive: without the container, at least surface it as a toast.
+    showToast(
+      'This app is open in another tab at a different version. Close the other tab(s) and reload.',
+      { type: 'error' }
+    );
+    return;
+  }
+  // Hide the onboarding/app scaffolding behind the overlay.
+  setVisible(dom.setupPanel, false);
+  setVisible(dom.cutoffPanel, false);
+  setVisible(dom.appMain, false);
+
+  while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+  const panel = el('div', { class: 'panel panel--blocked', role: 'alertdialog', 'aria-labelledby': 'blocked-heading' }, [
+    el('h2', { id: 'blocked-heading', text: 'Already open in another tab' }),
+    el('p', {
+      text:
+        'This app is already open in another browser tab running a different ' +
+        'version. Your videos are safe, but this tab can’t access them while the ' +
+        'other one is open.',
+    }),
+    el('p', {
+      text: 'Close the other tab(s) of this app, then reload this page.',
+    }),
+    el('div', { class: 'panel__actions' }, [
+      el('button', {
+        class: 'btn btn--primary',
+        type: 'button',
+        onclick: () => location.reload(),
+      }, ['Reload']),
+    ]),
+  ]);
+  overlay.append(panel);
+  setVisible(overlay, true);
+}
+
 function handleError(err) {
+  if (err instanceof DbBlockedError) {
+    // A store write hit the blocked state after init (rare — startup normally
+    // halts first). Surface the same blocking screen rather than fail silently.
+    showBlockedError();
+    return;
+  }
   if (err instanceof ApiError) {
     if (err.kind === 'auth') {
       showToast('Your session expired. Please sign in again.', { type: 'error' });

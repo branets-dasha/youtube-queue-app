@@ -180,6 +180,29 @@ main {
   margin-top: 12px;
 }
 
+/* ---- Blocking full-screen error (IndexedDB blocked by another tab) ---- */
+/* Fixed, full-viewport, opaque scrim that centers a panel and sits above the
+   app (below toasts at z-index 1000). Shown by app.js when startup must halt
+   because another tab holds the DB open at a different version. */
+.blocked-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--bg);
+}
+.blocked-overlay[hidden] {
+  display: none;
+}
+.panel--blocked {
+  width: 100%;
+  max-width: 460px;
+  margin: 0;
+}
+
 /* ---- Buttons ---- */
 
 .btn {

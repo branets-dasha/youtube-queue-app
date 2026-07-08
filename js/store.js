@@ -3,8 +3,14 @@
 // Persistence layer.
 //   - Client ID and start cutoff live in localStorage (small, sync-ish values).
 //   - The video store lives in IndexedDB (object store `videos`, keyPath
-//     `videoId`). If IndexedDB is unavailable, we transparently fall back to a
-//     localStorage-backed store.
+//     `videoId`). If IndexedDB is genuinely unavailable (private browsing, the
+//     open() call throws, or `req.onerror` fires) we transparently fall back to a
+//     localStorage-backed store — that fallback is the only way to use the app.
+//   - EXCEPTION: `req.onblocked` (another tab holds the DB open at a different
+//     schema version during a version upgrade) does NOT fall back. The real data
+//     lives in IndexedDB but is temporarily inaccessible, so a separate empty
+//     localStorage store would just confuse the user. Instead every video API
+//     throws `DbBlockedError`, and `app.js` halts startup with a blocking error.
 //
 // All video APIs are async (Promise-returning) so callers can treat both
 // backends uniformly.
@@ -34,6 +40,19 @@ import {
  * @param {Array<object>} records
  * @returns {Array<object>}
  */
+/**
+ * Thrown by every video API when IndexedDB is BLOCKED by another tab holding the
+ * database open at a different schema version. Distinct from the localStorage
+ * fallback: the data exists but is temporarily inaccessible, so we surface an
+ * error (app.js halts startup) rather than silently using an empty store.
+ */
+export class DbBlockedError extends Error {
+  constructor() {
+    super('IndexedDB is blocked by another tab holding a different database version.');
+    this.name = 'DbBlockedError';
+  }
+}
+
 function migrateStates(records) {
   for (const r of records) {
     if (r && r.state !== STATE_NEW) r.state = STATE_SKIPPED;
@@ -198,6 +217,7 @@ export function saveChannels(map) {
 
 let dbPromise = null;
 let useFallback = false;
+let dbBlocked = false;
 
 function idbAvailable() {
   return typeof indexedDB !== 'undefined' && indexedDB !== null;
@@ -238,8 +258,12 @@ function openDb() {
     };
 
     req.onblocked = () => {
-      // Another tab holds an older version open. Fall back rather than hang.
-      useFallback = true;
+      // Another tab holds the DB open at a different version, blocking this
+      // upgrade. Do NOT fall back: the real data is in IndexedDB (just
+      // inaccessible), so an empty localStorage store would mislead. Flag it and
+      // resolve null (nothing hangs); every video API then throws DbBlockedError
+      // and app.js halts startup with a blocking "close other tabs" message.
+      dbBlocked = true;
       resolve(null);
     };
   });
@@ -272,6 +296,7 @@ function fallbackWriteAll(records) {
  */
 export async function getAllVideos() {
   const db = await openDb();
+  if (dbBlocked) throw new DbBlockedError();
   if (!db || useFallback) {
     return migrateStates(fallbackReadAll());
   }
@@ -291,6 +316,7 @@ export async function getAllVideos() {
  */
 export async function putVideo(record) {
   const db = await openDb();
+  if (dbBlocked) throw new DbBlockedError();
   if (!db || useFallback) {
     const all = fallbackReadAll();
     const idx = all.findIndex((r) => r.videoId === record.videoId);
@@ -315,6 +341,7 @@ export async function putVideo(record) {
  */
 export async function putVideos(records) {
   const db = await openDb();
+  if (dbBlocked) throw new DbBlockedError();
   if (!db || useFallback) {
     const all = fallbackReadAll();
     const byId = new Map(all.map((r) => [r.videoId, r]));
@@ -340,6 +367,7 @@ export async function putVideos(records) {
 export async function deleteVideos(ids) {
   if (!ids || ids.length === 0) return;
   const db = await openDb();
+  if (dbBlocked) throw new DbBlockedError();
   if (!db || useFallback) {
     const idSet = new Set(ids);
     const all = fallbackReadAll().filter((r) => !idSet.has(r.videoId));
@@ -364,6 +392,7 @@ export async function deleteVideos(ids) {
  */
 export async function replaceAllVideos(records) {
   const db = await openDb();
+  if (dbBlocked) throw new DbBlockedError();
   if (!db || useFallback) {
     fallbackWriteAll(records);
     return;

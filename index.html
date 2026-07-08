@@ -23,6 +23,12 @@
          above everything (including toasts) and blocks interaction while up. -->
     <div id="curtain" class="curtain" aria-hidden="true"></div>
 
+    <!-- Full-screen BLOCKING error: shown by app.js when IndexedDB is blocked by
+         another tab open at a different app/DB version. Populated + revealed by
+         showBlockedError(); halts app startup until the user closes the other
+         tab(s) and reloads. -->
+    <div id="blocked-overlay" class="blocked-overlay" hidden></div>
+
     <header class="topbar">
       <h1 class="topbar__title">YouTube Queue</h1>
       <p class="topbar__tagline">Burn down your subscription feed, oldest first.</p>
