@@ -680,6 +680,53 @@ a.row__channel:focus-visible {
   color: var(--primary-text);
 }
 
+/* ---- Non-embeddable cards (↗ YouTube) ---- */
+
+/* The footer "↗ YouTube" link for videos that can't play in the app. Rendered as
+   an <a> but sits in the row's action footer, so it inherits the same ghost
+   sizing as its sibling Skip (flex: 1, same padding/height => card height is
+   unchanged). A subtle YouTube-red tint marks it as an off-app affordance. */
+.row__actions .btn--youtube {
+  color: var(--primary);
+}
+.row__actions .btn--youtube:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+
+/* Skip must render at the SAME width on a non-embeddable card as on a normal one.
+   A normal footer is [Play | speed-group | Skip] where Play + Skip are the two
+   flex:1 buttons splitting the row's free space, and the speed group is a FIXED
+   island between them. A non-embeddable footer drops the speed group, leaving just
+   [↗ YouTube | Skip] — so the two flex buttons split MORE space and Skip renders
+   wider (~169px vs ~131px at the 400px pane; ~262px vs the normal 262px when the
+   pane goes full-width in the stacked layout — i.e. wider than normal at every
+   width). To fix it WITHOUT touching normal cards, re-introduce the speed group's
+   exact fixed footprint as an inert flex spacer (an empty ::before) on the
+   non-embeddable footer only. 66.75px = the .row__rates box (64.75px) plus its
+   2px right margin, measured at render; since that footprint is constant at any
+   pane width, ↗ YouTube (flex:1) absorbs the difference and Skip lands on the
+   same (freeSpace − footprint)/2 the normal card gives it, matching to <1px in
+   both the fixed-pane and stacked layouts. The spacer is `order`ed BETWEEN the
+   two buttons (not before both) so ↗ YouTube sits at the left edge and Skip at
+   the right, mirroring a normal card's [Play | speed-group | Skip]; `order` only
+   moves items and never changes their computed widths, so the match still holds. */
+.row--noembed .row__actions::before {
+  content: '';
+  flex: 0 0 66.75px;
+  order: 1;
+}
+.row--noembed .row__actions .btn--skip {
+  order: 2;
+}
+
+/* The thumbnail hover overlay for a non-embeddable card uses the ↗ glyph; tint
+   the puck YouTube-red so it reads as "opens on YouTube" rather than in-app play. */
+.row__play--external .row__play-icon {
+  background: var(--primary);
+  padding-left: 0; /* ↗ needs no optical nudge (that was for the ▶ glyph) */
+}
+
 /* ---- Handled (marked) cards ---- */
 
 /* Grey ONLY the thumbnail and text — never the action buttons — and do NOT gate

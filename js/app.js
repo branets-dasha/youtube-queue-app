@@ -1313,9 +1313,13 @@ function onGlobalKeydown(e) {
     // Set the FOCUSED card's preferred speed. Reuses the card speed-button
     // behavior: toggles off if already set, no playback, applies live only if
     // the focused card is the one currently playing. (1.5× lives in the player.)
+    // No-op on a non-embeddable card: it has no in-app playback (and thus no
+    // speed group), so there is nothing to set — consistent with its footer.
     if (idx >= 0) {
       e.preventDefault();
-      onCardRate(rows[idx].dataset.videoId, Number(key));
+      const videoId = rows[idx].dataset.videoId;
+      const rec = state.records.find((r) => r.videoId === videoId);
+      if (!rec || rec.embeddable !== false) onCardRate(videoId, Number(key));
     }
   } else if (key === 'u') {
     e.preventDefault();

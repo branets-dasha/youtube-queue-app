@@ -278,6 +278,13 @@ export function renderPlayerMeta(container, rec, channels = {}) {
 export function buildQueueRow(rec, handlers, channels = {}) {
   const watchUrl = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
 
+  // A card is treated as non-embeddable ONLY when the details fetch has
+  // explicitly reported it so (rec.embeddable === false). While embeddable is
+  // still undefined (details not yet loaded) the card keeps the normal in-app
+  // Play + speed treatment; it never flips to the YouTube treatment on a merely
+  // falsy/unknown value.
+  const noEmbed = rec.embeddable === false;
+
   const thumb = el('img', {
     class: 'row__thumb',
     alt: '',
@@ -323,14 +330,20 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     overlays.push(el('span', { class: 'row__shorts', 'aria-hidden': 'true', text: 'SHORTS' }));
   }
 
-  // Play-in-embedded-player overlay (▶), revealed on hover of the thumbnail.
-  const playOverlay = el('span', { class: 'row__play', 'aria-hidden': 'true' }, [
-    el('span', { class: 'row__play-icon', text: '▶' }),
-  ]);
+  // Hover overlay on the thumbnail. Embeddable cards get the in-app PLAY (▶)
+  // trigger; non-embeddable cards can't be framed, so the glyph becomes ↗ ("opens
+  // off-app") and the click opens the video on YouTube instead of a dead in-app
+  // play. Both glyphs are static unicode (never API data).
+  const playOverlay = el(
+    'span',
+    { class: noEmbed ? 'row__play row__play--external' : 'row__play', 'aria-hidden': 'true' },
+    [el('span', { class: 'row__play-icon', text: noEmbed ? '↗' : '▶' })]
+  );
 
-  // The thumbnail is a mouse-convenience PLAY trigger (loads the embedded
-  // player). It is aria-hidden / out of the tab order because the footer "Play"
-  // button is the accessible, keyboard-reachable equivalent.
+  // The thumbnail is a mouse-convenience trigger. It is aria-hidden / out of the
+  // tab order because the footer button (▶ Play, or ↗ YouTube for non-embeddable)
+  // is the accessible, keyboard-reachable equivalent. For non-embeddable videos
+  // the click opens YouTube in a new tab rather than attempting an in-app play.
   const thumbBtn = el(
     'button',
     {
@@ -338,7 +351,9 @@ export function buildQueueRow(rec, handlers, channels = {}) {
       type: 'button',
       tabindex: '-1',
       'aria-hidden': 'true',
-      onclick: () => handlers.onPlay && handlers.onPlay(rec.videoId),
+      onclick: noEmbed
+        ? () => window.open(watchUrl, '_blank', 'noopener')
+        : () => handlers.onPlay && handlers.onPlay(rec.videoId),
     },
     [thumb, ...overlays, playOverlay]
   );
@@ -418,16 +433,30 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     })
   );
 
-  const actions = el('div', { class: 'row__actions' }, [
-    playBtn,
-    speedGroup,
-    skipBtn,
-  ]);
+  // Non-embeddable videos can't play in the app, so their footer replaces the
+  // Play button + speed group with a single "↗ YouTube" link (a real anchor, so
+  // it is keyboard-reachable, activates on Enter, and opens a new tab natively).
+  // Skip is kept in both cases. ↗ / YouTube are static strings (never API data).
+  const youtubeBtn = el('a', {
+    class: 'btn btn--youtube',
+    href: watchUrl,
+    target: '_blank',
+    rel: 'noopener',
+    'aria-label': `Open "${rec.title}" on YouTube (can't play in the app)`,
+    title: 'Open on YouTube',
+    text: '↗ YouTube',
+  });
+
+  const actions = el(
+    'div',
+    { class: 'row__actions' },
+    noEmbed ? [youtubeBtn, skipBtn] : [playBtn, speedGroup, skipBtn]
+  );
 
   const li = el(
     'li',
     {
-      class: 'row',
+      class: noEmbed ? 'row row--noembed' : 'row',
       tabindex: '0',
       role: 'listitem',
       dataset: { videoId: rec.videoId },
