@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="YouTube Queue">
+  <style>
+    /* Brand red; brighten slightly for dark browser chrome. */
+    .bg { fill: #cc0000; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #ff4444; }
+    }
+  </style>
+  <!-- Rounded-square badge in the app's primary red. -->
+  <rect class="bg" x="0" y="0" width="32" height="32" rx="7" ry="7" />
+  <!-- Play triangle (burn-down: play the oldest video). -->
+  <path fill="#ffffff" d="M9 8.5 L9 23.5 L19 16 Z" />
+  <!-- Queue: three stacked list lines, shrinking toward the front. -->
+  <g fill="#ffffff">
+    <rect x="21" y="10.5" width="4.5" height="2.4" rx="1.2" />
+    <rect x="21" y="14.8" width="4.5" height="2.4" rx="1.2" />
+    <rect x="21" y="19.1" width="4.5" height="2.4" rx="1.2" />
+  </g>
+</svg>
