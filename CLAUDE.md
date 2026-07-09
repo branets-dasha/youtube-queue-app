@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A pure client-side, single-page "burn-down queue" for YouTube subscriptions: fetch videos from your subscriptions up to a moving cutoff, display them oldest→newest, and play/skip through them. Vanilla HTML/CSS/ES modules — **no build step, no framework, no bundler, no `package.json`, no `node_modules`**. The only runtime dependencies are three Google-hosted scripts (Google Identity Services, YouTube IFrame API, YouTube Data API v3).
 
+## Working style — delegate, act as overseer
+
+The repo owner wants Claude to act as an **orchestrator/overseer**, not do the hands-on work directly. For any non-trivial task — research, design, implementation, review, verification — **spawn subagents (Agent tool) or author a Workflow** rather than investigating and editing in the main thread. Keep the main thread for decisions, oversight, and concise reporting; have agents return compact structured results instead of pulling large file/output dumps into context. This was an explicit, standing instruction ("use agents and workflows for everything… keep your context clear and compact. you only oversee process").
+
+- Default to delegating **even for seemingly small edits** — a one-line CSS tweak or a button reorder still goes to an agent. Reserve direct action for the truly trivial (reading a file to decide *what* to delegate, a single-line fix mid-conversation) — past drift happened by treating small tasks as exceptions.
+- Still surface genuinely user-facing decisions (architecture, ambiguous requirements) via AskUserQuestion before a big build — the owner engages actively on those.
+- Before each commit, inspect the staged diff — the owner makes their own manual edits. Commit the owner's manual edits under their name with **no** Claude co-author trailer; commit Claude's work **with** `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Only commit/push when asked.
+
 ## Commands
 
 **Run locally** — must be served over `http://localhost` (never `file://`; ES-module CORS and Google OAuth both require an http(s) origin). No build step; from the repo root:
