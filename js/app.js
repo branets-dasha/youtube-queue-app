@@ -201,6 +201,7 @@ function cacheDom() {
   dom.refreshNewBtn = byId('refresh-new-btn');
   dom.cleanupBtn = byId('cleanup-btn');
   dom.hideMarkedBtn = byId('hide-marked-btn');
+  dom.scrollPlayingBtn = byId('scroll-playing-btn');
   dom.defaultRateBtn = byId('default-rate-btn');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
   dom.changeClientBtn = byId('change-client-btn');
@@ -238,6 +239,7 @@ function bindEvents() {
   if (dom.refreshNewBtn) dom.refreshNewBtn.addEventListener('click', onRefreshNew);
   dom.cleanupBtn.addEventListener('click', onCleanup);
   if (dom.hideMarkedBtn) dom.hideMarkedBtn.addEventListener('click', onToggleHideMarked);
+  if (dom.scrollPlayingBtn) dom.scrollPlayingBtn.addEventListener('click', onScrollToPlaying);
   if (dom.defaultRateBtn) dom.defaultRateBtn.addEventListener('click', onCycleDefaultRate);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
@@ -652,6 +654,10 @@ async function markVideo(videoId, newState, opts = {}) {
       if (next) next.focus();
     }
   }
+  // This optimistic path skips render(), so re-evaluate the "scroll to playing"
+  // button directly: skipping the playing video with Hide-skipped ON removes its
+  // card above, leaving nothing to scroll to.
+  updatePlayingControls();
   // Recompute the live cutoff marker (persist if it moved) + refresh the header
   // counts / Cleanup button. No data re-render/deletion here.
   refreshMarkerAndStats();
@@ -839,6 +845,7 @@ function playVideo(videoId) {
   playerLoad(videoId, start);
   setPlayerNowPlaying(rec);
   markPlayingCard(videoId);
+  updatePlayingControls(); // now playing -> enable the "scroll to playing" jump
   updateLikeButton(); // from the record's local `liked` flag (no fetch)
 }
 
@@ -887,8 +894,34 @@ function showPlayerEmpty(caughtUp) {
     setVisible(dom.playerEmpty, true);
   }
   if (dom.skipBtn) dom.skipBtn.disabled = true;
+  updatePlayingControls(); // stopped -> disable the "scroll to playing" jump
   updateLikeButton(); // state.playing is null -> disabled, not liked
   markPlayingCard(null);
+}
+
+/**
+ * Reflect playback + list state onto the "Scroll to playing" jump button: it is
+ * enabled only when a video is playing AND that card is actually present in the
+ * rendered queue (findCard). If the playing card is outside the render window or
+ * filtered out (e.g. by Hide-skipped), there is nothing to scroll to, so the
+ * button is disabled. Called from the spots that flip state.playing (play start /
+ * stop / empty) AND from render() (the visible set changes independently of it).
+ */
+function updatePlayingControls() {
+  if (!dom.scrollPlayingBtn) return;
+  dom.scrollPlayingBtn.disabled = !state.playing || !findCard(state.playing);
+}
+
+/**
+ * Scroll the queue so the currently-playing video's card is centered. The button
+ * is disabled whenever the card isn't in the list, so this normally always finds
+ * it; the guards are just defensive (no-op rather than throw).
+ */
+function onScrollToPlaying() {
+  if (!state.playing) return;
+  const card = findCard(state.playing);
+  if (!card) return; // not in the rendered list: button is disabled anyway
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 /** Move the .row--playing highlight to the card for `videoId` (or clear it). */
@@ -1105,6 +1138,11 @@ function render() {
 
   // Re-apply the now-playing highlight after the list is rebuilt.
   if (state.playing) markPlayingCard(state.playing);
+
+  // The "scroll to playing" button is only usable when the playing card is
+  // actually in the rendered list, and that can change here (window limit,
+  // Hide-skipped filter, prune), so re-evaluate its disabled state every render.
+  updatePlayingControls();
 }
 
 /**

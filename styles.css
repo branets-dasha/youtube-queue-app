@@ -822,6 +822,12 @@ body.app-active #app-main.app {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+/* "Scroll to playing" jump button: pushed to the far RIGHT edge of the header
+   (auto margin absorbs the free space) while Trim front / Hide skipped stay
+   grouped at the left. Sizing/disabled look reuse the base .btn / .btn--icon. */
+.queue-header__jump {
+  margin-left: auto;
+}
 .workspace__player {
   min-height: 0;
   overflow-y: auto; /* if player + info exceed the pane, scroll here — never clip */
