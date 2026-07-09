@@ -37,7 +37,8 @@ import {
   waitForGis,
   initAuth,
   requestToken,
-  isSignedIn,
+  hasSession,
+  clearToken,
   revoke,
 } from './auth.js';
 import {
@@ -380,7 +381,15 @@ function showMainApp() {
 }
 
 function updateAuthUi() {
-  const signed = isSignedIn();
+  // SINGLE source of truth for every auth-gated indicator: the status label, the
+  // sign in/out buttons, the refresh buttons AND the Like button all derive from
+  // hasSession() (an active authorized session), NOT from live-token validity.
+  // A token silently expires ~1h in but the session stays alive (the next API
+  // call refreshes it on demand), so the label and the Like button can never
+  // drift apart as the token ages — they both flip only at a real auth
+  // transition (sign-in / sign-out / unrecoverable auth failure), each of which
+  // routes through here.
+  const signed = hasSession();
   dom.authStatus.textContent = signed ? 'Signed in' : 'Not signed in';
   dom.authStatus.classList.toggle('is-signed-in', signed);
   setVisible(dom.signinBtn, !signed);
@@ -448,7 +457,7 @@ async function onRefreshNew() {
  */
 async function runRefresh(bound) {
   if (state.refreshing) return;
-  if (!isSignedIn()) {
+  if (!hasSession()) {
     return onSignIn();
   }
   state.refreshing = true;
@@ -972,7 +981,12 @@ function playingRecord() {
 /**
  * Reflect the Like button from the CURRENT record's LOCAL `liked` flag (no API
  * fetch). The VISUAL filled/active state is informational and shown even when
- * signed out; the button is ENABLED only when signed in AND a video is playing.
+ * signed out; the button is ENABLED only when there is an active session
+ * (hasSession) AND a video is playing. Gating on hasSession() — the SAME flag the
+ * status label uses — rather than live-token validity is what keeps the two in
+ * agreement: an expired token still counts as "signed in", and a like click
+ * refreshes it on demand via rateVideo (getToken -> ensureToken), falling back
+ * to a fresh interactive consent on a 401/403 (see onLike).
  */
 function updateLikeButton() {
   if (!dom.likeBtn) return;
@@ -985,8 +999,9 @@ function updateLikeButton() {
     'aria-label',
     liked ? 'Remove like from this video' : 'Like this video'
   );
-  // Enabled only when SIGNED IN and a video is playing (visual state is separate).
-  dom.likeBtn.disabled = !state.playing || !isSignedIn();
+  // Enabled only with an ACTIVE SESSION and a video playing (visual state is
+  // separate). hasSession() matches the status label, so the two never disagree.
+  dom.likeBtn.disabled = !state.playing || !hasSession();
 }
 
 /**
@@ -1064,7 +1079,7 @@ function render() {
   const total = viewList.length;
   const hasItems = total > 0;
   setVisible(dom.queueList, hasItems);
-  setVisible(dom.emptyState, !hasItems && isSignedIn());
+  setVisible(dom.emptyState, !hasItems && hasSession());
 
   // PURE display windowing: render only the first QUEUE_DISPLAY_LIMIT cards of the
   // (filtered) view by default; the "Show all (N)" count reflects the filtered
@@ -1427,6 +1442,11 @@ function handleError(err) {
   }
   if (err instanceof ApiError) {
     if (err.kind === 'auth') {
+      // An API call failed auth even after the built-in silent refresh/retry, so
+      // the grant is genuinely dead: end the session (clearToken) BEFORE
+      // updateAuthUi() so the status label AND the Like button both flip to
+      // signed-out together, agreeing with this toast.
+      clearToken();
       showToast('Your session expired. Please sign in again.', { type: 'error' });
       updateAuthUi();
       return;

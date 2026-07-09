@@ -173,6 +173,22 @@ export function isSignedIn() {
 }
 
 /**
+ * True if the user has an ACTIVE authorized session this page-load — i.e. we
+ * still hold an access token in memory, EVEN IF it is now within/after its
+ * expiry margin. Unlike isSignedIn() (a currently-USABLE token), this stays true
+ * across the token's ~1h expiry until sign-out/revoke (or an unrecoverable auth
+ * failure) clears it. The UI derives its single "signed in" state from this so
+ * the status label and the Like button never disagree as the token silently
+ * ages: an expired token is refreshed on demand by the next API call
+ * (getToken() -> ensureToken()), so keeping the session presented as signed-in
+ * is safe.
+ * @returns {boolean}
+ */
+export function hasSession() {
+  return accessToken !== null;
+}
+
+/**
  * Ensure a valid token, refreshing silently if needed. If a silent refresh
  * fails and `interactiveFallback` is true, fall back to an interactive prompt.
  * @param {object} [opts]
