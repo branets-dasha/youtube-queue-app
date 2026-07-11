@@ -334,7 +334,7 @@ main {
 
 /* A full-viewport solid overlay (BSOD-style blue, no content) that slides DOWN
    to cover the page and UP to lift. Sits above EVERYTHING (toasts are z-index
-   1000), so while up it blocks all interaction with the page behind it. Hidden
+   1000), so while covering it blocks all interaction with the page behind it. Hidden
    by default via translateY(-100%) — still present (not display:none) so it can
    animate and so a wheel event over it targets the curtain, not the page. */
 .curtain {
@@ -346,9 +346,9 @@ main {
   transition: transform 0.35s ease;
   pointer-events: none; /* lifted: let events reach the page */
 }
-.curtain.is-up {
+.curtain.is-covering {
   transform: translateY(0);
-  pointer-events: auto; /* raised: intercept all pointer/wheel events */
+  pointer-events: auto; /* covering: intercept all pointer/wheel events */
 }
 
 /* ---- Toasts (top-right notifications) ---- */

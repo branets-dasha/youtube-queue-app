@@ -105,7 +105,7 @@ const state = {
   defaultRate: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
   hideMarked: false, // view filter: hide skipped (handled) videos (persisted)
-  curtain: false, // privacy curtain overlay: true = raised (covering the page)
+  curtain: false, // privacy curtain overlay: true = covering the page
 };
 
 // DOM references, populated in init().
@@ -1279,35 +1279,37 @@ function cyclePlaybackRate(dir) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Privacy curtain: a full-viewport overlay that hides the whole page. Raised by
-// a wheel-DOWN anywhere outside the queue's own scroll area (or Esc), lifted by
-// a wheel-UP (or Esc). Visual only — the player is NOT paused.
+// Privacy curtain: a full-viewport overlay that hides the whole page. Covers the
+// page on a wheel-DOWN anywhere outside the queue's own scroll area (or Esc),
+// lifted by a wheel-UP (or Esc). Visual only — the player is NOT paused.
 // ---------------------------------------------------------------------------
 
 /** Reflect state.curtain onto the overlay element (class + aria). */
-function setCurtain(up) {
-  state.curtain = up;
+function setCurtain(covering) {
+  state.curtain = covering;
   if (!dom.curtain) return;
-  dom.curtain.classList.toggle('is-up', up);
-  dom.curtain.setAttribute('aria-hidden', String(!up));
+  dom.curtain.classList.toggle('is-covering', covering);
+  dom.curtain.setAttribute('aria-hidden', String(!covering));
 }
 
 /** Wheel handler: scroll INSIDE the queue scrolls it; elsewhere it drives the
- *  curtain — down raises, up lifts (binary by direction). While the curtain is
- *  up it is on top, so a wheel event's target is the curtain (not the queue),
- *  and a scroll-up over it lifts it. DISABLED in the stacked (<=900px) layout,
- *  where the page scrolls as one column — there only Esc toggles the curtain. */
+ *  curtain — down covers, up lifts (binary by direction). While the curtain is
+ *  covering it is on top, so a wheel event's target is the curtain (not the queue),
+ *  and a scroll-up over it lifts it. In the stacked (<=900px) layout the page
+ *  scrolls as one column, so scroll-down does NOT cover the page (Esc still
+ *  does) — but a scroll-up may still lift an already-covered curtain. */
 function onGlobalWheel(e) {
-  // Stacked layout: the whole page scrolls, so a wheel trigger would fight normal
-  // scrolling. Reuse the same breakpoint as the player-above-queue stack.
-  if (window.matchMedia('(max-width: 900px)').matches) return;
+  // Stacked layout: the whole page scrolls, so scroll-down must not cover the
+  // page (it would fight normal scrolling). But scroll-up may still LIFT an
+  // already-covered curtain on any width. Reuse the player-above-queue breakpoint.
+  const narrow = window.matchMedia('(max-width: 900px)').matches;
   const t = e.target;
   // Let the queue's own scroll area scroll normally (never triggers the curtain).
   if (t && typeof t.closest === 'function' && t.closest('.workspace__queue')) return;
   if (e.deltaY > 0) {
-    if (!state.curtain) setCurtain(true); // scroll down -> raise
+    if (!narrow && !state.curtain) setCurtain(true); // scroll down -> cover (wide only)
   } else if (e.deltaY < 0) {
-    if (state.curtain) setCurtain(false); // scroll up -> lift
+    if (state.curtain) setCurtain(false); // scroll up -> lift (any width)
   }
 }
 

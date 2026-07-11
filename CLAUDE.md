@@ -79,6 +79,6 @@ Both call the same `runRefresh(bound)`; only the per-channel lower bound differs
 ## Gotchas
 
 - **Cross-origin iframe swallows keyboard/wheel/pointer events.** Clicking the video moves focus into the youtube.com iframe and kills document-level shortcuts (including Esc). `onWindowBlur` in `app.js` detects focus landing on the iframe and blurs it back — preserve this contract when touching focus/keyboard code.
-- **Privacy curtain** (`#curtain`): wheel-down outside the queue raises a full-viewport overlay, wheel-up lifts it, Esc toggles. Disabled in the stacked layout ≤900px. Purely visual — it does not pause the player.
+- **Privacy curtain** (`#curtain`): wheel-down outside the queue covers the page with a full-viewport overlay, wheel-up lifts it, Esc toggles. In the stacked layout (≤900px) scroll-down no longer covers (it would fight page scrolling), but scroll-up still lifts and Esc still toggles. Purely visual — it does not pause the player.
 - All keyboard shortcuts live in `app.js` `onGlobalKeydown` (ignored while typing in inputs and for Ctrl/Cmd/Alt combos).
 - Shorts detection is a duration ≤90s heuristic (badge only — the API exposes no isShort flag).
