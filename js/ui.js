@@ -344,17 +344,36 @@ export function buildQueueRow(rec, handlers, channels = {}) {
   // tab order because the footer button (▶ Play, or ↗ YouTube for non-embeddable)
   // is the accessible, keyboard-reachable equivalent. For non-embeddable videos
   // the click opens YouTube in a new tab rather than attempting an in-app play.
+  // An <a> (not a <button>) so a right-click offers the browser's LINK context
+  // menu (Open in new tab, Copy link address, …) like the title link, instead of
+  // the image-only menu. href is the same safe youtube.com/watch URL as the title.
   const thumbBtn = el(
-    'button',
-    {
-      class: 'row__thumb-btn',
-      type: 'button',
-      tabindex: '-1',
-      'aria-hidden': 'true',
-      onclick: noEmbed
-        ? () => window.open(watchUrl, '_blank', 'noopener')
-        : () => handlers.onPlay && handlers.onPlay(rec.videoId),
-    },
+    'a',
+    noEmbed
+      ? {
+          // Non-embeddable: let the native link handle everything. Plain
+          // left-click opens YouTube in a new tab (same as the old window.open).
+          class: 'row__thumb-btn',
+          href: watchUrl,
+          target: '_blank',
+          rel: 'noopener',
+          tabindex: '-1',
+          'aria-hidden': 'true',
+        }
+      : {
+          // Embeddable: plain left-click plays in-app; any modified click (or a
+          // non-left button) falls through to the native href so ctrl/cmd/shift/
+          // middle-click still opens YouTube in a new tab.
+          class: 'row__thumb-btn',
+          href: watchUrl,
+          tabindex: '-1',
+          'aria-hidden': 'true',
+          onclick: (e) => {
+            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            handlers.onPlay && handlers.onPlay(rec.videoId);
+          },
+        },
     [thumb, ...overlays, playOverlay]
   );
 

@@ -478,6 +478,8 @@ main {
   overflow: hidden; /* clips the image/overlays to the rounded top corners */
   line-height: 0;
   cursor: pointer;
+  text-decoration: none; /* it's an <a> now — kill link underline */
+  color: inherit; /* …and link coloring, so it reads identical to the old button */
   transition: opacity 0.12s ease, filter 0.12s ease;
 }
 .row__thumb-btn:focus-visible {
