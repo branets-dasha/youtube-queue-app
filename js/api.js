@@ -295,12 +295,14 @@ function channelAvatar(thumbnails) {
 }
 
 /**
- * Batch-fetch video details via videos.list?part=contentDetails,status, UP TO 50
- * ids per call (1 quota unit each — adding the `status` part is 0 extra quota).
- * Returns a Map videoId -> { durationSeconds, embeddable }. IDs the API omits
- * (deleted/private) are simply absent from the map; fields it omits are undefined.
+ * Batch-fetch video details via videos.list?part=contentDetails,status,snippet,
+ * UP TO 50 ids per call (1 quota unit each — extra parts like `status` and
+ * `snippet` cost 0 extra quota, so the description rides along free in this call).
+ * Returns a Map videoId -> { durationSeconds, embeddable, description }. IDs the
+ * API omits (deleted/private) are simply absent from the map; fields it omits are
+ * undefined.
  * @param {Array<string>} videoIds
- * @returns {Promise<Map<string, {durationSeconds:(number|undefined), embeddable:(boolean|undefined)}>>}
+ * @returns {Promise<Map<string, {durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string}>>}
  */
 export async function getVideoDetails(videoIds) {
   const out = new Map();
@@ -308,16 +310,18 @@ export async function getVideoDetails(videoIds) {
   for (let i = 0; i < ids.length; i += 50) {
     const batch = ids.slice(i, i + 50);
     const data = await apiGet('videos', {
-      part: 'contentDetails,status',
+      part: 'contentDetails,status,snippet',
       id: batch.join(','),
     });
     for (const item of data.items || []) {
       if (!item.id) continue;
       const cd = item.contentDetails || {};
       const st = item.status || {};
+      const snip = item.snippet || {};
       out.set(item.id, {
         durationSeconds: cd.duration ? parseIsoDuration(cd.duration) : undefined,
         embeddable: typeof st.embeddable === 'boolean' ? st.embeddable : undefined,
+        description: snip.description || '',
       });
     }
   }

@@ -210,6 +210,16 @@ export function seekBy(deltaSeconds) {
   }
 }
 
+/** Seek the current video to an absolute position `seconds` (clamped at 0). */
+export function seekTo(seconds) {
+  if (!player || typeof player.seekTo !== 'function') return;
+  try {
+    player.seekTo(Math.max(0, seconds), true);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Toggle mute. */
 export function toggleMute() {
   if (!player || typeof player.isMuted !== 'function') return;

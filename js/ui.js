@@ -6,7 +6,7 @@
 // encodeURIComponent on the id, and thumbnails are set via img.src only.
 
 import { STATE_NEW } from './config.js';
-import { formatDuration, isShort } from './queue.js';
+import { formatDuration, isShort, parseDescription } from './queue.js';
 
 // ---------------------------------------------------------------------------
 // Small DOM helpers
@@ -266,6 +266,60 @@ export function renderPlayerMeta(container, rec, channels = {}) {
       title: rec.publishedAt,
     })
   );
+}
+
+/**
+ * Render the currently-playing video's description into `container`, with
+ * clickable in-video timestamps (seek the built-in player) and clickable plain
+ * URLs (open in a new tab). Segments come from the pure `parseDescription`
+ * (queue.js). STRICT XSS SAFETY: all description-derived text is set via
+ * textContent / text nodes — never innerHTML; the videoId is passed through
+ * encodeURIComponent when building the timestamp href.
+ *
+ * Timestamp links get a REAL youtube.com/watch?v=…&t=…s href so the native
+ * right-click "Open link in new tab" still works, but a plain left-click is
+ * intercepted to seek the built-in player instead of navigating.
+ *
+ * @param {HTMLElement} container the #player-description element
+ * @param {object|null} rec video record (uses rec.description, rec.videoId)
+ * @param {{ onSeek: (seconds:number) => void }} handlers
+ */
+export function renderDescription(container, rec, { onSeek } = {}) {
+  if (!container) return;
+  clear(container);
+  if (!rec || !rec.description || !rec.description.trim()) {
+    container.hidden = true;
+    return;
+  }
+  const watchBase = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
+  for (const seg of parseDescription(rec.description)) {
+    if (seg.type === 'timestamp') {
+      const a = el('a', {
+        class: 'player__desc-ts',
+        href: `${watchBase}&t=${seg.seconds}s`,
+        text: seg.text, // safe
+      });
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (typeof onSeek === 'function') onSeek(seg.seconds);
+      });
+      container.append(a);
+    } else if (seg.type === 'url') {
+      container.append(
+        el('a', {
+          class: 'player__desc-link',
+          href: seg.url,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          text: seg.text, // safe
+        })
+      );
+    } else {
+      // Plain text: append as a text node (newlines preserved via CSS pre-wrap).
+      container.append(document.createTextNode(seg.text));
+    }
+  }
+  container.hidden = false;
 }
 
 /**

@@ -853,8 +853,11 @@ body.app-active #app-main.app {
   container-name: player;
 }
 .player__frame {
-  position: sticky; /* video stays visible at the top while the info can scroll */
-  top: 0;
+  /* Scrolls WITH the rest of .player: as the pane scrolls, the video rises out
+     of view and the full description is revealed (frame + bar + description are
+     one continuous scrolling column). Must stay `relative` (not `static`) so the
+     absolutely-positioned iframe / empty overlay below stay pinned inside this box. */
+  position: relative;
   width: 100%; /* fills .player, which is height-capped to keep 16:9 + fit the viewport */
   aspect-ratio: 16 / 9;
   background: #000;
@@ -927,6 +930,37 @@ body.app-active #app-main.app {
   gap: 8px;
   flex: 0 0 auto;
 }
+/* The now-playing video's description, below the sticky frame + info bar. Scrolls
+   with the player pane (.workspace__player is overflow-y:auto). Preserves the
+   description's own newlines and wraps long unbroken tokens (URLs) rather than
+   overflowing. */
+.player__description {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap; /* preserve description line breaks */
+  overflow-wrap: anywhere; /* wrap long URLs / tokens instead of overflowing */
+  line-height: 1.5;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+/* A display value overrides the UA [hidden] rule, so hide explicitly. */
+.player__description[hidden] {
+  display: none;
+}
+/* Clickable in-video timestamps and plain URLs inside the description. */
+.player__desc-ts,
+.player__desc-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.player__desc-ts:hover,
+.player__desc-link:hover,
+.player__desc-ts:focus-visible,
+.player__desc-link:focus-visible {
+  text-decoration: underline;
+}
 .player__rates {
   display: flex;
   gap: 6px;
@@ -982,8 +1016,8 @@ body.app-active #app-main.app {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow-hover);
 }
 
-/* Stack below this width: player sticky on top, queue below; release the
-   full-height lock so the page scrolls normally. */
+/* Stack below this width: player above the queue; release the full-height lock
+   so the whole page scrolls normally as one column. */
 @media (max-width: 900px) {
   body.app-active {
     height: auto;

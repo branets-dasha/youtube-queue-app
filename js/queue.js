@@ -391,3 +391,64 @@ export function effectiveRate(preferredRate, defaultRate, currentRate) {
   if (isPreset(defaultRate)) return defaultRate;
   return currentRate;
 }
+
+// ---------------------------------------------------------------------------
+// Description parsing (linkify timestamps + urls for the video description)
+// ---------------------------------------------------------------------------
+
+// A timestamp (M:SS / MM:SS / H:MM:SS / HH:MM:SS) OR an http(s) url. The `\w`
+// boundaries keep a timestamp from matching when glued to surrounding
+// digits/word-chars (e.g. "1234:56", "192:168", "v1:23x"); seconds are always
+// 00-59 and, when an hours field is present, the minutes field is too.
+const DESCRIPTION_TOKEN_RE =
+  /(?<!\w)\d{1,2}:[0-5]\d(?::[0-5]\d)?(?!\w)|https?:\/\/\S+/g;
+
+// Trailing sentence punctuation that belongs to the surrounding prose, not the url.
+const URL_TRAILING_PUNCT_RE = /[.,)\]}!?]+$/;
+
+/**
+ * Split a video description into an ordered array of segments whose `text`
+ * fields concatenate back to the exact input string. Segment shapes:
+ *   { type:'text', text }                    — a plain run (may hold spaces/newlines)
+ *   { type:'timestamp', text, seconds }      — `text` is the match, `seconds` its total
+ *   { type:'url', text, url }                — `text` and `url` are the matched url
+ * Empty / whitespace-only input returns []. Pure.
+ * @param {string} text
+ * @returns {Array<object>}
+ */
+export function parseDescription(text) {
+  if (typeof text !== 'string' || text.trim() === '') return [];
+
+  const segments = [];
+  const re = new RegExp(DESCRIPTION_TOKEN_RE.source, 'g');
+  let cursor = 0;
+  let m;
+
+  while ((m = re.exec(text)) !== null) {
+    const start = m.index;
+    const isUrl = /^https?:\/\//i.test(m[0]);
+
+    // Strip trailing punctuation off urls so it stays in the surrounding text.
+    let matched = m[0];
+    if (isUrl) matched = matched.replace(URL_TRAILING_PUNCT_RE, '');
+    const end = start + matched.length;
+
+    if (start > cursor) {
+      segments.push({ type: 'text', text: text.slice(cursor, start) });
+    }
+
+    if (isUrl) {
+      segments.push({ type: 'url', text: matched, url: matched });
+    } else {
+      const parts = matched.split(':').map((p) => parseInt(p, 10));
+      const [h, mm, ss] = parts.length === 3 ? parts : [0, parts[0], parts[1]];
+      segments.push({ type: 'timestamp', text: matched, seconds: h * 3600 + mm * 60 + ss });
+    }
+
+    cursor = end;
+    re.lastIndex = end; // reconsider any stripped punctuation as text
+  }
+
+  if (cursor < text.length) segments.push({ type: 'text', text: text.slice(cursor) });
+  return segments;
+}

@@ -20,6 +20,7 @@ import {
   resumeStart,
   effectiveRate,
   incrementalSince,
+  parseDescription,
 } from './queue.js';
 
 let passed = 0;
@@ -307,6 +308,74 @@ test('incrementalSince is always >= floor', () => {
   const bound = incrementalSince(recs, floor, 6 * HOUR); // 3h - 6h would be < floor
   assert.ok(compareIso(bound, floor) >= 0);
   assert.equal(bound, floor);
+});
+
+// --- parseDescription: linkify timestamps + urls, exact round-trip ---
+
+// Helper: the concatenated segment text must equal the original input.
+const roundTrips = (input) =>
+  parseDescription(input).map((s) => s.text).join('') === input;
+
+test('parseDescription parses a YouTube-style chapter list with newlines', () => {
+  const input = '0:00 Intro\n1:23 Topic A\n1:02:03 Topic B';
+  const segs = parseDescription(input);
+  assert.ok(roundTrips(input));
+  const stamps = segs.filter((s) => s.type === 'timestamp');
+  assert.deepEqual(
+    stamps.map((s) => [s.text, s.seconds]),
+    [['0:00', 0], ['1:23', 83], ['1:02:03', 3723]],
+  );
+  // Non-timestamp runs preserve the labels + newlines.
+  const texts = segs.filter((s) => s.type === 'text').map((s) => s.text);
+  assert.deepEqual(texts, [' Intro\n', ' Topic A\n', ' Topic B']);
+});
+
+test('parseDescription handles a bare M:SS and an H:MM:SS', () => {
+  const a = parseDescription('4:13');
+  assert.deepEqual(a, [{ type: 'timestamp', text: '4:13', seconds: 253 }]);
+  const b = parseDescription('2:03:04');
+  assert.deepEqual(b, [{ type: 'timestamp', text: '2:03:04', seconds: 7384 }]);
+});
+
+test('parseDescription does NOT treat glued/out-of-range digits as timestamps', () => {
+  for (const input of ['3:999', '1234:56', '192:168', '1:60', 'v1:23x']) {
+    const segs = parseDescription(input);
+    assert.ok(roundTrips(input), `round-trip ${input}`);
+    assert.equal(
+      segs.filter((s) => s.type === 'timestamp').length,
+      0,
+      `no timestamp in "${input}"`,
+    );
+  }
+});
+
+test('parseDescription strips trailing punctuation off a url, leaving it in text', () => {
+  const input = 'see https://example.com/x. thanks';
+  const segs = parseDescription(input);
+  assert.ok(roundTrips(input));
+  assert.deepEqual(segs, [
+    { type: 'text', text: 'see ' },
+    { type: 'url', text: 'https://example.com/x', url: 'https://example.com/x' },
+    { type: 'text', text: '. thanks' },
+  ]);
+});
+
+test('parseDescription mixes text, timestamp and url in one string', () => {
+  const input = 'watch at 1:30 then visit http://foo.bar/a) ok';
+  const segs = parseDescription(input);
+  assert.ok(roundTrips(input));
+  assert.deepEqual(segs, [
+    { type: 'text', text: 'watch at ' },
+    { type: 'timestamp', text: '1:30', seconds: 90 },
+    { type: 'text', text: ' then visit ' },
+    { type: 'url', text: 'http://foo.bar/a', url: 'http://foo.bar/a' },
+    { type: 'text', text: ') ok' },
+  ]);
+});
+
+test('parseDescription returns [] for empty / whitespace-only input', () => {
+  assert.deepEqual(parseDescription(''), []);
+  assert.deepEqual(parseDescription('   \n\t '), []);
 });
 
 console.log(`\n${passed} passed`);

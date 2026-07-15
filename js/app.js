@@ -67,6 +67,7 @@ import {
   renderQueue,
   renderStats,
   renderPlayerMeta,
+  renderDescription,
   setCardState,
   setCardRate,
   setVisible,
@@ -78,6 +79,7 @@ import {
   capturePosition,
   togglePlay,
   seekBy,
+  seekTo,
   toggleMute,
   requestFullscreen,
   getIframe as getPlayerIframe,
@@ -214,9 +216,12 @@ function cacheDom() {
   dom.emptyState = byId('empty-state');
   dom.curtain = byId('curtain');
 
-  // Player pane.
+  // Player pane. The pane itself is the scroll container (selected by class,
+  // there's no id) so a new video can reset it to the top.
+  dom.playerPane = document.querySelector('.workspace__player');
   dom.playerTitle = byId('player-title');
   dom.playerMeta = byId('player-meta');
+  dom.playerDescription = byId('player-description');
   dom.playerEmpty = byId('player-empty');
   dom.rate1x = byId('rate-1x');
   dom.rate15x = byId('rate-15x');
@@ -585,7 +590,9 @@ async function backfillDetails() {
   const missing = computeVisible(state.records, state.floor)
     .filter(
       (r) =>
-        typeof r.durationSeconds !== 'number' || typeof r.embeddable !== 'boolean'
+        typeof r.durationSeconds !== 'number' ||
+        typeof r.embeddable !== 'boolean' ||
+        typeof r.description !== 'string'
     )
     .map((r) => r.videoId);
   if (missing.length === 0) return;
@@ -597,6 +604,7 @@ async function backfillDetails() {
       if (!d) continue;
       if (typeof d.durationSeconds === 'number') r.durationSeconds = d.durationSeconds;
       if (typeof d.embeddable === 'boolean') r.embeddable = d.embeddable;
+      if (typeof d.description === 'string') r.description = d.description;
     }
     await putVideos(state.records);
   } catch {
@@ -878,6 +886,12 @@ function setPlayerNowPlaying(rec) {
   // Channel avatar + name + posted date, like the queue cards (updated on every
   // load, incl. auto-advance).
   renderPlayerMeta(dom.playerMeta, rec, state.channels);
+  // Description below the player: clickable in-video timestamps seek the built-in
+  // player; plain URLs open in a new tab. Hidden when the record has no description.
+  renderDescription(dom.playerDescription, rec, { onSeek: seekTo });
+  // A new video loaded: scroll the pane back to the top so the video shows,
+  // rather than keeping the previous video's (possibly scrolled) position.
+  if (dom.playerPane) dom.playerPane.scrollTop = 0;
   setVisible(dom.playerEmpty, false);
   if (dom.skipBtn) dom.skipBtn.disabled = false;
 }
@@ -887,6 +901,7 @@ function showPlayerEmpty(caughtUp) {
   state.playing = null;
   if (dom.playerTitle) dom.playerTitle.textContent = '';
   renderPlayerMeta(dom.playerMeta, null);
+  renderDescription(dom.playerDescription, null, { onSeek: seekTo });
   if (dom.playerEmpty) {
     dom.playerEmpty.textContent = caughtUp
       ? 'All caught up — nothing left to play.'
@@ -1304,8 +1319,10 @@ function onGlobalWheel(e) {
   // already-covered curtain on any width. Reuse the player-above-queue breakpoint.
   const narrow = window.matchMedia('(max-width: 900px)').matches;
   const t = e.target;
-  // Let the queue's own scroll area scroll normally (never triggers the curtain).
-  if (t && typeof t.closest === 'function' && t.closest('.workspace__queue')) return;
+  // Let EITHER workspace pane (queue or player) scroll normally — wheeling over
+  // the queue list or the player's description never triggers the curtain. Only
+  // the header/toolbar/stats region ABOVE .workspace covers the page.
+  if (t && typeof t.closest === 'function' && t.closest('.workspace')) return;
   if (e.deltaY > 0) {
     if (!narrow && !state.curtain) setCurtain(true); // scroll down -> cover (wide only)
   } else if (e.deltaY < 0) {

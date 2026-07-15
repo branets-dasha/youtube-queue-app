@@ -112,7 +112,6 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
 - **Watching a video here does not count toward its public view count.** YouTube only counts a playback that's [started with the player's **native play button**](https://developers.google.com/youtube/iframe_api_reference); this app starts playback programmatically (its own controls plus auto-advance) through the IFrame API, which that rule excludes.
-- **Privacy curtain** — scrolling down outside the queue (or `ESC`) covers the page with a full-screen overlay; scrolling up (or `ESC` again) lifts it. Because the YouTube player's iframe intercepts mouse events, scrolling down over the player won't cover the page.
 
 ## Part 2 — For developers: running it yourself
 
