@@ -191,12 +191,15 @@ function avatarPlaceholder(title) {
  * Build the channel avatar for a card, looked up by channelId in the channels
  * map (decoupled from the video record, so it self-heals for already-stored
  * videos once the map is populated). Falls back to a placeholder circle.
- * img.src ONLY; alt = channel title.
+ * img.src ONLY; alt = channel title, or '' when `decorative` (the avatar sits
+ * inside the channel link next to the name, so the name alone is the link's
+ * accessible name and the image must not repeat it).
  * @param {object} rec video record
  * @param {Record<string,{title:string,avatarUrl:string}>} channels
+ * @param {boolean} [decorative] render with an empty alt
  * @returns {HTMLElement}
  */
-function buildAvatar(rec, channels) {
+function buildAvatar(rec, channels, decorative = false) {
   const ch = channels && rec.channelId ? channels[rec.channelId] : null;
   const title = rec.channelTitle || (ch && ch.title) || '';
   const avatarUrl = ch && ch.avatarUrl ? ch.avatarUrl : '';
@@ -204,7 +207,7 @@ function buildAvatar(rec, channels) {
 
   const img = el('img', {
     class: 'row__avatar',
-    alt: title, // channel title
+    alt: decorative ? '' : title, // channel title (or nothing when inside the link)
     loading: 'lazy',
     width: '36',
     height: '36',
@@ -219,27 +222,41 @@ function buildAvatar(rec, channels) {
 }
 
 /**
- * Build the channel name element. When the record carries a channelId, render it
- * as a link to that channel on YouTube (new tab, noopener); the id is passed
- * through encodeURIComponent and the visible name via textContent (XSS-safe). A
- * click is stopPropagation'd so it opens the channel even if an ancestor has a
- * click-to-play handler. With no channelId, render plain text.
+ * Build the channel badge: the avatar + the channel name. When the record
+ * carries a channelId, BOTH sit inside a SINGLE anchor to that channel on
+ * YouTube (new tab, noopener) — one link, one tab stop, so clicking the icon or
+ * the name both navigate. The id is passed through encodeURIComponent and the
+ * visible name via textContent (XSS-safe). A click is stopPropagation'd so it
+ * opens the channel even if an ancestor has a click-to-play handler. With no
+ * channelId, render the avatar + plain text, unlinked.
+ *
+ * Returns a DocumentFragment in the unlinked case so callers can spread it into
+ * their flex row exactly as before.
  * @param {object} rec video record
- * @returns {HTMLElement}
+ * @param {Record<string,{title:string,avatarUrl:string}>} channels
+ * @returns {Node}
  */
-function buildChannelLink(rec) {
+function buildChannelBadge(rec, channels) {
   const title = rec.channelTitle || '';
   if (rec.channelId) {
-    return el('a', {
-      class: 'row__channel',
-      href: 'https://www.youtube.com/channel/' + encodeURIComponent(rec.channelId),
-      target: '_blank',
-      rel: 'noopener',
-      text: title, // safe
-      onclick: (e) => e.stopPropagation(),
-    });
+    return el(
+      'a',
+      {
+        class: 'row__channel-link',
+        href: 'https://www.youtube.com/channel/' + encodeURIComponent(rec.channelId),
+        target: '_blank',
+        rel: 'noopener',
+        onclick: (e) => e.stopPropagation(),
+      },
+      [
+        buildAvatar(rec, channels, true), // decorative: name below is the link text
+        el('span', { class: 'row__channel', text: title }), // safe
+      ]
+    );
   }
-  return el('span', { class: 'row__channel', text: title });
+  const frag = document.createDocumentFragment();
+  frag.append(buildAvatar(rec, channels), el('span', { class: 'row__channel', text: title }));
+  return frag;
 }
 
 /**
@@ -256,8 +273,7 @@ export function renderPlayerMeta(container, rec, channels = {}) {
   clear(container);
   if (!rec) return;
   container.append(
-    buildAvatar(rec, channels),
-    buildChannelLink(rec),
+    buildChannelBadge(rec, channels),
     el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
     el('time', {
       class: 'row__time-abs',
@@ -439,8 +455,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     text: rec.title, // safe
   });
 
-  const avatar = buildAvatar(rec, channels);
-  const channel = buildChannelLink(rec);
+  const channelBadge = buildChannelBadge(rec, channels);
 
   const timeAbs = el('time', {
     class: 'row__time-abs',
@@ -451,8 +466,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
   const meta = el('div', { class: 'row__meta' }, [
     titleLink,
     el('div', { class: 'row__sub' }, [
-      avatar,
-      channel,
+      channelBadge,
       el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
       timeAbs,
     ]),

@@ -583,16 +583,28 @@ main {
 .row__channel {
   font-weight: 500;
 }
-/* The channel name links to the channel (card + player). Keep the muted inline
-   look — inherit the sub-line colour rather than the bright accent link colour —
-   and reveal the affordance with an underline on hover/focus. */
-a.row__channel {
+/* The avatar + channel name are wrapped in ONE anchor to the channel (card +
+   player), so clicking either navigates and it is a single tab stop. inline-flex
+   + the same 6px gap reproduces what two separate flex items looked like. Keep
+   the muted inline look — inherit the sub-line colour rather than the bright
+   accent link colour — and reveal the affordance with an underline on the name
+   on hover/focus (the avatar must not get underlined). */
+.row__channel-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   color: inherit;
   text-decoration: none;
 }
-a.row__channel:hover,
-a.row__channel:focus-visible {
+.row__channel-link:hover .row__channel,
+.row__channel-link:focus-visible .row__channel {
   text-decoration: underline;
+}
+.row__channel-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 999px;
 }
 .row__dot {
   opacity: 0.6;
