@@ -185,6 +185,25 @@ export function nextPlayable(sorted, currentVideoId) {
 }
 
 /**
+ * The LAST handled ("skipped") record in an ascending (oldest->newest) list —
+ * i.e. the latest one in render order. "Handled" follows the app-wide convention:
+ * state !== 'new' (STATE_SKIPPED is the only handled state). Callers pass the
+ * list they actually render, so any active view filter (Hide skipped) or display
+ * windowing is already applied by the caller and honoured here. Returns null when
+ * the list is empty or holds no handled record. Pure; does not mutate.
+ * @param {Array<object>} records rendered records, ascending by publishedAt
+ * @returns {object|null} the last handled record, or null
+ */
+export function lastSkipped(records) {
+  const list = Array.isArray(records) ? records : [];
+  for (let k = list.length - 1; k >= 0; k--) {
+    const r = list[k];
+    if (r && r.state !== STATE_NEW) return r;
+  }
+  return null;
+}
+
+/**
  * Compute the live CUTOFF marker: the boundary of the contiguous handled prefix
  * among the currently-present videos — "everything up to here is handled; the
  * first UNMARKED video is just after it."

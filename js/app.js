@@ -54,6 +54,7 @@ import {
   computeVisible,
   computeCutoff,
   videosToClean,
+  lastSkipped,
   nextPlayable,
   resumeStart,
   effectiveRate,
@@ -203,6 +204,7 @@ function cacheDom() {
   dom.refreshNewBtn = byId('refresh-new-btn');
   dom.cleanupBtn = byId('cleanup-btn');
   dom.hideMarkedBtn = byId('hide-marked-btn');
+  dom.scrollSkippedBtn = byId('scroll-skipped-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
   dom.defaultRateBtn = byId('default-rate-btn');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
@@ -244,6 +246,8 @@ function bindEvents() {
   if (dom.refreshNewBtn) dom.refreshNewBtn.addEventListener('click', onRefreshNew);
   dom.cleanupBtn.addEventListener('click', onCleanup);
   if (dom.hideMarkedBtn) dom.hideMarkedBtn.addEventListener('click', onToggleHideMarked);
+  if (dom.scrollSkippedBtn)
+    dom.scrollSkippedBtn.addEventListener('click', onScrollToLastSkipped);
   if (dom.scrollPlayingBtn) dom.scrollPlayingBtn.addEventListener('click', onScrollToPlaying);
   if (dom.defaultRateBtn) dom.defaultRateBtn.addEventListener('click', onCycleDefaultRate);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
@@ -939,6 +943,33 @@ function onScrollToPlaying() {
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
+/**
+ * Reflect the rendered list onto the "Jump to last skipped" button: it only needs
+ * SOMETHING to scroll to (it falls back to the first card when nothing rendered is
+ * skipped), so it is enabled iff at least one card is rendered. Called from
+ * render(), the only place the rendered set changes.
+ */
+function updateSkippedControls(hasCards) {
+  if (!dom.scrollSkippedBtn) return;
+  dom.scrollSkippedBtn.disabled = !hasCards;
+}
+
+/**
+ * Scroll the queue so the LAST skipped video's card is centered — reusing the
+ * same centering scroll as "scroll to playing". The target comes from the pure
+ * lastSkipped() over the RENDERED records (Hide-skipped filter + display window
+ * already applied), so the card always exists. With Hide-skipped on, nothing
+ * rendered is skipped: fall back to the first rendered card.
+ */
+function onScrollToLastSkipped() {
+  const list = windowedRecords(viewRecords());
+  const target = lastSkipped(list) || list[0];
+  if (!target) return; // empty list: button is disabled anyway
+  const card = findCard(target.videoId);
+  if (!card) return;
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
 /** Move the .row--playing highlight to the card for `videoId` (or clear it). */
 function markPlayingCard(videoId) {
   for (const row of dom.queueList.querySelectorAll('.row--playing')) {
@@ -1114,26 +1145,42 @@ function recompute() {
   render();
 }
 
+/**
+ * PURE view filter: "hide handled" shows only still-'new' videos. Applied to
+ * state.visible BEFORE the window/Show-all slice; floor/cutoff/cleanup/data and
+ * auto-advance (nextPlayable) are untouched (state.visible itself is unchanged).
+ * @returns {Array<object>} the filtered view list, ascending
+ */
+function viewRecords() {
+  return state.hideMarked
+    ? state.visible.filter((r) => r.state === STATE_NEW)
+    : state.visible;
+}
+
+/**
+ * PURE display windowing: the first QUEUE_DISPLAY_LIMIT records of the (filtered)
+ * view, or all of them under "Show all". The result is exactly the set rendered as
+ * cards, so DOM lookups against it always resolve.
+ * @param {Array<object>} viewList output of viewRecords()
+ * @returns {Array<object>}
+ */
+function windowedRecords(viewList) {
+  return state.showAll ? viewList : viewList.slice(0, QUEUE_DISPLAY_LIMIT);
+}
+
 function render() {
   updateStats();
 
-  // PURE view filter: "hide handled" shows only still-'new' videos. Applied to
-  // state.visible BEFORE the window/Show-all slice; floor/cutoff/cleanup/data and
-  // auto-advance (nextPlayable) are untouched (state.visible itself is unchanged).
-  const viewList = state.hideMarked
-    ? state.visible.filter((r) => r.state === STATE_NEW)
-    : state.visible;
-
+  const viewList = viewRecords();
   const total = viewList.length;
   const hasItems = total > 0;
   setVisible(dom.queueList, hasItems);
   setVisible(dom.emptyState, !hasItems && hasSession());
 
-  // PURE display windowing: render only the first QUEUE_DISPLAY_LIMIT cards of the
-  // (filtered) view by default; the "Show all (N)" count reflects the filtered
+  // Render only the windowed cards; the "Show all (N)" count reflects the filtered
   // total. state.visible and auto-advance are untouched — only rendered CARDS are
   // limited. All re-render paths (cleanup, refresh, toggle) run through here.
-  const windowed = state.showAll ? viewList : viewList.slice(0, QUEUE_DISPLAY_LIMIT);
+  const windowed = windowedRecords(viewList);
   const more =
     !state.showAll && total > QUEUE_DISPLAY_LIMIT ? { total, onShowAll } : null;
 
@@ -1158,6 +1205,7 @@ function render() {
   // actually in the rendered list, and that can change here (window limit,
   // Hide-skipped filter, prune), so re-evaluate its disabled state every render.
   updatePlayingControls();
+  updateSkippedControls(windowed.length > 0);
 }
 
 /**

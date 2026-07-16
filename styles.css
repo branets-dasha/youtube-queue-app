@@ -824,11 +824,17 @@ body.app-active #app-main.app {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-/* "Scroll to playing" jump button: pushed to the far RIGHT edge of the header
-   (auto margin absorbs the free space) while Trim front / Hide skipped stay
-   grouped at the left. Sizing/disabled look reuse the base .btn / .btn--icon. */
+/* Jump buttons ("jump to last skipped", "scroll to playing"): pushed to the far
+   RIGHT edge of the header (auto margin absorbs the free space) while Trim front
+   / Hide skipped stay grouped at the left. Sizing/disabled look reuse the base
+   .btn / .btn--icon. */
 .queue-header__jump {
   margin-left: auto;
+}
+/* Only the FIRST jump button absorbs the free space — the rest sit right next to
+   it (separated by the header's flex gap) as one right-aligned group. */
+.queue-header__jump ~ .queue-header__jump {
+  margin-left: 0;
 }
 .workspace__player {
   min-height: 0;

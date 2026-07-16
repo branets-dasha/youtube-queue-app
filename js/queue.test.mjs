@@ -11,6 +11,7 @@ import {
   computeVisible,
   computeCutoff,
   videosToClean,
+  lastSkipped,
   nextPlayable,
   compareIso,
   parseIsoDuration,
@@ -80,6 +81,42 @@ test('computeQueue still returns only still-new videos', () => {
     rec('c', '2026-01-03T00:00:00Z', 'skipped'),
   ];
   assert.deepEqual(computeQueue(recs, null).map((r) => r.videoId), ['b']);
+});
+
+// --- lastSkipped: jump target = last handled record in render order ---
+
+test('lastSkipped returns the LAST handled record when several are present', () => {
+  const recs = [
+    rec('a', '2026-01-01T00:00:00Z', 'skipped'),
+    rec('b', '2026-01-02T00:00:00Z', 'new'),
+    rec('c', '2026-01-03T00:00:00Z', 'skipped'),
+    rec('d', '2026-01-04T00:00:00Z', 'new'),
+    rec('e', '2026-01-05T00:00:00Z', 'skipped'),
+  ];
+  assert.equal(lastSkipped(recs).videoId, 'e');
+});
+
+test('lastSkipped ignores newer new videos: skipped need not be last in the list', () => {
+  const recs = [
+    rec('a', '2026-01-01T00:00:00Z', 'new'),
+    rec('b', '2026-01-02T00:00:00Z', 'skipped'),
+    rec('c', '2026-01-03T00:00:00Z', 'new'),
+    rec('d', '2026-01-04T00:00:00Z', 'new'),
+  ];
+  assert.equal(lastSkipped(recs).videoId, 'b');
+});
+
+test('lastSkipped returns null when nothing is handled', () => {
+  const recs = [
+    rec('a', '2026-01-01T00:00:00Z', 'new'),
+    rec('b', '2026-01-02T00:00:00Z', 'new'),
+  ];
+  assert.equal(lastSkipped(recs), null);
+});
+
+test('lastSkipped returns null for an empty / missing list', () => {
+  assert.equal(lastSkipped([]), null);
+  assert.equal(lastSkipped(undefined), null);
 });
 
 // --- computeCutoff: contiguous handled-prefix marker, floor-bounded, tie-safe ---
