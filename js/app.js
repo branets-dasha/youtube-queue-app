@@ -29,6 +29,8 @@ import {
   setPlaybackRate,
   getDefaultRate,
   setDefaultRate,
+  getPlayMode,
+  setPlayMode,
   getHideMarked,
   setHideMarked,
   DbBlockedError,
@@ -106,6 +108,7 @@ const state = {
   playerInited: false,
   rate: 1, // player playback rate (1 / 1.5 / 2)
   defaultRate: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
+  playMode: 'auto', // `manual` cues the player; `auto` preserves programmatic start
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
   hideMarked: false, // view filter: hide skipped (handled) videos (persisted)
   curtain: false, // privacy curtain overlay: true = covering the page
@@ -163,6 +166,9 @@ async function init() {
   state.defaultRate = [1, 1.5, 2].includes(storedDefault) ? storedDefault : null;
   updateDefaultRateButton();
 
+  state.playMode = getPlayMode();
+  updatePlayModeControl();
+
   // Restore the persisted "hide handled" view toggle and reflect the button.
   state.hideMarked = getHideMarked();
   updateHideMarkedButton();
@@ -207,6 +213,9 @@ function cacheDom() {
   dom.scrollSkippedBtn = byId('scroll-skipped-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
   dom.defaultRateBtn = byId('default-rate-btn');
+  dom.playModeSelect = byId('play-mode-select');
+  dom.playModeHelpBtn = byId('play-mode-help-btn');
+  dom.playModeHelp = byId('play-mode-help');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
   dom.changeClientBtn = byId('change-client-btn');
 
@@ -250,6 +259,8 @@ function bindEvents() {
     dom.scrollSkippedBtn.addEventListener('click', onScrollToLastSkipped);
   if (dom.scrollPlayingBtn) dom.scrollPlayingBtn.addEventListener('click', onScrollToPlaying);
   if (dom.defaultRateBtn) dom.defaultRateBtn.addEventListener('click', onCycleDefaultRate);
+  if (dom.playModeSelect) dom.playModeSelect.addEventListener('change', onPlayModeChange);
+  if (dom.playModeHelpBtn) dom.playModeHelpBtn.addEventListener('click', onTogglePlayModeHelp);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
   if (dom.rate1x) dom.rate1x.addEventListener('click', () => onRate(1));
@@ -833,8 +844,9 @@ function ensurePlayer() {
 }
 
 /**
- * Play a video in the embedded right-pane player. Non-embeddable videos can't be
- * framed, so fall back to opening them on YouTube with a brief notice.
+ * Load a video in the embedded right-pane player. In Auto mode it starts as
+ * before; in Manual mode it is cued and awaits YouTube's native play button.
+ * Non-embeddable videos can't be framed, so fall back to YouTube itself.
  * @param {string} videoId
  */
 function playVideo(videoId) {
@@ -854,7 +866,7 @@ function playVideo(videoId) {
   onRate(effectiveRate(rec.preferredRate, state.defaultRate, state.rate));
   // Resume from the saved position when it's a meaningful mid-point, else start 0.
   const start = resumeStart(rec.positionSeconds, rec.durationSeconds);
-  playerLoad(videoId, start);
+  playerLoad(videoId, start, state.playMode === 'auto');
   setPlayerNowPlaying(rec);
   markPlayingCard(videoId);
   updatePlayingControls(); // now playing -> enable the "scroll to playing" jump
@@ -1249,6 +1261,25 @@ function updateDefaultRateButton() {
   dom.defaultRateBtn.textContent = `Default speed: ${label}`;
 }
 
+/** Persist and reflect the selected start behavior. It applies on the next load. */
+function onPlayModeChange() {
+  state.playMode = dom.playModeSelect && dom.playModeSelect.value === 'manual' ? 'manual' : 'auto';
+  setPlayMode(state.playMode);
+  updatePlayModeControl();
+}
+
+function updatePlayModeControl() {
+  if (dom.playModeSelect) dom.playModeSelect.value = state.playMode;
+}
+
+/** Toggle the concise Manual-mode explanation beside its setting. */
+function onTogglePlayModeHelp() {
+  if (!dom.playModeHelp || !dom.playModeHelpBtn) return;
+  const open = dom.playModeHelp.hidden;
+  dom.playModeHelp.hidden = !open;
+  dom.playModeHelpBtn.setAttribute('aria-expanded', String(open));
+}
+
 function onShowAll() {
   state.showAll = true;
   render();
@@ -1460,7 +1491,9 @@ function onGlobalKeydown(e) {
       t === 'BUTTON' || t === 'A' || t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA';
     if (!interactive) {
       e.preventDefault();
-      if (state.playing) togglePlay();
+      // Manual mode must wait for the viewer to use YouTube's native controls;
+      // keep this app-level shortcut from programmatically starting playback.
+      if (state.playing && state.playMode === 'auto') togglePlay();
     }
   } else if (key === 'arrowleft') {
     if (state.playing) {

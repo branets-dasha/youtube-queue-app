@@ -273,6 +273,62 @@ main {
   gap: 8px;
   align-items: center;
 }
+.toolbar-setting {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.toolbar-setting select {
+  padding: 7px 26px 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.toolbar-setting select:focus-visible,
+.toolbar-setting__help:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.toolbar-setting__help {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.toolbar-setting__help:hover {
+  background: var(--surface-2);
+}
+.toolbar-setting__popup {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-hover);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.toolbar-setting__popup[hidden] {
+  display: none;
+}
 .auth-status {
   font-size: 0.9rem;
   color: var(--text-dim);

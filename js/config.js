@@ -33,6 +33,10 @@ export const DEFAULT_PLAYBACK_RATE = 1;
 // absent/null = unset). Distinct from LS_PLAYBACK_RATE (the live/current rate):
 // this is the fallback applied to a video that has no per-video preferredRate.
 export const LS_DEFAULT_RATE = 'yqa_default_rate';
+// Persisted player start behavior. Auto preserves the original programmatic
+// playback; Manual cues the video and leaves its native YouTube play button for
+// the viewer to start it.
+export const LS_PLAY_MODE = 'yqa_play_mode';
 // Persisted "hide handled (skipped) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 

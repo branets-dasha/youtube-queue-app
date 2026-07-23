@@ -23,6 +23,7 @@ import {
   LS_CHANNELS,
   LS_PLAYBACK_RATE,
   LS_DEFAULT_RATE,
+  LS_PLAY_MODE,
   LS_HIDE_MARKED,
   IDB_NAME,
   IDB_VERSION,
@@ -154,6 +155,25 @@ export function setDefaultRate(rate) {
   try {
     if (rate == null) localStorage.removeItem(LS_DEFAULT_RATE);
     else localStorage.setItem(LS_DEFAULT_RATE, String(rate));
+  } catch {
+    /* ignore */
+  }
+}
+
+// The persisted play-mode setting. Only `manual` opts out of the original
+// programmatic start; invalid/missing values intentionally fall back to auto.
+
+export function getPlayMode() {
+  try {
+    return localStorage.getItem(LS_PLAY_MODE) === 'manual' ? 'manual' : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+export function setPlayMode(mode) {
+  try {
+    localStorage.setItem(LS_PLAY_MODE, mode === 'manual' ? 'manual' : 'auto');
   } catch {
     /* ignore */
   }

@@ -152,6 +152,28 @@
             <button id="change-client-btn" class="btn btn--ghost" type="button">
               Change Client ID
             </button>
+            <div class="toolbar-setting">
+              <label for="play-mode-select">Play mode</label>
+              <select id="play-mode-select" aria-describedby="play-mode-help">
+                <option value="auto">Auto</option>
+                <option value="manual">Manual</option>
+              </select>
+              <button
+                id="play-mode-help-btn"
+                class="toolbar-setting__help"
+                type="button"
+                aria-label="What is Manual play mode?"
+                aria-expanded="false"
+                aria-controls="play-mode-help"
+              >
+                ?
+              </button>
+              <div id="play-mode-help" class="toolbar-setting__popup" role="tooltip" hidden>
+                Manual mode loads each video without starting it. Use YouTube's own
+                play button to begin watching; this can make the playback eligible
+                to count as an official YouTube view.
+              </div>
+            </div>
             <button
               id="default-rate-btn"
               class="btn btn--ghost"

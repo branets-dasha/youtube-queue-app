@@ -11,7 +11,7 @@ let player = null; // YT.Player instance (once created)
 let ready = false; // true once the player's onReady has fired
 let currentVideoId = null; // id of the video currently loaded
 let currentRate = 1; // playback rate, re-applied on each new video
-let pending = null; // { videoId, startSeconds } requested before the player was ready
+let pending = null; // { videoId, startSeconds, autoplay } requested before player readiness
 let handlers = {}; // { onEnded(videoId), onReady(), onProgress(videoId, seconds) }
 let progressTimer = null; // interval polling getCurrentTime() while playing
 let justEnded = false; // set on ENDED so switching away won't re-capture end-time
@@ -60,7 +60,7 @@ function createPlayer(mountId) {
         if (pending) {
           const p = pending;
           pending = null;
-          doLoad(p.videoId, p.startSeconds);
+          doLoad(p.videoId, p.startSeconds, p.autoplay);
         }
         if (typeof handlers.onReady === 'function') handlers.onReady();
       },
@@ -83,7 +83,7 @@ function createPlayer(mountId) {
   });
 }
 
-function doLoad(videoId, startSeconds = 0) {
+function doLoad(videoId, startSeconds = 0, autoplay = true) {
   // Capture the OUTGOING video's position before switching away — UNLESS it just
   // ended (its position was reset; capturing would re-store the end-time).
   if (currentVideoId && currentVideoId !== videoId && !justEnded) captureProgress();
@@ -91,10 +91,12 @@ function doLoad(videoId, startSeconds = 0) {
   stopProgressPoll();
   currentVideoId = videoId;
   try {
-    // Object form supports startSeconds (resume). Attempts autoplay; a browser
-    // that blocks it simply loads the video paused (an acceptable fallback). The
-    // session begins from a user gesture (Play).
-    player.loadVideoById(startSeconds > 0 ? { videoId, startSeconds } : { videoId });
+    // Object forms preserve the saved resume point. `cueVideoById` deliberately
+    // does not start playback, leaving the iframe's native play button for the
+    // viewer; `loadVideoById` preserves the app's established auto behavior.
+    const options = startSeconds > 0 ? { videoId, startSeconds } : { videoId };
+    if (autoplay) player.loadVideoById(options);
+    else player.cueVideoById(options);
     applyRate();
   } catch {
     /* ignore transient player errors */
@@ -102,19 +104,20 @@ function doLoad(videoId, startSeconds = 0) {
 }
 
 /**
- * Load + play a video by id, optionally resuming at `startSeconds`. If the
- * player is not ready yet, the request is queued and run on ready.
+ * Load a video by id, optionally resuming at `startSeconds`. `autoplay=false`
+ * cues it without playback so the viewer can use YouTube's native play button.
+ * If the player is not ready yet, the request is queued and run on ready.
  * @param {string} videoId
  * @param {number} [startSeconds=0]
  */
-export function loadVideo(videoId, startSeconds = 0) {
+export function loadVideo(videoId, startSeconds = 0, autoplay = true) {
   if (!videoId) return;
   if (!ready || !player) {
-    pending = { videoId, startSeconds };
+    pending = { videoId, startSeconds, autoplay };
     currentVideoId = videoId;
     return;
   }
-  doLoad(videoId, startSeconds);
+  doLoad(videoId, startSeconds, autoplay);
 }
 
 // --- Watch-progress tracking ---------------------------------------------
