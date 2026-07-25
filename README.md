@@ -4,6 +4,8 @@
 
 A purely client-side, single-page web app that turns your YouTube subscription feed into a chronological queue that plays in succession.
 
+![YouTube Queue page screenshot](docs/images/youtube-queue-01.png)
+
  Features:
 
 - Loads all videos from your subscriptions back to a chosen cutoff point.
@@ -38,7 +40,7 @@ The app runs entirely in your browser, but YouTube still needs to know *which* O
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com) and create or select a project (the button next to "Google Cloud").
 2. Go to **APIs and services → Library**, enable the **YouTube Data API v3**.
-3. Got to **OAuth consent screen** and configure it (User type: **External** is fine). In the **Audience** tab add your own Google account under **Test users**. In the **Data access** tab add the scope `https://www.googleapis.com/auth/youtube.force-ssl` — it covers reading your subscriptions/uploads **and** liking videos from the player.
+3. Go to **OAuth consent screen** and configure it (User type: **External** is fine). In the **Audience** tab add your own Google account under **Test users**. In the **Data access** tab add the scope `https://www.googleapis.com/auth/youtube.force-ssl` — it covers reading your subscriptions/uploads **and** liking videos from the player.
 4. Go to the **Clients** tab and create a new client.
    - Application type: **Web application**.
    - Under **Authorized JavaScript origins**, add **exactly**:
@@ -108,7 +110,6 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Likes made on YouTube are not reflected here.** The like state is tracked locally (never fetched), so liking/unliking in the YouTube app or website won't show up in the app, and vice-versa is one-way (this app → YouTube).
 - **Shorts** are detected by a **heuristic** (duration ≤ 90s) and merely badged — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the badge can be wrong for edge cases.
 - **Resume** only covers **in-app** playback position (tracked by the embedded player); it does not sync with YouTube's own watch history.
-- **Undo** is a **silent** revert of your most recent mark (`u`). It restores the video's previous state and rolls the live cutoff back, but a video already deleted by cleanup cannot be restored.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
 - **Watching a video here does not count toward its public view count.** YouTube only counts a playback that's [started with the player's **native play button**](https://developers.google.com/youtube/iframe_api_reference); this app starts playback programmatically (its own controls plus auto-advance) through the IFrame API, which that rule excludes.
