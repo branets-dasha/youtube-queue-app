@@ -34,7 +34,7 @@ The OAuth scope is `https://www.googleapis.com/auth/youtube.force-ssl` ("see, ed
 
 ## Part 1 — For users: using the hosted app
 
-The app runs entirely in your browser, but YouTube still needs to know *which* OAuth app is contacting the API on your behalf. Google does not allow a single shared Client ID for an app like this, so **each user brings their own** Client ID from their own free Google Cloud project. The setup is a bit complicated, but you only need to do it once.
+The app runs entirely in your browser. It fetches your data using the YouTube Data API. The API needs to know which app (client) is contacting it — to count request quotas and other things. I personally use a test Client ID that does not have the capacity to support many users, so **each user brings their own** Client ID from their own free Google Cloud project. The setup is a bit complicated, but you only need to do it once.
 
 ### 1. Create your OAuth 2.0 Client ID (Web application)
 
