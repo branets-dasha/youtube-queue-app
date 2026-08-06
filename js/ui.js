@@ -178,7 +178,7 @@ export function setCardRate(card, preferredRate) {
  * @param {string} title channel title
  * @returns {HTMLElement}
  */
-function avatarPlaceholder(title) {
+export function avatarPlaceholder(title) {
   const letter = ((title || '').trim().charAt(0) || '?').toUpperCase();
   return el('span', {
     class: 'row__avatar row__avatar--placeholder',
@@ -199,7 +199,7 @@ function avatarPlaceholder(title) {
  * @param {boolean} [decorative] render with an empty alt
  * @returns {HTMLElement}
  */
-function buildAvatar(rec, channels, decorative = false) {
+export function buildAvatar(rec, channels, decorative = false) {
   const ch = channels && rec.channelId ? channels[rec.channelId] : null;
   const title = rec.channelTitle || (ch && ch.title) || '';
   const avatarUrl = ch && ch.avatarUrl ? ch.avatarUrl : '';

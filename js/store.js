@@ -21,6 +21,7 @@ import {
   LS_CUTOFF,
   LS_VIDEOS_FALLBACK,
   LS_CHANNELS,
+  LS_CHANNEL_PREFS,
   LS_PLAYBACK_RATE,
   LS_DEFAULT_RATE,
   LS_HIDE_MARKED,
@@ -212,6 +213,47 @@ export function saveChannels(map) {
 }
 
 // ---------------------------------------------------------------------------
+// localStorage: per-channel prefs (channelId -> { ignored?, rate? })
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the persisted per-channel prefs map, or {} if absent/unparseable. Only
+ * non-default values are stored (see setChannelPref in queue.js). Read FRESH at
+ * refresh time so edits made on channels.html in another tab apply to the next
+ * fetch without reloading.
+ * @returns {Record<string,{ignored?:boolean,rate?:number}>}
+ */
+export function loadChannelPrefs() {
+  try {
+    const raw = localStorage.getItem(LS_CHANNEL_PREFS);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist the per-channel prefs map. An EMPTY map removes the key entirely
+ * (no '{}' garbage). Best-effort — quota / serialization failures are ignored.
+ * @param {Record<string,{ignored?:boolean,rate?:number}>} map
+ */
+export function saveChannelPrefs(map) {
+  try {
+    if (!map || Object.keys(map).length === 0) {
+      localStorage.removeItem(LS_CHANNEL_PREFS);
+    } else {
+      localStorage.setItem(LS_CHANNEL_PREFS, JSON.stringify(map));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // IndexedDB video store (with localStorage fallback)
 // ---------------------------------------------------------------------------
 
@@ -249,7 +291,18 @@ function openDb() {
       }
     };
 
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => {
+        // Another tab is opening the DB at a NEWER version. Close this
+        // connection so that upgrade isn't blocked forever, and route into the
+        // same sticky blocked machinery as onblocked: every subsequent video
+        // API throws DbBlockedError instead of using the dead connection.
+        dbBlocked = true;
+        db.close();
+      };
+      resolve(db);
+    };
 
     req.onerror = () => {
       // Fall back to localStorage if IndexedDB cannot be opened.

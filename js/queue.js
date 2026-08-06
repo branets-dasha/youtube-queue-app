@@ -412,6 +412,95 @@ export function effectiveRate(preferredRate, defaultRate, currentRate) {
 }
 
 // ---------------------------------------------------------------------------
+// Channel helpers (channel list page + per-channel fetch preferences)
+// ---------------------------------------------------------------------------
+
+/**
+ * Flatten a channels map (channelId -> { title, avatarUrl }) into an array of
+ * { channelId, title, avatarUrl } sorted alphabetically by title
+ * (case-insensitive localeCompare), tie-broken by channelId so the order is
+ * deterministic. Missing fields become ''. Pure.
+ * @param {Record<string,{title?:string,avatarUrl?:string}>|null|undefined} channels
+ * @returns {Array<{channelId:string,title:string,avatarUrl:string}>}
+ */
+export function sortChannels(channels) {
+  const entries = Object.entries(channels || {}).map(([channelId, ch]) => ({
+    channelId,
+    title: (ch && ch.title) || '',
+    avatarUrl: (ch && ch.avatarUrl) || '',
+  }));
+  return entries.sort((a, b) => {
+    const c = a.title.toLowerCase().localeCompare(b.title.toLowerCase());
+    if (c !== 0) return c;
+    if (a.channelId < b.channelId) return -1;
+    if (a.channelId > b.channelId) return 1;
+    return 0;
+  });
+}
+
+/**
+ * True when a channel is marked ignored in the prefs map — its uploads are
+ * skipped entirely on future fetches (existing records stay untouched). Pure.
+ * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {string} channelId
+ * @returns {boolean}
+ */
+export function isChannelIgnored(prefs, channelId) {
+  const p = prefs && channelId ? prefs[channelId] : null;
+  return !!(p && p.ignored === true);
+}
+
+/**
+ * The initial `preferredRate` for a NEWLY-inserted record from a channel: the
+ * channel's preferred rate when it is a valid preset (1/1.5/2), else undefined
+ * (no preference). Applied to incoming records only — the upsert never copies
+ * it onto an already-stored record, so a refresh never changes stored rates.
+ * Pure.
+ * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {string} channelId
+ * @returns {number|undefined}
+ */
+export function channelPreferredRate(prefs, channelId) {
+  const p = prefs && channelId ? prefs[channelId] : null;
+  const r = p ? p.rate : undefined;
+  return r === 1 || r === 1.5 || r === 2 ? r : undefined;
+}
+
+/**
+ * Return a NEW prefs map with `patch` applied to `channelId`, storing only
+ * non-default values: `ignored` is kept only when exactly true, `rate` only
+ * when a valid preset (1/1.5/2) — anything else REMOVES the key. A per-channel
+ * object left empty is dropped from the map. Neither input is mutated. Pure.
+ * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {string} channelId
+ * @param {{ignored?:boolean,rate?:(number|undefined)}} patch
+ * @returns {Record<string,{ignored?:boolean,rate?:number}>}
+ */
+export function setChannelPref(prefs, channelId, patch) {
+  const next = { ...(prefs || {}) };
+  if (!channelId) return next;
+  const p = patch || {};
+  // A non-object stored value (hand-edited/foreign) is treated as empty rather
+  // than spread (a string would leak its characters as index keys and the entry
+  // could then never be dropped).
+  const prev = next[channelId];
+  const cur =
+    prev && typeof prev === 'object' && !Array.isArray(prev) ? { ...prev } : {};
+  if ('ignored' in p) {
+    if (p.ignored === true) cur.ignored = true;
+    else delete cur.ignored;
+  }
+  if ('rate' in p) {
+    const r = p.rate;
+    if (r === 1 || r === 1.5 || r === 2) cur.rate = r;
+    else delete cur.rate;
+  }
+  if (Object.keys(cur).length === 0) delete next[channelId];
+  else next[channelId] = cur;
+  return next;
+}
+
+// ---------------------------------------------------------------------------
 // Description parsing (linkify timestamps + urls for the video description)
 // ---------------------------------------------------------------------------
 

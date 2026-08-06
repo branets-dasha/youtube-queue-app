@@ -25,6 +25,7 @@ import {
   replaceAllVideos,
   loadChannels,
   saveChannels,
+  loadChannelPrefs,
   getPlaybackRate,
   setPlaybackRate,
   getDefaultRate,
@@ -60,6 +61,8 @@ import {
   effectiveRate,
   daysAgoIso,
   incrementalSince,
+  isChannelIgnored,
+  channelPreferredRate,
 } from './queue.js';
 import {
   el,
@@ -494,22 +497,42 @@ async function runRefresh(bound) {
     // channel's avatar in snippet.thumbnails. Capture + persist the channel map.
     updateChannelsFromSubs(subs);
 
+    // Per-channel prefs (channels.html) are read FRESH each refresh — never
+    // cached at startup — so edits made in a Channels tab apply to this fetch.
+    const prefs = loadChannelPrefs();
+
     // Per-channel uploads are paged only until they reach `bound` (floor for a
     // full refresh, newest-minus-buffer for an incremental one).
     const collected = [];
     let skipped = 0;
+    let fetched = 0;
+    // Ignored count precomputed so the progress counter runs contiguously over
+    // the channels actually fetched (never jumping across ignored ones).
+    const ignored = subs.filter((s) => isChannelIgnored(prefs, s.channelId)).length;
+    const fetchTotal = subs.length - ignored;
 
-    for (let i = 0; i < subs.length; i++) {
-      const sub = subs[i];
+    for (const sub of subs) {
+      // Ignored channels are skipped entirely — no uploads request at all (also
+      // saves quota). Their already-stored records are untouched.
+      if (isChannelIgnored(prefs, sub.channelId)) continue;
+      fetched++;
       // Updates the SINGLE progress toast in place (no new toast per tick).
-      showProgress(`Fetching channel ${i + 1} of ${subs.length}: ${sub.channelTitle}`);
+      showProgress(`Fetching channel ${fetched} of ${fetchTotal}: ${sub.channelTitle}`);
       try {
         const vids = await getChannelVideosSince(
           sub.channelId,
           bound,
           sub.channelTitle
         );
-        for (const v of vids) collected.push(v);
+        // The channel's preferred speed preselects preferredRate on incoming
+        // records. Only NEWLY-inserted ones keep it — upsertVideos refreshes
+        // just display metadata on existing records, so a refresh never
+        // changes a stored video's rate.
+        const rate = channelPreferredRate(prefs, sub.channelId);
+        for (const v of vids) {
+          if (rate !== undefined) v.preferredRate = rate;
+          collected.push(v);
+        }
       } catch (err) {
         if (err instanceof ApiError && err.kind === 'notfound') {
           // Deleted/hidden channel: skip without aborting the whole refresh.
@@ -542,6 +565,7 @@ async function runRefresh(bound) {
 
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
     if (skipped > 0) parts.push(`${skipped} channel(s) skipped (deleted/unavailable).`);
+    if (ignored > 0) parts.push(`${ignored} channel(s) ignored.`);
     showToast(parts.join(' '), { type: 'success' });
   } catch (err) {
     handleError(err);

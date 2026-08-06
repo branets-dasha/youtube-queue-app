@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Channels — YouTube Queue</title>
+    <meta
+      name="description"
+      content="Per-channel preferences for YouTube Queue: ignore channels or preselect a playback speed for their new videos."
+    />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <!-- Standalone page: no auth, no API, no video-record writes. Imports only
+         config/store/queue/ui — NEVER app.js (it boots the whole app). -->
+    <script type="module" src="js/channels-page.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <h1 class="topbar__title">Channels</h1>
+      <p class="topbar__tagline">
+        Ignore channels on future fetches, or preselect a speed for their new videos.
+      </p>
+    </header>
+
+    <main class="channels-main">
+      <p class="channels-back"><a href="index.html">&larr; Back to the queue</a></p>
+
+      <ul id="channel-list" class="channels" role="list" aria-label="Subscribed channels"></ul>
+
+      <div id="channels-empty" class="empty" hidden>
+        <p class="empty__title">No channels yet</p>
+        <p class="empty__sub">
+          Sign in and fetch on the <a href="index.html">main page</a> first —
+          the channels from your subscriptions will appear here.
+        </p>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Preferences are saved locally and applied the next time you fetch on the
+        main page — no reload needed there.
+      </p>
+    </footer>
+  </body>
+</html>

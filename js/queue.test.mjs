@@ -7,6 +7,7 @@
 
 import assert from 'node:assert';
 import {
+  upsertVideos,
   computeQueue,
   computeVisible,
   computeCutoff,
@@ -22,6 +23,10 @@ import {
   effectiveRate,
   incrementalSince,
   parseDescription,
+  sortChannels,
+  isChannelIgnored,
+  channelPreferredRate,
+  setChannelPref,
 } from './queue.js';
 
 let passed = 0;
@@ -345,6 +350,97 @@ test('incrementalSince is always >= floor', () => {
   const bound = incrementalSince(recs, floor, 6 * HOUR); // 3h - 6h would be < floor
   assert.ok(compareIso(bound, floor) >= 0);
   assert.equal(bound, floor);
+});
+
+// --- channel helpers: sorting + per-channel prefs (channels page / fetch) ---
+
+test('sortChannels sorts alphabetically case-insensitively and flattens entries', () => {
+  const channels = {
+    UCb: { title: 'apple', avatarUrl: 'a' },
+    UCa: { title: 'Banana', avatarUrl: 'b' },
+    UCc: { title: 'cherry', avatarUrl: '' },
+  };
+  const sorted = sortChannels(channels);
+  // A naive codepoint sort would put 'Banana' (B) before 'apple' (a).
+  assert.deepEqual(sorted.map((c) => c.title), ['apple', 'Banana', 'cherry']);
+  assert.deepEqual(sorted[0], { channelId: 'UCb', title: 'apple', avatarUrl: 'a' });
+});
+
+test('sortChannels tolerates missing fields / empty maps; ties break by channelId', () => {
+  assert.deepEqual(sortChannels({}), []);
+  assert.deepEqual(sortChannels(undefined), []);
+  const sorted = sortChannels({ UCy: { title: 'Same' }, UCx: { title: 'same' } });
+  assert.deepEqual(sorted.map((c) => c.channelId), ['UCx', 'UCy']); // tie-break
+  assert.equal(sortChannels({ UCz: {} })[0].avatarUrl, ''); // missing -> ''
+});
+
+test('isChannelIgnored is true only for ignored: true', () => {
+  const prefs = { UCa: { ignored: true }, UCb: { rate: 2 } };
+  assert.equal(isChannelIgnored(prefs, 'UCa'), true);
+  assert.equal(isChannelIgnored(prefs, 'UCb'), false);
+  assert.equal(isChannelIgnored(prefs, 'UCz'), false); // unknown channel
+  assert.equal(isChannelIgnored(null, 'UCa'), false); // no prefs at all
+});
+
+test('channelPreferredRate returns a valid preset rate, else undefined', () => {
+  const prefs = { UCa: { rate: 2 }, UCb: { ignored: true }, UCc: { rate: 3 } };
+  assert.equal(channelPreferredRate(prefs, 'UCa'), 2);
+  assert.equal(channelPreferredRate(prefs, 'UCb'), undefined); // no rate set
+  assert.equal(channelPreferredRate(prefs, 'UCc'), undefined); // invalid preset
+  assert.equal(channelPreferredRate(prefs, 'UCz'), undefined); // unknown channel
+  assert.equal(channelPreferredRate(undefined, 'UCa'), undefined);
+});
+
+test('setChannelPref stores only non-default values and drops empty entries', () => {
+  let prefs = {};
+  prefs = setChannelPref(prefs, 'UCa', { ignored: true });
+  assert.deepEqual(prefs, { UCa: { ignored: true } });
+  prefs = setChannelPref(prefs, 'UCa', { rate: 2 });
+  assert.deepEqual(prefs, { UCa: { ignored: true, rate: 2 } });
+  prefs = setChannelPref(prefs, 'UCa', { ignored: false }); // un-ignore -> key removed
+  assert.deepEqual(prefs, { UCa: { rate: 2 } });
+  prefs = setChannelPref(prefs, 'UCa', { rate: undefined }); // toggle speed off
+  assert.deepEqual(prefs, {}); // empty per-channel object dropped
+});
+
+test('setChannelPref rejects invalid rates and never mutates its input', () => {
+  const orig = { UCa: { rate: 2 } };
+  assert.deepEqual(setChannelPref(orig, 'UCa', { rate: 3 }), {}); // invalid -> removed
+  assert.deepEqual(orig, { UCa: { rate: 2 } }); // input untouched
+  assert.deepEqual(setChannelPref(orig, 'UCb', { ignored: true }), {
+    UCa: { rate: 2 },
+    UCb: { ignored: true },
+  });
+});
+
+test('setChannelPref treats a non-object stored value as empty, so it drops cleanly', () => {
+  // A string would otherwise spread its characters into index keys and the
+  // never-empty entry could never be dropped.
+  assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { ignored: false }), {});
+  assert.deepEqual(setChannelPref({ UCa: ['x'] }, 'UCa', { rate: undefined }), {});
+  assert.deepEqual(setChannelPref({ UCa: null }, 'UCa', { ignored: false }), {});
+  assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { rate: 2 }), {
+    UCa: { rate: 2 },
+  });
+});
+
+// --- upsertVideos: a refresh never changes a stored video's preferredRate ---
+
+test('upsertVideos never overwrites or clears an existing preferredRate', () => {
+  const existing = [
+    { ...rec('a', T1, 'new'), preferredRate: 1 },
+    { ...rec('b', T2, 'skipped'), preferredRate: 2 },
+  ];
+  const incoming = [
+    { ...rec('a', T1, undefined), preferredRate: 2 }, // channel pref changed since
+    rec('b', T2, undefined), // no rate on incoming
+    { ...rec('c', T3, undefined), preferredRate: 2 }, // genuinely new record
+  ];
+  const byId = new Map(upsertVideos(existing, incoming).map((r) => [r.videoId, r]));
+  assert.equal(byId.get('a').preferredRate, 1); // incoming rate ignored
+  assert.equal(byId.get('b').preferredRate, 2); // stored rate not cleared
+  assert.equal(byId.get('c').preferredRate, 2); // new record keeps the preset
+  assert.equal(byId.get('b').state, 'skipped'); // and state stays preserved
 });
 
 // --- parseDescription: linkify timestamps + urls, exact round-trip ---

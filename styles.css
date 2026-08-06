@@ -1120,6 +1120,112 @@ body.app-active #app-main.app {
   }
 }
 
+/* ---- Channels page (channels.html) ---- */
+
+/* A single narrow column: the list reads best at prose width. */
+.channels-main {
+  max-width: var(--maxw);
+}
+.channels-back {
+  margin: 0 0 12px;
+}
+.channels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* flex-wrap lets the controls drop under the title on very narrow widths, so
+   the stacked layout just works with no dedicated breakpoint. */
+.chan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  box-shadow: var(--shadow);
+}
+/* Avatar + name in ONE anchor to the channel on YouTube, like a card's channel
+   badge: muted inline look, underline the name on hover/focus. */
+.chan__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 200px;
+  color: inherit;
+  text-decoration: none;
+}
+.chan__link:hover .chan__title,
+.chan__link:focus-visible .chan__title {
+  text-decoration: underline;
+}
+.chan__link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 999px;
+}
+.chan__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* Ignored channels grey their identity — never the controls — like handled cards. */
+.chan--ignored .chan__link {
+  opacity: 0.5;
+  filter: grayscale(0.7);
+}
+.chan__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+/* Same ghost treatment as a card's action footer, so the 1×/2× group and
+   Ignore read like the card buttons. */
+.chan__controls .btn {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+.chan__controls .btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.chan__rates {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid var(--border);
+}
+/* Active speed: the same deep-blue accent as the card speed buttons. */
+.chan__controls .btn--cardrate.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--primary-text);
+}
+.chan__controls .btn--cardrate.is-active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 90%, #000);
+  color: var(--primary-text);
+}
+/* Active Ignore mirrors the Skip button's pressed slate fill. */
+.chan__controls .chan__ignore[aria-pressed='true'] {
+  background: var(--skip);
+  border-color: var(--skip);
+  color: var(--primary-text);
+}
+.chan__controls .chan__ignore[aria-pressed='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--skip) 88%, #000);
+  color: var(--primary-text);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

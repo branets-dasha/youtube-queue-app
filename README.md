@@ -11,6 +11,7 @@ A purely client-side, single-page web app that turns your YouTube subscription f
 - Loads all videos from your subscriptions back to a chosen cutoff point.
 - Plays videos in a built-in YouTube player, automatically advancing through the queue.
 - Videos can be marked to skip, or play at a certain speed.
+- A channel list page: ignore a channel on future fetches, or preselect a playback speed for its new videos.
 - Advances the cutoff as the videos are watched or skipped, so handled videos are eventually pruned and never come back.
 - Remembers the watch position per video.
 - Keyboard support.
@@ -95,6 +96,7 @@ The app is deliberately quota-frugal and **never** uses `search.list`:
     - `yqa_start_cutoff` — the floor (deletion/fetch boundary).
     - `yqa_cutoff` — the live handled-prefix cutoff marker.
     - `yqa_channels` — channel id → `{ title, avatarUrl }` map for avatars.
+    - `yqa_channel_prefs` — channel id → `{ ignored?, rate? }` from the Channels page (absent when nothing is set).
     - `yqa_playback_rate` — the current player speed.
     - `yqa_default_rate` — the Default-speed setting (absent when off).
     - `yqa_hide_marked` — the Hide-handled toggle.
@@ -145,6 +147,7 @@ For **local development**, register your localhost origin instead of the hosted 
 
 ```text
 index.html          DOM skeleton + loads GIS, the IFrame API (via player.js), and js/app.js
+channels.html       Standalone channel-list page (per-channel prefs); loads js/channels-page.js
 styles.css          Light/dark, responsive two-pane styling; player container query
 README.md           This file
 js/config.js        Constants (API base, OAuth scope, storage keys, IndexedDB names, limits)
@@ -157,6 +160,7 @@ js/player.js        YouTube IFrame Player API wrapper (load/play, rate, seek, re
 js/ui.js            XSS-safe DOM building (cards, player meta) and state screens
 js/toast.js         Top-right toast notifications (progress / success / error / info)
 js/app.js           Wiring: auth → fetch → store → queue → ui/player, event binding, shortcuts
+js/channels-page.js Channels page wiring: channel rows + ignore/speed prefs (no auth, no API)
 ```
 
 ### Testing the pure logic in Node
