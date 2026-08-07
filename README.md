@@ -10,10 +10,10 @@ A purely client-side, single-page web app that turns your YouTube subscription f
 
 - Loads all videos from your subscriptions back to a chosen cutoff point.
 - Plays videos in a built-in YouTube player, automatically advancing through the queue.
-- Videos can be marked to skip, or play at a certain speed.
-- A channel list page: ignore a channel on future fetches, or preselect a playback speed for its new videos.
 - Advances the cutoff as the videos are watched or skipped, so handled videos are eventually pruned and never come back.
 - Remembers the watch position per video.
+- Videos can be marked to skip, or play at a certain speed.
+- Channel customization: ignore or set default playback speed.
 - Keyboard support.
 - Data is stored locally. Nothing is sent to any server other than Google's.
 
