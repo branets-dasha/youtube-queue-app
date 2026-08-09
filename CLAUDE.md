@@ -12,7 +12,7 @@ The repo owner wants Claude to act as an **orchestrator/overseer**, not do the h
 
 - Default to delegating **even for seemingly small edits** — a one-line CSS tweak or a button reorder still goes to an agent. Reserve direct action for the truly trivial (reading a file to decide *what* to delegate, a single-line fix mid-conversation) — past drift happened by treating small tasks as exceptions.
 - Still surface genuinely user-facing decisions (architecture, ambiguous requirements) via AskUserQuestion before a big build — the owner engages actively on those.
-- Before each commit, inspect the staged diff — the owner makes their own manual edits. Commit the owner's manual edits under their name with **no** Claude co-author trailer; commit Claude's work **with** `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Only commit/push when asked.
+- Before each commit, inspect the staged diff — the owner makes their own manual edits. Commit the owner's manual edits under their name with **no** Claude co-author trailer; commit Claude's work **with** a `Co-Authored-By: Claude <model name and context window> <noreply@anthropic.com>` trailer naming the model actually running the session. Only commit/push when asked.
 
 ## Commands
 
@@ -29,6 +29,15 @@ node js/queue.test.mjs
 Plain Node `node:assert`, no test framework, zero dependencies. It runs every test top-to-bottom and throws on the first failure — there is **no filter/single-test runner**; to isolate one, comment out the others in the file. Only `js/queue.js` is tested because it is the only module with zero browser globals.
 
 **Deploy:** GitHub Pages serves the repo root of `main` directly. There is no CI and no build/deploy step — **deployment = push to `main`**. Live at `https://branets-dasha.github.io/youtube-queue-app/`.
+
+## Issue tracking
+
+Issues live in **Linear**, not GitHub Issues — the repo is on GitHub and deploys from it via Pages, but never reach for `gh issue create`.
+
+- One team in the workspace: **Owls**, key `OWL`, id `53f5e1c0-f1b2-464c-a707-7b99f24b7b1a` — nothing to disambiguate, don't enumerate teams.
+- Default project: **YouTube Queue**, id `3f52fab5-8f05-4643-a31e-ce393556c45d` (`https://linear.app/branets-dasha/project/youtube-queue-4b1b3b8b9ad0`); new issues default to it and to the **Backlog** state unless told otherwise.
+- The ids are recorded here so `list_teams`/`list_projects` are **not** re-queried every time — go straight to creating the issue.
+- The Linear MCP `save_issue` create is **not idempotent**, and a `502 upstream_unavailable` can still have created the issue — if a create appears to fail, search for it before retrying (a blind retry produced duplicates OWL-10 / OWL-11 on 2026-08-09).
 
 ## Architecture
 
