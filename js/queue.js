@@ -451,11 +451,8 @@ export function isChannelIgnored(prefs, channelId) {
 }
 
 /**
- * The initial `preferredRate` for a NEWLY-inserted record from a channel: the
- * channel's preferred rate when it is a valid preset (1/1.5/2), else undefined
- * (no preference). Applied to incoming records only — the upsert never copies
- * it onto an already-stored record, so a refresh never changes stored rates.
- * Pure.
+ * A channel's preferred speed when it is a valid preset (1/1.5/2), else
+ * undefined (no preference). Pure.
  * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
  * @param {string} channelId
  * @returns {number|undefined}
@@ -464,6 +461,43 @@ export function channelPreferredRate(prefs, channelId) {
   const p = prefs && channelId ? prefs[channelId] : null;
   const r = p ? p.rate : undefined;
   return r === 1 || r === 1.5 || r === 2 ? r : undefined;
+}
+
+/**
+ * Fill in each channel's preferred speed on the records that do not have one:
+ * a record whose `preferredRate` is unset (undefined/null) and whose channel
+ * has a preferred rate gets that rate. A record that already carries an
+ * explicit `preferredRate` is NEVER overwritten or cleared, and records of
+ * IGNORED channels (or of channels with no rate pref) are left exactly as they
+ * are.
+ *
+ * `onlyVideoIds` limits which records are ELIGIBLE for the fill (a Set or array
+ * of videoIds); null/undefined means every record is. "Refresh all" passes null
+ * (fill the whole stored set), while "Fetch new" passes just the videoIds it
+ * newly inserted, so an incremental fetch never re-rates already-stored videos.
+ *
+ * Returns a NEW array; unchanged records are passed through by reference and
+ * nothing is mutated. Pure.
+ * @param {Array<object>} records
+ * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {Set<string>|Array<string>|null|undefined} [onlyVideoIds] eligible ids
+ * @returns {Array<object>}
+ */
+export function applyChannelRates(records, prefs, onlyVideoIds) {
+  const list = Array.isArray(records) ? records : [];
+  const only =
+    onlyVideoIds == null
+      ? null
+      : onlyVideoIds instanceof Set
+        ? onlyVideoIds
+        : new Set(onlyVideoIds);
+  return list.map((rec) => {
+    if (!rec || rec.preferredRate != null) return rec;
+    if (only && !only.has(rec.videoId)) return rec;
+    if (isChannelIgnored(prefs, rec.channelId)) return rec;
+    const rate = channelPreferredRate(prefs, rec.channelId);
+    return rate === undefined ? rec : { ...rec, preferredRate: rate };
+  });
 }
 
 /**

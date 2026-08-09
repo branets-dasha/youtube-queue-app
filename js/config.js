@@ -29,7 +29,9 @@ export const LS_CHANNELS = 'yqa_channels';
 // Per-channel preferences (channelId -> { ignored?: true, rate?: number }),
 // edited on channels.html. Only non-default values are stored. Read FRESH at
 // refresh time (never cached at startup): ignored channels are skipped in the
-// fetch loop; a rate preselects preferredRate on newly-inserted records only.
+// fetch loop; a rate fills preferredRate on the records a fetch newly inserts,
+// and on "Refresh all" over every stored record of that channel that has none
+// (an explicitly-set per-video rate is never overwritten).
 export const LS_CHANNEL_PREFS = 'yqa_channel_prefs';
 // Persisted player playback rate (one of 1 / 1.5 / 2). Source of truth + default.
 export const LS_PLAYBACK_RATE = 'yqa_playback_rate';

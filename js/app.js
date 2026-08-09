@@ -62,7 +62,7 @@ import {
   daysAgoIso,
   incrementalSince,
   isChannelIgnored,
-  channelPreferredRate,
+  applyChannelRates,
 } from './queue.js';
 import {
   el,
@@ -445,7 +445,7 @@ async function onSignOut() {
  * channel is paged down to the floor (the full back-catalog since the cutoff).
  */
 async function onRefresh() {
-  return runRefresh(state.floor);
+  return runRefresh(state.floor, true);
 }
 
 /**
@@ -458,18 +458,21 @@ async function onRefresh() {
  */
 async function onRefreshNew() {
   const bound = incrementalSince(state.records, state.floor, INCREMENTAL_REFRESH_BUFFER_MS);
-  return runRefresh(bound);
+  return runRefresh(bound, false);
 }
 
 /**
  * Shared refresh pipeline. `bound` is the per-channel lower bound passed to the
- * uploads fetch — the ONLY thing that differs between "Refresh all" (floor) and
- * "Refresh new" (incremental). Everything else — subscriptions + avatars, the
- * per-channel uploads paging, details backfill, upsert, cleanup, render, the
- * progress toast and the summary — is identical.
+ * uploads fetch, and `sweepRates` says how far a channel's preferred speed
+ * reaches — the ONLY two things that differ between "Refresh all" (floor, sweep)
+ * and "Refresh new" (incremental, newly-inserted records only). The mode is
+ * passed explicitly, never inferred from the bound. Everything else —
+ * subscriptions + avatars, the per-channel uploads paging, details backfill,
+ * upsert, cleanup, render, the progress toast and the summary — is identical.
  * @param {string|null} bound ISO lower bound for the per-channel uploads fetch
+ * @param {boolean} sweepRates fill channel speeds across ALL stored records
  */
-async function runRefresh(bound) {
+async function runRefresh(bound, sweepRates) {
   if (state.refreshing) return;
   if (!hasSession()) {
     return onSignIn();
@@ -524,15 +527,7 @@ async function runRefresh(bound) {
           bound,
           sub.channelTitle
         );
-        // The channel's preferred speed preselects preferredRate on incoming
-        // records. Only NEWLY-inserted ones keep it — upsertVideos refreshes
-        // just display metadata on existing records, so a refresh never
-        // changes a stored video's rate.
-        const rate = channelPreferredRate(prefs, sub.channelId);
-        for (const v of vids) {
-          if (rate !== undefined) v.preferredRate = rate;
-          collected.push(v);
-        }
+        for (const v of vids) collected.push(v);
       } catch (err) {
         if (err instanceof ApiError && err.kind === 'notfound') {
           // Deleted/hidden channel: skip without aborting the whole refresh.
@@ -541,7 +536,7 @@ async function runRefresh(bound) {
         }
         if (err instanceof ApiError && err.kind === 'quota') {
           // Quota exhausted mid-run: persist what we have, then report.
-          await mergeAndPersist(collected);
+          await mergeAndPersist(collected, prefs, sweepRates);
           throw err;
         }
         // auth/network/http: abort the run and report.
@@ -549,7 +544,7 @@ async function runRefresh(bound) {
       }
     }
 
-    await mergeAndPersist(collected);
+    await mergeAndPersist(collected, prefs, sweepRates);
 
     // SYNC is a CLEANUP site: after upserting, recompute the marker, delete the
     // handled prefix, and advance the floor.
@@ -579,11 +574,25 @@ async function runRefresh(bound) {
 
 /**
  * Merge freshly fetched records into the store (upsert by videoId, preserving
- * existing state), persist, then recompute the queue.
+ * existing state), then fill in each channel's preferred speed where a video has
+ * none. `sweepRates` (from the refresh mode) sets the reach: "Refresh all" fills
+ * EVERY stored record of that channel, while "Fetch new" fills only the records
+ * this fetch newly inserted — it doesn't touch the older part of the queue, so it
+ * doesn't re-rate it either. Records with an explicit per-video speed, and
+ * records of ignored channels, are untouched. The fill runs AFTER the upsert, so
+ * brand-new arrivals are included. One write of the merged set, then recompute.
  * @param {Array<object>} incoming
+ * @param {Record<string,{ignored?:boolean,rate?:number}>} prefs per-channel prefs
+ * @param {boolean} sweepRates fill across ALL stored records, not just new ones
  */
-async function mergeAndPersist(incoming) {
-  state.records = upsertVideos(state.records, incoming);
+async function mergeAndPersist(incoming, prefs, sweepRates) {
+  // Newly-inserted ids must be computed BEFORE the upsert folds them in.
+  let scope = null;
+  if (!sweepRates) {
+    const stored = new Set(state.records.map((r) => r.videoId));
+    scope = new Set(incoming.map((v) => v.videoId).filter((id) => !stored.has(id)));
+  }
+  state.records = applyChannelRates(upsertVideos(state.records, incoming), prefs, scope);
   await putVideos(state.records);
   recompute();
 }

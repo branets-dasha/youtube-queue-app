@@ -4,7 +4,8 @@
 // channel (the yqa_channels map, refreshed by the main app on each fetch)
 // listed alphabetically, with per-channel prefs (yqa_channel_prefs) — an
 // Ignore toggle (channel skipped entirely on future fetches) and a preferred
-// speed (new videos upserted with that rate preselected). This page NEVER
+// speed (filled in on the videos a fetch newly adds, and on "Refresh all" over
+// every stored video of that channel with no speed of its own). This page NEVER
 // touches video records, calls no API and needs no auth, so it is always safe
 // alongside a main-app tab; the main tab reads the prefs fresh at refresh
 // time, so edits here apply to its next fetch without a reload.
@@ -69,7 +70,7 @@ function buildChannelRow(ch, channels) {
     {
       class: 'chan__rates',
       role: 'group',
-      'aria-label': `Preferred speed for new videos from "${ch.title}"`,
+      'aria-label': `Preferred speed for videos from "${ch.title}"`,
     },
     [1, 2].map((r) => {
       const label = `${r}×`;
@@ -77,7 +78,7 @@ function buildChannelRow(ch, channels) {
         class: 'btn btn--cardrate',
         type: 'button',
         dataset: { rate: String(r) },
-        'aria-label': `Set ${label} speed for new videos from this channel`,
+        'aria-label': `Set ${label} speed for videos from this channel`,
         'aria-pressed': 'false',
         title: `${label} preferred speed`,
         text: label,
