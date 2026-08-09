@@ -50,7 +50,6 @@ import {
   ApiError,
 } from './api.js';
 import {
-  upsertVideos,
   computeQueue,
   computeVisible,
   computeCutoff,
@@ -62,7 +61,7 @@ import {
   daysAgoIso,
   incrementalSince,
   isChannelIgnored,
-  applyChannelRates,
+  mergeRefresh,
 } from './queue.js';
 import {
   el,
@@ -573,26 +572,16 @@ async function runRefresh(bound, sweepRates) {
 }
 
 /**
- * Merge freshly fetched records into the store (upsert by videoId, preserving
- * existing state), then fill in each channel's preferred speed where a video has
- * none. `sweepRates` (from the refresh mode) sets the reach: "Refresh all" fills
- * EVERY stored record of that channel, while "Fetch new" fills only the records
- * this fetch newly inserted — it doesn't touch the older part of the queue, so it
- * doesn't re-rate it either. Records with an explicit per-video speed, and
- * records of ignored channels, are untouched. The fill runs AFTER the upsert, so
- * brand-new arrivals are included. One write of the merged set, then recompute.
+ * Merge freshly fetched records into the store and persist. The merge itself is
+ * the pure `mergeRefresh` (upsert by videoId preserving state, then fill in each
+ * channel's preferred speed where a video has none — see its doc for the reach
+ * of `sweepRates`); here it is one write of the merged set, then a recompute.
  * @param {Array<object>} incoming
  * @param {Record<string,{ignored?:boolean,rate?:number}>} prefs per-channel prefs
  * @param {boolean} sweepRates fill across ALL stored records, not just new ones
  */
 async function mergeAndPersist(incoming, prefs, sweepRates) {
-  // Newly-inserted ids must be computed BEFORE the upsert folds them in.
-  let scope = null;
-  if (!sweepRates) {
-    const stored = new Set(state.records.map((r) => r.videoId));
-    scope = new Set(incoming.map((v) => v.videoId).filter((id) => !stored.has(id)));
-  }
-  state.records = applyChannelRates(upsertVideos(state.records, incoming), prefs, scope);
+  state.records = mergeRefresh(state.records, incoming, prefs, { sweepRates });
   await putVideos(state.records);
   recompute();
 }

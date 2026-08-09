@@ -28,6 +28,7 @@ import {
   channelPreferredRate,
   applyChannelRates,
   setChannelPref,
+  mergeRefresh,
 } from './queue.js';
 
 let passed = 0;
@@ -491,52 +492,75 @@ test('applyChannelRates never mutates its input and tolerates garbage prefs', ()
   assert.deepEqual(applyChannelRates(undefined, { UCa: { rate: 2 } }), []);
 });
 
-// Replicates mergeAndPersist's composition in app.js. The fill MUST run after
-// the upsert (a swapped order would silently stop rating brand-new videos), and
-// the "Fetch new" scope is the incoming ids minus the already-stored ones.
-const mergeWithRates = (existing, incoming, prefs, sweepRates) => {
-  const stored = new Set(existing.map((r) => r.videoId));
-  const scope = sweepRates
-    ? null
-    : new Set(incoming.map((v) => v.videoId).filter((id) => !stored.has(id)));
-  const merged = applyChannelRates(upsertVideos(existing, incoming), prefs, scope);
-  return new Map(merged.map((r) => [r.videoId, r]));
-};
+// --- mergeRefresh: the real refresh composition (upsert, then fill-if-absent) ---
 
-test('refresh composition: a brand-new video arrives carrying its channel rate', () => {
+// Index the merged array by videoId so the assertions read like the store does.
+const merged = (existing, incoming, prefs, options) =>
+  new Map(mergeRefresh(existing, incoming, prefs, options).map((r) => [r.videoId, r]));
+
+test('mergeRefresh: a brand-new video arrives carrying its channel rate', () => {
   const prefs = { UCa: { rate: 2 } };
   const incoming = [{ ...rec('a', T1, undefined), channelId: 'UCa' }];
-  assert.equal(mergeWithRates([], incoming, prefs, false).get('a').preferredRate, 2);
-  assert.equal(mergeWithRates([], incoming, prefs, true).get('a').preferredRate, 2);
+  // The fill runs AFTER the upsert, so brand-new arrivals are in scope either way.
+  assert.equal(merged([], incoming, prefs, { sweepRates: false }).get('a').preferredRate, 2);
+  assert.equal(merged([], incoming, prefs, { sweepRates: true }).get('a').preferredRate, 2);
 });
 
 const REFRESH_EXISTING = [
   { ...rec('old', T1, 'new'), channelId: 'UCa' }, // stored, rate-less, not re-fetched
   { ...rec('buf', T2, 'skipped'), channelId: 'UCa' }, // re-returned inside the buffer window
   { ...rec('own', T3, 'new'), channelId: 'UCa', preferredRate: 1 }, // explicit per-video rate
+  { ...rec('ign', T4, 'new'), channelId: 'UCi' }, // ignored channel
 ];
 const REFRESH_INCOMING = [
   { ...rec('buf', T2, undefined), channelId: 'UCa' },
   { ...rec('own', T3, undefined), channelId: 'UCa' },
   { ...rec('fresh', T4, undefined), channelId: 'UCa' },
 ];
+const REFRESH_PREFS = { UCa: { rate: 2 }, UCi: { ignored: true, rate: 2 } };
 
-test('refresh composition: "Fetch new" rates only the newly-inserted records', () => {
-  const prefs = { UCa: { rate: 2 } };
-  const byId = mergeWithRates(REFRESH_EXISTING, REFRESH_INCOMING, prefs, false);
+test('mergeRefresh: "Fetch new" rates only the newly-inserted records', () => {
+  const byId = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {
+    sweepRates: false,
+  });
   assert.equal(byId.get('fresh').preferredRate, 2); // newly inserted
-  assert.equal(byId.get('buf').preferredRate, undefined); // already stored: untouched
+  assert.equal(byId.get('buf').preferredRate, undefined); // re-returned in the buffer: untouched
   assert.equal(byId.get('old').preferredRate, undefined); // older queue: untouched
-  assert.equal(byId.get('own').preferredRate, 1);
+  assert.equal(byId.get('own').preferredRate, 1); // explicit rate never overwritten
+  assert.equal(byId.get('ign').preferredRate, undefined); // ignored channel excluded
+  assert.equal(byId.get('buf').state, 'skipped'); // upsert preserved the state
 });
 
-test('refresh composition: "Refresh all" rates every stored record that has none', () => {
-  const prefs = { UCa: { rate: 2 } };
-  const byId = mergeWithRates(REFRESH_EXISTING, REFRESH_INCOMING, prefs, true);
+test('mergeRefresh: "Refresh all" rates every stored record that has none', () => {
+  const byId = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {
+    sweepRates: true,
+  });
   assert.equal(byId.get('fresh').preferredRate, 2);
   assert.equal(byId.get('buf').preferredRate, 2);
   assert.equal(byId.get('old').preferredRate, 2); // swept even though not re-fetched
   assert.equal(byId.get('own').preferredRate, 1); // explicit rate still wins
+  assert.equal(byId.get('ign').preferredRate, undefined); // ignored channel still excluded
+});
+
+test('mergeRefresh: omitted options / {} default to the "Fetch new" scope', () => {
+  const bare = new Map(
+    mergeRefresh(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS).map((r) => [r.videoId, r])
+  );
+  assert.equal(bare.get('old').preferredRate, undefined); // not swept
+  assert.equal(bare.get('fresh').preferredRate, 2);
+  const empty = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {});
+  assert.equal(empty.get('old').preferredRate, undefined);
+  assert.equal(empty.get('fresh').preferredRate, 2);
+});
+
+test('mergeRefresh never mutates its inputs', () => {
+  const existing = [{ ...rec('old', T1, 'new'), channelId: 'UCa' }];
+  const incoming = [{ ...rec('fresh', T2, undefined), channelId: 'UCa' }];
+  mergeRefresh(existing, incoming, { UCa: { rate: 2 } }, { sweepRates: true });
+  assert.equal(existing.length, 1);
+  assert.equal(existing[0].preferredRate, undefined);
+  assert.equal(incoming[0].preferredRate, undefined);
+  assert.equal(incoming[0].state, undefined); // the 'new' default lands on the copy only
 });
 
 // --- parseDescription: linkify timestamps + urls, exact round-trip ---

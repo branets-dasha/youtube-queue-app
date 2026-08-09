@@ -535,6 +535,42 @@ export function setChannelPref(prefs, channelId, patch) {
 }
 
 // ---------------------------------------------------------------------------
+// Refresh merge ("Fetch new" / "Refresh all" — the whole composition)
+// ---------------------------------------------------------------------------
+
+/**
+ * The complete refresh merge, as ONE pure step: upsert the freshly fetched
+ * records into the stored set (existing state preserved, never duplicated),
+ * then fill in each channel's preferred speed on the records that lack one.
+ * FILL-IF-ABSENT: a record carrying an explicit `preferredRate` is never
+ * overwritten or cleared, and records of ignored channels are left as they are.
+ *
+ * `sweepRates` is the refresh MODE (passed explicitly — never inferred from the
+ * fetch bound): "Refresh all" sweeps the WHOLE stored set, so older
+ * already-stored videos pick up their channel's rate too, while "Fetch new"
+ * reaches only this fetch's arrivals — a video re-returned inside the buffer
+ * window counts as already-stored and keeps what it has.
+ *
+ * Returns a NEW array; neither input array is mutated. Pure.
+ *
+ * @param {Array<object>} existing stored video records
+ * @param {Array<object>} incoming freshly fetched records
+ * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {{sweepRates?:boolean}} [options] defaults to the "Fetch new" scope
+ * @returns {Array<object>}
+ */
+export function mergeRefresh(existing, incoming, prefs, { sweepRates = false } = {}) {
+  const stored = new Set(existing.map((r) => r.videoId));
+  const arrivals = new Set(
+    incoming.map((v) => v.videoId).filter((id) => !stored.has(id))
+  );
+  const merged = upsertVideos(existing, incoming);
+  return sweepRates
+    ? applyChannelRates(merged, prefs, null) // "Refresh all": every record
+    : applyChannelRates(merged, prefs, arrivals); // "Fetch new": arrivals only
+}
+
+// ---------------------------------------------------------------------------
 // Description parsing (linkify timestamps + urls for the video description)
 // ---------------------------------------------------------------------------
 
