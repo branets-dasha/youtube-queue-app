@@ -22,8 +22,6 @@ export const LS_CLIENT_ID = 'yqa_client_id';
 export const LS_START_CUTOFF = 'yqa_start_cutoff';
 // CUTOFF: live handled-prefix marker (updates on mark/unmark; always >= floor).
 export const LS_CUTOFF = 'yqa_cutoff';
-// Fallback video store key, used only when IndexedDB is unavailable.
-export const LS_VIDEOS_FALLBACK = 'yqa_videos_fallback';
 // Persisted channel map (channelId -> { title, avatarUrl }) for card avatars.
 export const LS_CHANNELS = 'yqa_channels';
 // Per-channel preferences (channelId -> { ignored?: true, rate?: number }),

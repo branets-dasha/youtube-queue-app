@@ -180,10 +180,11 @@ main {
   margin-top: 12px;
 }
 
-/* ---- Blocking full-screen error (IndexedDB blocked by another tab) ---- */
-/* Fixed, full-viewport, opaque scrim that centers a panel and sits above the
-   app (below toasts at z-index 1000). Shown by app.js when startup must halt
-   because another tab holds the DB open at a different version. */
+/* ---- Blocking full-screen error (fatal storage condition) ---- */
+/* Fixed, full-viewport, opaque scrim that centers a panel. Shown by app.js when
+   startup must halt (DB blocked by another tab, IndexedDB unavailable, or the
+   stored queue unreadable). Sits above the app but below the privacy
+   curtain (2000). */
 .blocked-overlay {
   position: fixed;
   inset: 0;
@@ -333,8 +334,11 @@ main {
 /* ---- Privacy curtain ---- */
 
 /* A full-viewport solid overlay (BSOD-style blue, no content) that slides DOWN
-   to cover the page and UP to lift. Sits above EVERYTHING (toasts are z-index
-   1000), so while covering it blocks all interaction with the page behind it. Hidden
+   to cover the page and UP to lift. Sits above everything, so while covering it
+   blocks all interaction with the page behind it. That deliberately includes the
+   fatal-error overlay (.blocked-overlay 900, toasts 1000): one gesture must hide
+   the whole screen, no exceptions — and it is recoverable, since Esc (the panic
+   key, handled before every guard) and scroll-up both lift it. Hidden
    by default via translateY(-100%) — still present (not display:none) so it can
    animate and so a wheel event over it targets the curtain, not the page. */
 .curtain {

@@ -100,8 +100,7 @@ The app is deliberately quota-frugal and **never** uses `search.list`:
     - `yqa_playback_rate` — the current player speed.
     - `yqa_default_rate` — the Default-speed setting (absent when off).
     - `yqa_hide_marked` — the Hide-handled toggle.
-    - `yqa_videos_fallback` — video records, **only** when IndexedDB is unavailable.
-- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (falls back to `localStorage` if IndexedDB is unavailable). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredRate`, `positionSeconds` (resume), and `liked`.
+- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (IndexedDB is required — if it can't be opened the app stops with an error). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredRate`, `positionSeconds` (resume), and `liked`.
 - The **like** state is stored **locally** and is never fetched back from YouTube, so a like/unlike you make directly on YouTube will **not** be reflected here.
 - Nothing is ever sent to any server other than Google's.
 

@@ -1,25 +1,24 @@
 // js/store.js
 //
 // Persistence layer.
-//   - Client ID and start cutoff live in localStorage (small, sync-ish values).
+//   - Client ID, cutoffs and settings live in localStorage (small, sync-ish
+//     values).
 //   - The video store lives in IndexedDB (object store `videos`, keyPath
-//     `videoId`). If IndexedDB is genuinely unavailable (private browsing, the
-//     open() call throws, or `req.onerror` fires) we transparently fall back to a
-//     localStorage-backed store — that fallback is the only way to use the app.
-//   - EXCEPTION: `req.onblocked` (another tab holds the DB open at a different
-//     schema version during a version upgrade) does NOT fall back. The real data
-//     lives in IndexedDB but is temporarily inaccessible, so a separate empty
-//     localStorage store would just confuse the user. Instead every video API
-//     throws `DbBlockedError`, and `app.js` halts startup with a blocking error.
+//     `videoId`), which is REQUIRED: the app cannot store videos without it.
+//   - If IndexedDB is genuinely unavailable (missing global, the open() call
+//     throws, or `req.onerror` fires) every video API throws
+//     `DbUnavailableError` and `app.js` halts startup with a blocking error.
+//   - Likewise `req.onblocked` (another tab holds the DB open at a different
+//     schema version during a version upgrade): the real data lives in
+//     IndexedDB but is temporarily inaccessible, so every video API throws
+//     `DbBlockedError` and startup halts with a different blocking message.
 //
-// All video APIs are async (Promise-returning) so callers can treat both
-// backends uniformly.
+// All video APIs are async (Promise-returning).
 
 import {
   LS_CLIENT_ID,
   LS_START_CUTOFF,
   LS_CUTOFF,
-  LS_VIDEOS_FALLBACK,
   LS_CHANNELS,
   LS_CHANNEL_PREFS,
   LS_PLAYBACK_RATE,
@@ -43,14 +42,27 @@ import {
  */
 /**
  * Thrown by every video API when IndexedDB is BLOCKED by another tab holding the
- * database open at a different schema version. Distinct from the localStorage
- * fallback: the data exists but is temporarily inaccessible, so we surface an
- * error (app.js halts startup) rather than silently using an empty store.
+ * database open at a different schema version. Distinct from
+ * DbUnavailableError: here the database opened fine at some point and the data
+ * exists, it is just temporarily inaccessible — a condition the user can clear
+ * by closing the other tab, so app.js halts startup and says exactly that.
  */
 export class DbBlockedError extends Error {
   constructor() {
     super('IndexedDB is blocked by another tab holding a different database version.');
     this.name = 'DbBlockedError';
+  }
+}
+
+/**
+ * Thrown by every video API when IndexedDB cannot be opened at all: the global
+ * is missing, `indexedDB.open()` throws, or the open request errors. There is
+ * then nowhere to read or save videos, so app.js halts with a blocking error.
+ */
+export class DbUnavailableError extends Error {
+  constructor() {
+    super('IndexedDB is unavailable; this app cannot store videos without it.');
+    this.name = 'DbUnavailableError';
   }
 }
 
@@ -254,22 +266,22 @@ export function saveChannelPrefs(map) {
 }
 
 // ---------------------------------------------------------------------------
-// IndexedDB video store (with localStorage fallback)
+// IndexedDB video store (required)
 // ---------------------------------------------------------------------------
 
 let dbPromise = null;
-let useFallback = false;
+// Sticky: IndexedDB could not be opened at all. Every video API then throws
+// DbUnavailableError (see the three trigger sites in openDb below).
+let dbUnavailable = false;
+// Sticky: the DB is held by another tab at a different schema version. Every
+// video API then throws DbBlockedError.
 let dbBlocked = false;
-
-function idbAvailable() {
-  return typeof indexedDB !== 'undefined' && indexedDB !== null;
-}
 
 function openDb() {
   if (dbPromise) return dbPromise;
 
-  if (!idbAvailable()) {
-    useFallback = true;
+  if (indexedDB == null) {
+    dbUnavailable = true;
     dbPromise = Promise.resolve(null);
     return dbPromise;
   }
@@ -279,7 +291,7 @@ function openDb() {
     try {
       req = indexedDB.open(IDB_NAME, IDB_VERSION);
     } catch {
-      useFallback = true;
+      dbUnavailable = true;
       resolve(null);
       return;
     }
@@ -305,17 +317,19 @@ function openDb() {
     };
 
     req.onerror = () => {
-      // Fall back to localStorage if IndexedDB cannot be opened.
-      useFallback = true;
+      // The open request failed (storage blocked for this origin, corrupted
+      // database, disk full). Flag it and resolve null (nothing hangs); every
+      // video API then throws DbUnavailableError and app.js halts startup.
+      dbUnavailable = true;
       resolve(null);
     };
 
     req.onblocked = () => {
       // Another tab holds the DB open at a different version, blocking this
-      // upgrade. Do NOT fall back: the real data is in IndexedDB (just
-      // inaccessible), so an empty localStorage store would mislead. Flag it and
-      // resolve null (nothing hangs); every video API then throws DbBlockedError
-      // and app.js halts startup with a blocking "close other tabs" message.
+      // upgrade. The real data is in IndexedDB (just inaccessible), so this is a
+      // distinct, recoverable condition. Flag it and resolve null (nothing
+      // hangs); every video API then throws DbBlockedError and app.js halts
+      // startup with a blocking "close other tabs" message.
       dbBlocked = true;
       resolve(null);
     };
@@ -324,24 +338,19 @@ function openDb() {
   return dbPromise;
 }
 
-// -- localStorage fallback helpers ------------------------------------------
-
-function fallbackReadAll() {
-  try {
-    const raw = localStorage.getItem(LS_VIDEOS_FALLBACK);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function fallbackWriteAll(records) {
-  localStorage.setItem(LS_VIDEOS_FALLBACK, JSON.stringify(records));
-}
-
 // -- Public async video API --------------------------------------------------
+//
+// Every one of the four APIs below opens the DB and then runs the SAME two
+// guards, in this order:
+//   1. dbBlocked      -> DbBlockedError
+//   2. dbUnavailable  -> DbUnavailableError
+// Blocked is checked first because it is the more specific, recoverable
+// diagnosis: the data exists and closing the other tab fixes it. If a blocked
+// upgrade later aborts, `req.onerror` can set dbUnavailable too, and the user
+// still needs the "close the other tab(s)" message, not "IndexedDB is broken".
+// The `|| !db` half of the second guard is a belt: openDb only ever resolves
+// null via those flags, so a null db with neither flag set would be a bug — fail
+// loudly rather than crash on db.transaction or return an empty list.
 
 /**
  * Return all stored video records as an array.
@@ -350,9 +359,7 @@ function fallbackWriteAll(records) {
 export async function getAllVideos() {
   const db = await openDb();
   if (dbBlocked) throw new DbBlockedError();
-  if (!db || useFallback) {
-    return migrateStates(fallbackReadAll());
-  }
+  if (dbUnavailable || !db) throw new DbUnavailableError();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE_VIDEOS, 'readonly');
     const store = tx.objectStore(IDB_STORE_VIDEOS);
@@ -370,14 +377,7 @@ export async function getAllVideos() {
 export async function putVideo(record) {
   const db = await openDb();
   if (dbBlocked) throw new DbBlockedError();
-  if (!db || useFallback) {
-    const all = fallbackReadAll();
-    const idx = all.findIndex((r) => r.videoId === record.videoId);
-    if (idx >= 0) all[idx] = record;
-    else all.push(record);
-    fallbackWriteAll(all);
-    return;
-  }
+  if (dbUnavailable || !db) throw new DbUnavailableError();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE_VIDEOS, 'readwrite');
     tx.objectStore(IDB_STORE_VIDEOS).put(record);
@@ -395,13 +395,7 @@ export async function putVideo(record) {
 export async function putVideos(records) {
   const db = await openDb();
   if (dbBlocked) throw new DbBlockedError();
-  if (!db || useFallback) {
-    const all = fallbackReadAll();
-    const byId = new Map(all.map((r) => [r.videoId, r]));
-    for (const rec of records) byId.set(rec.videoId, rec);
-    fallbackWriteAll(Array.from(byId.values()));
-    return;
-  }
+  if (dbUnavailable || !db) throw new DbUnavailableError();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE_VIDEOS, 'readwrite');
     const store = tx.objectStore(IDB_STORE_VIDEOS);
@@ -421,42 +415,11 @@ export async function deleteVideos(ids) {
   if (!ids || ids.length === 0) return;
   const db = await openDb();
   if (dbBlocked) throw new DbBlockedError();
-  if (!db || useFallback) {
-    const idSet = new Set(ids);
-    const all = fallbackReadAll().filter((r) => !idSet.has(r.videoId));
-    fallbackWriteAll(all);
-    return;
-  }
+  if (dbUnavailable || !db) throw new DbUnavailableError();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE_VIDEOS, 'readwrite');
     const store = tx.objectStore(IDB_STORE_VIDEOS);
     for (const id of ids) store.delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-
-/**
- * Replace the ENTIRE video store contents with `records` (clear + bulk put).
- * Used after a prune to keep IndexedDB in sync with the in-memory model.
- * @param {Array<object>} records
- * @returns {Promise<void>}
- */
-export async function replaceAllVideos(records) {
-  const db = await openDb();
-  if (dbBlocked) throw new DbBlockedError();
-  if (!db || useFallback) {
-    fallbackWriteAll(records);
-    return;
-  }
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE_VIDEOS, 'readwrite');
-    const store = tx.objectStore(IDB_STORE_VIDEOS);
-    const clearReq = store.clear();
-    clearReq.onsuccess = () => {
-      for (const rec of records) store.put(rec);
-    };
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);

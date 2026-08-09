@@ -22,7 +22,6 @@ import {
   putVideos,
   putVideo,
   deleteVideos,
-  replaceAllVideos,
   loadChannels,
   saveChannels,
   loadChannelPrefs,
@@ -33,6 +32,7 @@ import {
   getHideMarked,
   setHideMarked,
   DbBlockedError,
+  DbUnavailableError,
 } from './store.js';
 import {
   waitForGis,
@@ -134,18 +134,24 @@ async function init() {
   // exact "Authorized JavaScript origins" value.
   if (dom.originHint) dom.originHint.textContent = window.location.origin;
 
-  // Load persisted videos up front. getAllVideos() is the first store call, so a
-  // DbBlockedError (another tab holds the DB at a different version) surfaces
-  // here: show a blocking full-screen error and HALT startup rather than run on a
-  // separate, empty localStorage store. Any other read failure is non-fatal.
+  // Load persisted videos up front. getAllVideos() is the first store call, and
+  // EVERY rejection from it is FATAL: an empty store is not an error (getAll()
+  // resolves [] on a first run), so a rejection always means the video store is
+  // unusable. Falling through with an empty state.records would show a wiped
+  // queue and then write over rows that may still be sitting in the DB. So each
+  // case HALTS startup with a blocking full-screen error:
+  //   - DbBlockedError     — another tab holds the DB at a different version.
+  //   - DbUnavailableError — IndexedDB could not be opened at all.
+  //   - anything else      — the DB opened but the read failed (a plain
+  //     DOMException from db.transaction() or the getAll() request: corrupt
+  //     backing store, failing disk).
   try {
     state.records = await getAllVideos();
   } catch (err) {
-    if (err instanceof DbBlockedError) {
-      showBlockedError();
-      return;
-    }
-    state.records = [];
+    if (err instanceof DbBlockedError) showBlockedError();
+    else if (err instanceof DbUnavailableError) showDbUnavailableError();
+    else showDbReadError(err);
+    return;
   }
 
   // Load the persisted channel avatar/title map BEFORE the first render so
@@ -178,8 +184,14 @@ async function init() {
     }
     try {
       await cleanup();
-    } catch {
-      // Non-fatal: fall through and render whatever we have.
+    } catch (err) {
+      // cleanup()'s only await is deleteVideos(), so a throw here is a fatal DB
+      // condition (blocked/unavailable) — it must surface, not be swallowed.
+      // Anything else falls through and renders whatever we have. Note cleanup()
+      // drops the pruned records from state.records BEFORE awaiting the delete,
+      // so on failure memory and IndexedDB diverge until the next reload re-reads
+      // and re-prunes.
+      reportIfFatalDb(err);
     }
   }
 
@@ -610,7 +622,8 @@ function updateChannelsFromSubs(subs) {
  * Fill in durationSeconds + embeddable for currently-visible videos that lack
  * either (covers both newly fetched videos and backfill of older ones), via a
  * batched videos.list. These are enhancements (badges + playability), so
- * failures are swallowed — a refresh is never failed over them.
+ * failures are swallowed — a refresh is never failed over them. The one
+ * exception is a fatal DB condition, which is reported (see reportIfFatalDb).
  */
 async function backfillDetails() {
   const missing = computeVisible(state.records, state.floor)
@@ -633,8 +646,10 @@ async function backfillDetails() {
       if (typeof d.description === 'string') r.description = d.description;
     }
     await putVideos(state.records);
-  } catch {
-    /* enhancements only; never fail a refresh over them */
+  } catch (err) {
+    // Enhancements only; never fail a refresh over them — but a fatal DB state
+    // (blocked by another tab) still has to surface instead of vanishing here.
+    reportIfFatalDb(err);
   }
 }
 
@@ -1036,7 +1051,7 @@ function onCardRate(videoId, rate) {
   if (!rec) return;
   const wasActive = rec.preferredRate === rate;
   rec.preferredRate = wasActive ? undefined : rate; // click active -> toggle off
-  putVideo(rec).catch(() => {}); // persist (whole-record write)
+  putVideo(rec).catch(reportIfFatalDb); // persist (whole-record write)
   const card = findCard(videoId);
   if (card) setCardRate(card, rec.preferredRate);
   // Live-apply only when SETTING a speed for the currently-playing video.
@@ -1064,7 +1079,7 @@ function onPlayerProgress(videoId, seconds) {
   const pos = Math.floor(seconds || 0);
   if (rec.positionSeconds === pos) return;
   rec.positionSeconds = pos;
-  putVideo(rec).catch(() => {}); // best-effort throttled persist
+  putVideo(rec).catch(reportIfFatalDb); // best-effort throttled persist
 }
 
 /** Best-effort capture + persist of the current position on page hide/unload. */
@@ -1131,7 +1146,7 @@ async function onLike() {
 
   try {
     await rateVideo(videoId, nextRating); // ~50 quota units; writes to YouTube
-    putVideo(rec).catch(() => {}); // persist the local liked flag on success
+    putVideo(rec).catch(reportIfFatalDb); // persist the local liked flag on success
   } catch (err) {
     if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
       // Write scope not granted yet: re-consent for the new scope, then retry once.
@@ -1141,7 +1156,7 @@ async function onLike() {
         initAuth(state.clientId);
         await requestToken({ interactive: true });
         await rateVideo(videoId, nextRating);
-        putVideo(rec).catch(() => {}); // persist on success
+        putVideo(rec).catch(reportIfFatalDb); // persist on success
         return;
       } catch (e2) {
         revert();
@@ -1514,21 +1529,19 @@ function onGlobalKeydown(e) {
 // ---------------------------------------------------------------------------
 
 /**
- * Full-screen BLOCKING error shown when IndexedDB is blocked by another tab
- * holding the database open at a different app/DB version (e.g. an old tab left
- * open across a new deploy). We do NOT fall back to a separate localStorage
- * store — the real data is in IndexedDB, just inaccessible — so startup halts
- * here until the user closes the other tab(s) and reloads. Built with el()/text
- * nodes (no innerHTML for the dynamic reload wiring), matching the panel look.
+ * Full-screen BLOCKING error for a FATAL storage condition: the video store is
+ * unusable, so the app halts rather than run on a queue it cannot read or save.
+ * Shared by the three callers below; only the copy differs. All are resolved by
+ * fixing the environment and reloading, hence the single Reload action. Built
+ * with el()/text nodes (no innerHTML for the dynamic reload wiring), matching
+ * the panel look.
+ * @param {{heading:string, paragraphs:Array<string>, toast:string}} copy
  */
-function showBlockedError() {
+function showFatalStorageError({ heading, paragraphs, toast }) {
   const overlay = document.getElementById('blocked-overlay');
   if (!overlay) {
     // Defensive: without the container, at least surface it as a toast.
-    showToast(
-      'This app is open in another tab at a different version. Close the other tab(s) and reload.',
-      { type: 'error' }
-    );
+    showToast(toast, { type: 'error' });
     return;
   }
   // Hide the onboarding/app scaffolding behind the overlay.
@@ -1538,16 +1551,8 @@ function showBlockedError() {
 
   while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
   const panel = el('div', { class: 'panel panel--blocked', role: 'alertdialog', 'aria-labelledby': 'blocked-heading' }, [
-    el('h2', { id: 'blocked-heading', text: 'Already open in another tab' }),
-    el('p', {
-      text:
-        'This app is already open in another browser tab running a different ' +
-        'version. Your videos are safe, but this tab can’t access them while the ' +
-        'other one is open.',
-    }),
-    el('p', {
-      text: 'Close the other tab(s) of this app, then reload this page.',
-    }),
+    el('h2', { id: 'blocked-heading', text: heading }),
+    ...paragraphs.map((p) => el('p', { text: p })),
     el('div', { class: 'panel__actions' }, [
       el('button', {
         class: 'btn btn--primary',
@@ -1560,11 +1565,124 @@ function showBlockedError() {
   setVisible(overlay, true);
 }
 
+/**
+ * IndexedDB is blocked by another tab holding the database open at a different
+ * app/DB version (e.g. an old tab left open across a new deploy). The real data
+ * is in IndexedDB, just inaccessible, so startup halts until the user closes the
+ * other tab(s) and reloads.
+ */
+function showBlockedError() {
+  showFatalStorageError({
+    heading: 'Already open in another tab',
+    paragraphs: [
+      'This app is already open in another browser tab running a different ' +
+        'version. Your videos are safe, but this tab can’t access them while the ' +
+        'other one is open.',
+      'Close the other tab(s) of this app, then reload this page.',
+    ],
+    toast:
+      'This app is open in another tab at a different version. Close the other tab(s) and reload.',
+  });
+}
+
+/**
+ * IndexedDB could not be opened at all, so there is nowhere to read or save the
+ * queue. The app stops here instead of presenting an empty queue whose writes
+ * would quietly fail.
+ */
+function showDbUnavailableError() {
+  showFatalStorageError({
+    heading: 'Storage unavailable',
+    paragraphs: [
+      'This app needs IndexedDB to store your queue, and this browser couldn’t ' +
+        'open it. Without it the app stops here rather than show you an empty ' +
+        'queue and quietly lose whatever you do next.',
+      'The likely causes are site data (storage) being blocked for this origin ' +
+        'in your browser settings, a corrupted database, or a full disk.',
+      'Allow site data for this origin, free up disk space, then reload. If it ' +
+        'still fails, clearing this site’s storage rebuilds the database from ' +
+        'scratch — you lose the stored queue and your saved settings, nothing else.',
+    ],
+    toast:
+      'This app requires IndexedDB and it could not be opened. Allow site data for this origin, then reload.',
+  });
+}
+
+/**
+ * The database opened, but reading it failed (a plain DOMException from the
+ * transaction or the getAll() request). The rows may well still be there, so the
+ * app must NOT continue on an empty queue and write over them. The underlying
+ * error is shown because it is the only diagnostic the user gets.
+ * @param {unknown} err the rejection from getAllVideos()
+ */
+function showDbReadError(err) {
+  const detail = describeError(err);
+  showFatalStorageError({
+    heading: 'Could not read your queue',
+    paragraphs: [
+      'The database is there, but reading your stored videos failed. That ' +
+        'usually means a corrupted database or a disk that is failing.',
+      'The app is stopping here rather than show you an empty queue and write ' +
+        'over data that may still be in there.',
+      'Reloading is worth a try. If it keeps failing, clearing this site’s ' +
+        'storage rebuilds the database from scratch — you lose the stored queue ' +
+        'and your saved settings, nothing else.',
+      detail ? `Details: ${detail}` : null,
+    ].filter(Boolean),
+    toast:
+      'Could not read the stored queue — the database may be corrupted. Reload, or clear this site’s storage to start over.',
+  });
+}
+
+/**
+ * Best-effort, never-throwing 'Name: message' description of an unknown thrown
+ * value, for display via textContent. Anything exotic (a Proxy, a getter that
+ * throws, a Symbol) degrades to '' rather than breaking the error screen.
+ * @param {unknown} err
+ * @returns {string}
+ */
+function describeError(err) {
+  try {
+    if (err == null) return '';
+    const name = typeof err.name === 'string' ? err.name : '';
+    const message = typeof err.message === 'string' ? err.message : '';
+    const detail = [name, message].filter(Boolean).join(': ') || String(err);
+    return detail.slice(0, 300);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Swallow a best-effort (optional) store write's failure — EXCEPT the fatal DB
+ * conditions, which are routed to handleError so the user is actually told.
+ * `dbBlocked` can flip AFTER init via db.onversionchange (another tab starting a
+ * schema upgrade), and from then on every write no-ops; without this the card
+ * speed / watch position / like flag would silently stop persisting.
+ * Use as `putVideo(rec).catch(reportIfFatalDb)`.
+ * @param {unknown} err
+ */
+function reportIfFatalDb(err) {
+  // DbUnavailableError is practically unreachable post-init (init awaits the
+  // memoized openDb() and halts), but it costs nothing to cover it here too.
+  if (err instanceof DbBlockedError || err instanceof DbUnavailableError) {
+    handleError(err);
+  }
+  // Anything else is a transient failure on an optional write: keep the call
+  // site's intent and stay quiet (a refresh is never failed over one).
+}
+
 function handleError(err) {
   if (err instanceof DbBlockedError) {
     // A store write hit the blocked state after init (rare — startup normally
     // halts first). Surface the same blocking screen rather than fail silently.
     showBlockedError();
+    return;
+  }
+  if (err instanceof DbUnavailableError) {
+    // Same idea for a store call that finds IndexedDB unusable after init (e.g.
+    // the very first store call happens post-init): halt visibly, never silently.
+    showDbUnavailableError();
     return;
   }
   if (err instanceof ApiError) {
