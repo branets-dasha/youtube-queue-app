@@ -651,10 +651,14 @@ main {
   background: transparent;
   color: var(--text-dim);
 }
-/* Direct-child text buttons (▶ Play, Skip) share the row evenly; the speed group
-   and its compact buttons keep their natural size, on ONE line. */
+/* Skip takes a FIXED slice of the footer, so it is the same width with or without
+   the speed group (i.e. on non-embeddable cards too); ▶ Play / ↗ YouTube grow into
+   everything else, pushing the speed group hard right against Skip. */
 .row__actions > .btn {
   flex: 1 1 0;
+}
+.row__actions > .btn--skip {
+  flex: 0 0 31.5%; /* ≈ the width Skip had when it split the footer with Play */
 }
 .row__actions .btn:hover:not(:disabled) {
   background: var(--surface-2);
@@ -680,9 +684,12 @@ main {
   margin-right: 2px;
   border-right: 1px solid var(--border);
 }
+/* One fixed width for all three, so they stay equal and the widest label ("1.5×")
+   never clips. The width sets the box; the padding only sets the height. */
 .btn--cardrate {
   flex: 0 0 auto;
-  padding: 6px 6px;
+  width: 36px;
+  padding: 6px 0;
   font-size: 0.76rem;
   line-height: 1;
 }
@@ -702,40 +709,15 @@ main {
 
 /* The footer "↗ YouTube" link for videos that can't play in the app. Rendered as
    an <a> but sits in the row's action footer, so it inherits the same ghost
-   sizing as its sibling Skip (flex: 1, same padding/height => card height is
-   unchanged). A subtle YouTube-red tint marks it as an off-app affordance. */
+   sizing as Play (same padding/height => card height is unchanged) and, with no
+   speed group beside it, grows across the whole non-Skip portion. A subtle
+   YouTube-red tint marks it as an off-app affordance. */
 .row__actions .btn--youtube {
   color: var(--primary);
 }
 .row__actions .btn--youtube:hover:not(:disabled) {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
-}
-
-/* Skip must render at the SAME width on a non-embeddable card as on a normal one.
-   A normal footer is [Play | speed-group | Skip] where Play + Skip are the two
-   flex:1 buttons splitting the row's free space, and the speed group is a FIXED
-   island between them. A non-embeddable footer drops the speed group, leaving just
-   [↗ YouTube | Skip] — so the two flex buttons split MORE space and Skip renders
-   wider (~169px vs ~131px at the 400px pane; ~262px vs the normal 262px when the
-   pane goes full-width in the stacked layout — i.e. wider than normal at every
-   width). To fix it WITHOUT touching normal cards, re-introduce the speed group's
-   exact fixed footprint as an inert flex spacer (an empty ::before) on the
-   non-embeddable footer only. 66.75px = the .row__rates box (64.75px) plus its
-   2px right margin, measured at render; since that footprint is constant at any
-   pane width, ↗ YouTube (flex:1) absorbs the difference and Skip lands on the
-   same (freeSpace − footprint)/2 the normal card gives it, matching to <1px in
-   both the fixed-pane and stacked layouts. The spacer is `order`ed BETWEEN the
-   two buttons (not before both) so ↗ YouTube sits at the left edge and Skip at
-   the right, mirroring a normal card's [Play | speed-group | Skip]; `order` only
-   moves items and never changes their computed widths, so the match still holds. */
-.row--noembed .row__actions::before {
-  content: '';
-  flex: 0 0 66.75px;
-  order: 1;
-}
-.row--noembed .row__actions .btn--skip {
-  order: 2;
 }
 
 /* The thumbnail hover overlay for a non-embeddable card uses the ↗ glyph; tint
@@ -1190,8 +1172,8 @@ body.app-active #app-main.app {
   flex: 0 0 auto;
   margin-left: auto;
 }
-/* Same ghost treatment as a card's action footer, so the 1×/2× group and
-   Ignore read like the card buttons. */
+/* Same ghost treatment as a card's action footer, so the 1× / 1.5× / 2× group
+   and Ignore read like the card buttons. */
 .chan__controls .btn {
   border-color: transparent;
   background: transparent;

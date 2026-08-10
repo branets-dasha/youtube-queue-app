@@ -472,10 +472,11 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     ]),
   ]);
 
-  // Two TEXT action buttons flank the compact speed group: [▶ Play] · 1× 2× ·
-  // [Skip]. The ▶ glyph is static unicode (never API data); each button carries
-  // an aria-label AND a title. The card title itself links to the video on
-  // YouTube, so there is no separate ↗ button. Skip keeps its class so
+  // The footer is plain source order — [▶ Play] · 1× 1.5× 2× · [Skip] — with Play
+  // stretching, so the compact speed group is pushed hard right against Skip (no
+  // wrapper, no `order`). The ▶ glyph is static unicode (never API data); each
+  // button carries an aria-label AND a title. The card title itself links to the
+  // video on YouTube, so there is no separate ↗ button. Skip keeps its class so
   // setCardState's aria-pressed + the active-colour CSS still apply.
   const playBtn = el('button', {
     class: 'btn btn--play',
@@ -495,9 +496,10 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     onclick: () => handlers.onSkip && handlers.onSkip(rec.videoId),
   });
 
-  // Per-video preferred-speed group (1× / 2×) placed right after Play. It sets a
-  // preference only — does NOT start playback. Glyphs are static text. (1.5× is a
-  // valid preset but is only exposed in the player controls, not on cards.)
+  // Per-video preferred-speed group (1× / 1.5× / 2× — the full set of valid
+  // presets, the same three offered per channel on channels.html) placed right
+  // after Play. It sets a preference only — does NOT start playback. Glyphs are
+  // static text.
   const speedGroup = el(
     'div',
     {
@@ -505,25 +507,28 @@ export function buildQueueRow(rec, handlers, channels = {}) {
       role: 'group',
       'aria-label': `Preferred speed for "${rec.title}"`,
     },
-    [1, 2].map((r) => {
+    [1, 1.5, 2].map((r) => {
       const label = `${r}×`;
       return el('button', {
         class: 'btn btn--cardrate',
         type: 'button',
         dataset: { rate: String(r) },
+        text: label,
         'aria-label': `Set ${label} speed for this video`,
         'aria-pressed': 'false',
         title: `${label} preferred speed`,
-        text: label,
         onclick: () => handlers.onCardRate && handlers.onCardRate(rec.videoId, r),
       });
     })
   );
 
   // Non-embeddable videos can't play in the app, so their footer replaces the
-  // Play button + speed group with a single "↗ YouTube" link (a real anchor, so
-  // it is keyboard-reachable, activates on Enter, and opens a new tab natively).
-  // Skip is kept in both cases. ↗ / YouTube are static strings (never API data).
+  // Play button with a single "↗ YouTube" link (a real anchor, so it is
+  // keyboard-reachable, activates on Enter, and opens a new tab natively) and
+  // drops the speed group entirely — there is no in-app playback to set a speed
+  // for. Skip is kept in both cases, and CSS gives it a fixed share of the
+  // footer so it renders at the same width either way. ↗ / YouTube are static
+  // strings (never API data).
   const youtubeBtn = el('a', {
     class: 'btn btn--youtube',
     href: watchUrl,

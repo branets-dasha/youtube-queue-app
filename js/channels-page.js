@@ -40,8 +40,8 @@ function init() {
 
 /**
  * Build one channel row (<li>): avatar + title in a single anchor to the
- * channel on YouTube, then the controls — the same 1×/2× speed buttons the
- * video cards use, and an Ignore toggle. All API-derived text is set via
+ * channel on YouTube, then the controls — the same 1× / 1.5× / 2× speed buttons
+ * the video cards use, and an Ignore toggle. All API-derived text is set via
  * textContent (XSS-safe); the id goes through encodeURIComponent.
  * @param {{channelId:string,title:string,avatarUrl:string}} ch
  * @param {Record<string,{title:string,avatarUrl:string}>} channels
@@ -62,9 +62,9 @@ function buildChannelRow(ch, channels) {
     ]
   );
 
-  // Mirrors the per-video speed group on queue cards: same 1×/2× presets, same
-  // classes (btn--cardrate + is-active/aria-pressed via setCardRate), same
-  // toggle-off-on-active-click semantics.
+  // Mirrors the per-video speed group on queue cards: same 1× / 1.5× / 2×
+  // presets, same classes (btn--cardrate + is-active/aria-pressed via
+  // setCardRate), same toggle-off-on-active-click semantics.
   const rates = el(
     'div',
     {
@@ -72,7 +72,7 @@ function buildChannelRow(ch, channels) {
       role: 'group',
       'aria-label': `Preferred speed for videos from "${ch.title}"`,
     },
-    [1, 2].map((r) => {
+    [1, 1.5, 2].map((r) => {
       const label = `${r}×`;
       return el('button', {
         class: 'btn btn--cardrate',

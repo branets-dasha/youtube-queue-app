@@ -1372,11 +1372,21 @@ function cyclePlaybackRate(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. QUEUE: j/k move, x skip, u undo, Enter play focused card.
-// PLAYER: Space play/pause, ←/→ seek, -/+ speed, n
+// Keyboard shortcuts. QUEUE: j/k move, x skip, u undo, Enter play focused card,
+// 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→ seek, -/+ speed, n
 // next, l like, m mute, f fullscreen. Ignored while typing in an input/textarea,
 // during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays allowed for '+').
 // ---------------------------------------------------------------------------
+
+// Digit -> preferred speed for the FOCUSED card. 1 and 2 are literal; '5' is the
+// "point-five" mnemonic for 1.5× — hence an explicit table rather than
+// Number(key), which would read '5' as the (invalid) rate 5. A Map, so stray
+// key names can never resolve to an inherited Object property.
+const CARD_RATE_KEYS = new Map([
+  ['1', 1],
+  ['5', 1.5],
+  ['2', 2],
+]);
 
 // ---------------------------------------------------------------------------
 // Privacy curtain: a full-viewport overlay that hides the whole page. Covers the
@@ -1466,17 +1476,18 @@ function onGlobalKeydown(e) {
       e.preventDefault();
       markVideo(rows[idx].dataset.videoId, STATE_SKIPPED, { advanceFocus: true });
     }
-  } else if (key === '1' || key === '2') {
-    // Set the FOCUSED card's preferred speed. Reuses the card speed-button
-    // behavior: toggles off if already set, no playback, applies live only if
-    // the focused card is the one currently playing. (1.5× lives in the player.)
-    // No-op on a non-embeddable card: it has no in-app playback (and thus no
-    // speed group), so there is nothing to set — consistent with its footer.
+  } else if (CARD_RATE_KEYS.has(key)) {
+    // Set the FOCUSED card's preferred speed (1 = 1×, 5 = 1.5×, 2 = 2× — see
+    // CARD_RATE_KEYS). Reuses the card speed-button behavior: toggles off if
+    // already set, no playback, applies live only if the focused card is the one
+    // currently playing. No-op on a non-embeddable card: it has no in-app
+    // playback (its speed group renders inert), so there is nothing to set —
+    // consistent with its footer.
     if (idx >= 0) {
       e.preventDefault();
       const videoId = rows[idx].dataset.videoId;
       const rec = state.records.find((r) => r.videoId === videoId);
-      if (!rec || rec.embeddable !== false) onCardRate(videoId, Number(key));
+      if (!rec || rec.embeddable !== false) onCardRate(videoId, CARD_RATE_KEYS.get(key));
     }
   } else if (key === 'u') {
     e.preventDefault();
