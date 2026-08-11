@@ -110,6 +110,7 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 
 - **Likes made on YouTube are not reflected here.** The like state is tracked locally (never fetched), so liking/unliking in the YouTube app or website won't show up in the app, and vice-versa is one-way (this app → YouTube).
 - **Shorts** are detected by a **heuristic** (duration ≤ 90s) and merely badged — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the badge can be wrong for edge cases.
+- **One queue tab at a time.** A second queue tab stops with a "close the other tab and reload" message so the two can't write over each other; the Channels page can stay open alongside.
 - **Resume** only covers **in-app** playback position (tracked by the embedded player); it does not sync with YouTube's own watch history.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.

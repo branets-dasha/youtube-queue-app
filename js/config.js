@@ -41,6 +41,11 @@ export const LS_DEFAULT_SPEED = 'yqa_default_speed';
 // Persisted "hide handled (skipped) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 
+// Web Lock name (NOT a storage key) for the single-tab guard in app.js: the one
+// queue tab that holds it owns the video store, and a tab that cannot get it
+// stands down. channels.html never asks for it.
+export const TAB_LOCK = 'yqa_tab';
+
 // IndexedDB configuration.
 export const IDB_NAME = 'yqa';
 export const IDB_VERSION = 1;

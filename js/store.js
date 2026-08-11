@@ -12,6 +12,9 @@
 //     schema version during a version upgrade): the real data lives in
 //     IndexedDB but is temporarily inaccessible, so every video API throws
 //     `DbBlockedError` and startup halts with a different blocking message.
+//   - `standDownForOtherTab()` sets that same BLOCKED flag from the outside, for
+//     app.js's single-tab guard: another tab owns the queue, so this page must
+//     not write, and the user fixes it the same way (close the other tab, reload).
 //
 // All video APIs are async (Promise-returning).
 
@@ -257,8 +260,9 @@ let dbPromise = null;
 // Sticky: IndexedDB could not be opened at all. Every video API then throws
 // DbUnavailableError (see the three trigger sites in openDb below).
 let dbUnavailable = false;
-// Sticky: the DB is held by another tab at a different schema version. Every
-// video API then throws DbBlockedError.
+// Sticky: another tab owns the database — it holds it open at a different schema
+// version, or (via standDownForOtherTab) it is the active queue tab. Every video
+// API then throws DbBlockedError.
 let dbBlocked = false;
 
 function openDb() {
@@ -320,6 +324,21 @@ function openDb() {
   });
 
   return dbPromise;
+}
+
+/**
+ * Stand down: another tab of the queue owns the video store, so this page must
+ * never write to it. Sets the SAME sticky blocked flag as `onblocked` /
+ * `onversionchange` — the condition is identical from here on (the data is
+ * there, this page must not touch it, closing the other tab and reloading fixes
+ * it), so every subsequent video API throws DbBlockedError and no fourth guard
+ * line is needed. Also closes this connection (IndexedDB lets pending
+ * transactions finish first) so the surviving tab is never blocked by it.
+ * Called only by app.js's single-tab guard. Sticky and irreversible by design.
+ */
+export function standDownForOtherTab() {
+  dbBlocked = true;
+  if (dbPromise) dbPromise.then((db) => db && db.close()).catch(() => {});
 }
 
 // -- Public async video API --------------------------------------------------

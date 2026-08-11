@@ -10,6 +10,7 @@ import {
   QUEUE_DISPLAY_LIMIT,
   DEFAULT_PLAYBACK_SPEED,
   INCREMENTAL_REFRESH_BUFFER_MS,
+  TAB_LOCK,
 } from './config.js';
 import { migrateLocalStorage } from './migrations.js';
 import {
@@ -32,6 +33,7 @@ import {
   setDefaultSpeed,
   getHideMarked,
   setHideMarked,
+  standDownForOtherTab,
   DbBlockedError,
   DbUnavailableError,
 } from './store.js';
@@ -124,6 +126,10 @@ const dom = {};
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+  // Single-tab guard, first thing: ask for the tab lock before any store read.
+  // The answer is awaited at the checkpoint below (see the section below).
+  requestTabLock();
+
   cacheDom();
   bindEvents();
 
@@ -179,6 +185,17 @@ async function init() {
   // Restore the persisted "hide handled" view toggle and reflect the button.
   state.hideMarked = getHideMarked();
   updateHideMarkedButton();
+
+  // Single-tab CHECKPOINT, immediately before the first IndexedDB WRITE path
+  // (cleanup()). Nothing above here writes, so a tab that did not get the lock
+  // stops here, before it can touch the store. The overlay is not the safety
+  // net — bindEvents() ran long ago and the shortcuts stay live behind it — the
+  // store standing down is, because it makes every later write throw.
+  if (!(await tabLockGranted)) {
+    standDownForOtherTab();
+    showSupersededError();
+    return;
+  }
 
   // INIT is one of the three CLEANUP sites. Migrate installs that predate the
   // cutoff key (derive it from floor), then run cleanup BEFORE the first render.
@@ -298,6 +315,69 @@ function bindEvents() {
   window.addEventListener('unhandledrejection', (event) => {
     handleError(event.reason);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Single-tab guard
+//
+// Two queue tabs writing the same video store would clobber each other (both
+// hold the whole record set in memory and write it back). So only one tab of
+// index.html may run: the NEWLY-OPENED tab yields, an already-active tab is
+// never interrupted. channels.html deliberately stays outside this — it never
+// writes video records, so it may be open alongside the queue.
+//
+// One named Web Lock (TAB_LOCK) is the whole mechanism, and it is race-free by
+// construction: the browser grants it to exactly one document, so there is no
+// handshake to get wrong and no window in which two tabs opened at the same
+// instant can both proceed. A backgrounded or frozen tab keeps holding it — a
+// lock is not a message it could fail to answer.
+//
+// init() fires the request at the very top and awaits the answer at its
+// checkpoint, immediately before the first write path (cleanup()). Not granted
+// means another queue tab is live: the store stands down (every video API then
+// throws DbBlockedError, so the optimistic UI updates revert instead of
+// persisting) and the same full-screen halt as the other fatal storage
+// conditions goes up.
+//
+// The grant is held for the document's LIFETIME by returning a promise that
+// never settles; the browser releases it when the document goes away (closed,
+// navigated away, discarded) — nothing to unwind by hand. That also means
+// request()'s own promise never settles, which is why the granted/not-granted
+// answer travels out through a SEPARATE promise resolved inside the callback.
+//
+// FAILS OPEN, NEVER CLOSED: no `navigator.locks`, or a request that throws or
+// rejects, counts as granted and the app boots exactly as it did before this
+// guard existed. Locking the owner out of their own queue would be far worse
+// than the two-tab clobber this prevents.
+//
+// The decision is made once, at startup: there is no path that supersedes a
+// running tab later, so no mid-session halt and nothing to do about the player.
+// ---------------------------------------------------------------------------
+
+// Promise<boolean>: true = this tab owns the queue (or the guard did not engage).
+let tabLockGranted = null;
+
+function requestTabLock() {
+  if (!navigator.locks || typeof navigator.locks.request !== 'function') {
+    tabLockGranted = Promise.resolve(true); // fail open: guard does not engage
+    return;
+  }
+  let answer;
+  tabLockGranted = new Promise((resolve) => {
+    answer = resolve;
+  });
+  try {
+    navigator.locks
+      .request(TAB_LOCK, { ifAvailable: true }, (lock) => {
+        answer(Boolean(lock));
+        // Not granted: return at once, leaving the holding tab undisturbed.
+        // Granted: never settle, so this document holds the lock until it dies.
+        return lock ? new Promise(() => {}) : undefined;
+      })
+      .catch(() => answer(true)); // fail open
+  } catch {
+    answer(true); // fail open
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1557,16 +1637,28 @@ function onGlobalKeydown(e) {
 // Error handling
 // ---------------------------------------------------------------------------
 
+// One fatal storage screen per page load — see FIRST CAUSE WINS below.
+let fatalStorageErrorShown = false;
+
 /**
  * Full-screen BLOCKING error for a FATAL storage condition: the video store is
  * unusable, so the app halts rather than run on a queue it cannot read or save.
- * Shared by the three callers below; only the copy differs. All are resolved by
+ * Shared by the four callers below; only the copy differs. All are resolved by
  * fixing the environment and reloading, hence the single Reload action. Built
  * with el()/text nodes (no innerHTML for the dynamic reload wiring), matching
  * the panel look.
+ *
+ * FIRST CAUSE WINS: later calls are ignored, because one fatal condition
+ * routinely produces another. The single-tab guard is exactly that case — it
+ * stands the store down while the keyboard shortcuts are still bound, so the
+ * next write rejects with DbBlockedError, whose copy ("running a different
+ * version") would otherwise paint over the accurate "already open" one. Every
+ * screen ends in Reload, so the earliest, truest diagnosis is the one to keep.
  * @param {{heading:string, paragraphs:Array<string>, toast:string}} copy
  */
 function showFatalStorageError({ heading, paragraphs, toast }) {
+  if (fatalStorageErrorShown) return;
+  fatalStorageErrorShown = true;
   const overlay = document.getElementById('blocked-overlay');
   if (!overlay) {
     // Defensive: without the container, at least surface it as a toast.
@@ -1634,6 +1726,23 @@ function showDbUnavailableError() {
     ],
     toast:
       'This app requires IndexedDB and it could not be opened. Allow site data for this origin, then reload.',
+  });
+}
+
+/**
+ * Another tab of the queue holds the tab lock, so this one is superseded. The
+ * store has already been stood down, so nothing here can write; this is the
+ * visible half of that halt (see the Single-tab guard section).
+ */
+function showSupersededError() {
+  showFatalStorageError({
+    heading: 'The queue is already open',
+    paragraphs: [
+      'This queue is open in another browser tab. Only one tab at a time may ' +
+        'write to your stored videos, so this one stopped before it could touch them.',
+      'Close the other tab, then reload this page.',
+    ],
+    toast: 'The queue is already open in another tab. Close it, then reload this page.',
   });
 }
 
