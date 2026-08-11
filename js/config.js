@@ -38,10 +38,6 @@ export const DEFAULT_PLAYBACK_SPEED = 1;
 // absent/null = unset). Distinct from LS_PLAYBACK_SPEED (the live/current speed):
 // this is the fallback applied to a video that has no per-video preferredSpeed.
 export const LS_DEFAULT_SPEED = 'yqa_default_speed';
-// Legacy playback-speed keys, kept ONLY so clearLegacySpeedKeys() in store.js can
-// delete them once on load; their values are deliberately not carried over.
-export const LS_PLAYBACK_RATE_LEGACY = 'yqa_playback_rate';
-export const LS_DEFAULT_RATE_LEGACY = 'yqa_default_rate';
 // Persisted "hide handled (skipped) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 
@@ -70,9 +66,7 @@ export const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 // out of order isn't missed. Tunable. Default: 6 hours.
 export const INCREMENTAL_REFRESH_BUFFER_MS = 6 * 60 * 60 * 1000;
 
-// Valid video states. There is a SINGLE "handled" state, `skipped` — the old
-// split into 'watched' / 'not_interested' was functionally identical (both just
-// meant "handled"), so they were merged. Old records migrate to 'skipped' on load
-// (see store.js). Throughout the app, "handled" means `state !== STATE_NEW`.
+// Valid video states. Within the app everything that's not STATE_NEW is considered
+// "handled" (skipped).
 export const STATE_NEW = 'new';
 export const STATE_SKIPPED = 'skipped';

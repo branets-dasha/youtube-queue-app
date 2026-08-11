@@ -10,6 +10,7 @@
 // alongside a main-app tab; the main tab reads the prefs fresh at refresh
 // time, so edits here apply to its next fetch without a reload.
 
+import { migrateLocalStorage } from './migrations.js';
 import { loadChannels, loadChannelPrefs, saveChannelPrefs } from './store.js';
 import {
   sortChannels,
@@ -24,6 +25,10 @@ let prefs = {};
 document.addEventListener('DOMContentLoaded', init);
 
 function init() {
+  // This page never boots app.js, so it runs the one-shot storage migrations
+  // itself — otherwise it would render prefs straight off disk in a stale shape.
+  migrateLocalStorage();
+
   const listEl = document.getElementById('channel-list');
   const emptyEl = document.getElementById('channels-empty');
 

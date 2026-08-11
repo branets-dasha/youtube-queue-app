@@ -23,30 +23,14 @@ import {
   LS_CHANNEL_PREFS,
   LS_PLAYBACK_SPEED,
   LS_DEFAULT_SPEED,
-  LS_PLAYBACK_RATE_LEGACY,
-  LS_DEFAULT_RATE_LEGACY,
   LS_HIDE_MARKED,
   IDB_NAME,
   IDB_VERSION,
   IDB_STORE_VIDEOS,
   IDB_KEYPATH,
-  STATE_NEW,
-  STATE_SKIPPED,
 } from './config.js';
+import { migrateVideos } from './migrations.js';
 
-/**
- * Migrate loaded records to the current on-disk shape. Two normalizations:
- *   - the single "handled" state model: any record whose state is not 'new'
- *     (old 'watched' / 'not_interested', or anything unexpected) becomes
- *     'skipped';
- *   - the legacy per-video `preferredRate` field becomes `preferredSpeed` (the
- *     old name is dropped either way, so it never lingers).
- * Mutates + returns the array. Applied on every read so the in-memory model is
- * always normalized regardless of what's on disk; the next putVideos persists
- * the new shape, so no IDB_VERSION bump is needed.
- * @param {Array<object>} records
- * @returns {Array<object>}
- */
 /**
  * Thrown by every video API when IndexedDB is BLOCKED by another tab holding the
  * database open at a different schema version. Distinct from
@@ -71,18 +55,6 @@ export class DbUnavailableError extends Error {
     super('IndexedDB is unavailable; this app cannot store videos without it.');
     this.name = 'DbUnavailableError';
   }
-}
-
-function migrateStates(records) {
-  for (const r of records) {
-    if (!r) continue;
-    if (r.state !== STATE_NEW) r.state = STATE_SKIPPED;
-    if (r.preferredSpeed == null && r.preferredRate != null) {
-      r.preferredSpeed = r.preferredRate;
-    }
-    delete r.preferredRate;
-  }
-  return records;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,18 +156,6 @@ export function setDefaultSpeed(speed) {
   }
 }
 
-// One-shot cleanup of the pre-rename speed keys, whose values are intentionally
-// NOT migrated (re-picking a speed by hand is trivial). Idempotent, never throws.
-
-export function clearLegacySpeedKeys() {
-  try {
-    localStorage.removeItem(LS_PLAYBACK_RATE_LEGACY);
-    localStorage.removeItem(LS_DEFAULT_RATE_LEGACY);
-  } catch {
-    /* ignore */
-  }
-}
-
 // The persisted "hide marked videos" view toggle (yqa_hide_marked). Default off.
 
 export function getHideMarked() {
@@ -253,23 +213,6 @@ export function saveChannels(map) {
 // ---------------------------------------------------------------------------
 
 /**
- * Migrate a loaded prefs map to the current shape: the legacy per-channel `rate`
- * key becomes `speed` (the old name is dropped either way, so it never lingers).
- * Mutates + returns the map. Applied on every read, so the next saveChannelPrefs
- * persists the new shape; idempotent and tolerant of malformed entries.
- * @param {Record<string,object>} map
- * @returns {Record<string,{ignored?:boolean,speed?:number}>}
- */
-function migrateChannelSpeeds(map) {
-  for (const prefs of Object.values(map)) {
-    if (!prefs || typeof prefs !== 'object') continue;
-    if (prefs.speed == null && prefs.rate != null) prefs.speed = prefs.rate;
-    delete prefs.rate;
-  }
-  return map;
-}
-
-/**
  * Load the persisted per-channel prefs map, or {} if absent/unparseable. Only
  * non-default values are stored (see setChannelPref in queue.js). Read FRESH at
  * refresh time so edits made on channels.html in another tab apply to the next
@@ -282,7 +225,7 @@ export function loadChannelPrefs() {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? migrateChannelSpeeds(parsed)
+      ? parsed
       : {};
   } catch {
     return {};
@@ -394,7 +337,9 @@ function openDb() {
 // loudly rather than crash on db.transaction or return an empty list.
 
 /**
- * Return all stored video records as an array.
+ * Return all stored video records as an array. The only video read path, so it
+ * is where the record migrations run (see migrations.js) — callers always get
+ * the current shape, whatever is on disk.
  * @returns {Promise<Array<object>>}
  */
 export async function getAllVideos() {
@@ -405,7 +350,7 @@ export async function getAllVideos() {
     const tx = db.transaction(IDB_STORE_VIDEOS, 'readonly');
     const store = tx.objectStore(IDB_STORE_VIDEOS);
     const req = store.getAll();
-    req.onsuccess = () => resolve(migrateStates(req.result || []));
+    req.onsuccess = () => resolve(migrateVideos(req.result || []));
     req.onerror = () => reject(req.error);
   });
 }

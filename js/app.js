@@ -11,6 +11,7 @@ import {
   DEFAULT_PLAYBACK_SPEED,
   INCREMENTAL_REFRESH_BUFFER_MS,
 } from './config.js';
+import { migrateLocalStorage } from './migrations.js';
 import {
   getClientId,
   setClientId,
@@ -29,7 +30,6 @@ import {
   setPlaybackSpeed,
   getDefaultSpeed,
   setDefaultSpeed,
-  clearLegacySpeedKeys,
   getHideMarked,
   setHideMarked,
   DbBlockedError,
@@ -172,9 +172,9 @@ async function init() {
   state.defaultSpeed = [1, 1.5, 2].includes(storedDefault) ? storedDefault : null;
   updateDefaultSpeedButton();
 
-  // Drop the pre-rename speed keys; nothing reads them, their values are not
-  // migrated.
-  clearLegacySpeedKeys();
+  // One-shot on-load storage migrations (what they do lives in migrations.js).
+  // Runs before anything reads prefs (runRefresh is the only reader).
+  migrateLocalStorage();
 
   // Restore the persisted "hide handled" view toggle and reflect the button.
   state.hideMarked = getHideMarked();
@@ -662,21 +662,18 @@ async function backfillDetails() {
 // Marking actions + cutoff advancement + pruning
 // ---------------------------------------------------------------------------
 
-async function markVideo(videoId, newState, opts = {}) {
+/**
+ * Set a video's state to `nextState` as given — this NEVER toggles. Updates the
+ * record + card optimistically, then persists, reverting everything on failure.
+ * @param {string} videoId
+ * @param {string} nextState
+ * @param {{advanceFocus?: boolean}} [opts]
+ */
+async function setVideoState(videoId, nextState, opts = {}) {
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;
 
   const prevState = rec.state;
-  // Toggle semantics: acting on a state the card is already in reverts it to
-  // 'new', so a mis-skip can be corrected straight from the still-usable button
-  // (or with the x key). `opts.force` (used by auto-mark when a video ENDS)
-  // always SETS newState, so a just-finished video is never toggled back to 'new'.
-  const nextState = opts.force
-    ? newState
-    : prevState === newState
-      ? STATE_NEW
-      : newState;
-
   const card = findCard(videoId);
 
   // Optimistic, SYNCHRONOUS UI update: set the state, grey just this one card in
@@ -733,6 +730,22 @@ async function markVideo(videoId, newState, opts = {}) {
     }
     handleError(err);
   }
+}
+
+/**
+ * Skip button / x key. Toggle semantics: marking a card that is ALREADY handled
+ * (any non-'new' state) reverts it to 'new' in one press, so a mis-skip can be
+ * corrected straight from the still-usable button (or with the x key). Auto-mark
+ * when a video ENDS calls setVideoState directly instead, so a just-finished
+ * video is never toggled back to 'new'.
+ * @param {string} videoId
+ * @param {{advanceFocus?: boolean}} [opts]
+ */
+function toggleSkip(videoId, opts = {}) {
+  const rec = state.records.find((r) => r.videoId === videoId);
+  if (!rec) return;
+  const next = rec.state !== STATE_NEW ? STATE_NEW : STATE_SKIPPED;
+  return setVideoState(videoId, next, opts);
 }
 
 /**
@@ -910,7 +923,7 @@ function openOnYouTube(videoId) {
 
 /**
  * Fired when the current video ENDS: auto-mark it 'skipped' via the EXISTING
- * markVideo path (force = never toggle), so the cutoff marker + greying +
+ * setVideoState path (set, never toggle), so the cutoff marker + greying +
  * persistence all update; then auto-play the NEXT eligible video — the first one
  * after it that is still 'new' (skips any handled video) and is embeddable — or
  * show the caught-up state when none remain.
@@ -921,7 +934,7 @@ function onPlayerEnded(endedId) {
   // Reset the saved position so a finished video won't resume at its very end.
   const rec = state.records.find((r) => r.videoId === endedId);
   if (rec) rec.positionSeconds = 0;
-  markVideo(endedId, STATE_SKIPPED, { force: true }); // persists rec (incl. position)
+  setVideoState(endedId, STATE_SKIPPED); // persists rec (incl. position)
   const next = nextPlayable(state.visible, endedId);
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
@@ -1065,7 +1078,7 @@ function onCardSpeed(videoId, speed) {
 
 /**
  * Skip button: mark the CURRENT video skipped and advance — reusing the EXACT
- * same path as auto-advance-on-end (forced markVideo + nextPlayable).
+ * same path as auto-advance-on-end (setVideoState + nextPlayable).
  */
 function onSkipNext() {
   if (state.playing) onPlayerEnded(state.playing);
@@ -1232,7 +1245,7 @@ function render() {
     dom.queueList,
     windowed,
     {
-      onSkip: (id) => markVideo(id, STATE_SKIPPED),
+      onSkip: (id) => toggleSkip(id),
       onPlay: (id) => playVideo(id),
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
     },
@@ -1479,7 +1492,7 @@ function onGlobalKeydown(e) {
     // x = Skip: toggle the focused card between new and skipped.
     if (idx >= 0) {
       e.preventDefault();
-      markVideo(rows[idx].dataset.videoId, STATE_SKIPPED, { advanceFocus: true });
+      toggleSkip(rows[idx].dataset.videoId, { advanceFocus: true });
     }
   } else if (CARD_SPEED_KEYS.has(key)) {
     // Set the FOCUSED card's preferred speed (1 = 1×, 5 = 1.5×, 2 = 2× — see

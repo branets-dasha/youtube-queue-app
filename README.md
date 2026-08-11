@@ -151,6 +151,7 @@ styles.css          Light/dark, responsive two-pane styling; player container qu
 README.md           This file
 js/config.js        Constants (API base, OAuth scope, storage keys, IndexedDB names, limits)
 js/store.js         Persistence: IndexedDB video CRUD + localStorage for id/cutoff/settings/channels
+js/migrations.js    All data migrations, in one place (records, channel prefs, localStorage keys)
 js/auth.js          GIS token client: init, request/refresh/revoke, in-memory token
 js/api.js           YouTube fetch: subscriptions, uploads, videos.list details, videos.rate; errors
 js/queue.js         PURE queue logic (no browser globals; Node-importable & unit-testable)
@@ -168,4 +169,5 @@ js/channels-page.js Channels page wiring: channel rows + ignore/speed prefs (no 
 
 ```bash
 node js/queue.test.mjs
+node js/migrations.test.mjs
 ```
