@@ -126,11 +126,26 @@ const dom = {};
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-  // Single-tab guard, first thing: ask for the tab lock before any store read.
-  // The answer is awaited at the checkpoint below (see the section below).
+  // Single-tab guard, first thing: ask for the tab lock (see the section below).
   requestTabLock();
 
+  // The overlay is all a superseded tab needs, and cacheDom() is its only
+  // prerequisite: showFatalStorageError reads the refs cached here and wires its
+  // Reload button inline, never through bindEvents().
   cacheDom();
+
+  // Single-tab CHECKPOINT, as early as that prerequisite allows. Nothing above
+  // it touches storage or binds a handler, so a tab that did not get the lock
+  // paints the overlay having read no videos, written nothing, and bound no
+  // shortcuts — rather than doing all of it and relying on the writes to throw.
+  // standDownForOtherTab() stays as depth: nothing after this return reaches the
+  // store, but if anything ever did, it must throw rather than persist.
+  if (!(await tabLockGranted)) {
+    standDownForOtherTab();
+    showSupersededError();
+    return;
+  }
+
   bindEvents();
 
   state.clientId = getClientId();
@@ -185,17 +200,6 @@ async function init() {
   // Restore the persisted "hide handled" view toggle and reflect the button.
   state.hideMarked = getHideMarked();
   updateHideMarkedButton();
-
-  // Single-tab CHECKPOINT, immediately before the first IndexedDB WRITE path
-  // (cleanup()). Nothing above here writes, so a tab that did not get the lock
-  // stops here, before it can touch the store. The overlay is not the safety
-  // net — bindEvents() ran long ago and the shortcuts stay live behind it — the
-  // store standing down is, because it makes every later write throw.
-  if (!(await tabLockGranted)) {
-    standDownForOtherTab();
-    showSupersededError();
-    return;
-  }
 
   // INIT is one of the three CLEANUP sites. Migrate installs that predate the
   // cutoff key (derive it from floor), then run cleanup BEFORE the first render.
@@ -332,12 +336,12 @@ function bindEvents() {
 // instant can both proceed. A backgrounded or frozen tab keeps holding it — a
 // lock is not a message it could fail to answer.
 //
-// init() fires the request at the very top and awaits the answer at its
-// checkpoint, immediately before the first write path (cleanup()). Not granted
-// means another queue tab is live: the store stands down (every video API then
-// throws DbBlockedError, so the optimistic UI updates revert instead of
-// persisting) and the same full-screen halt as the other fatal storage
-// conditions goes up.
+// init() fires the request at the very top and awaits the answer right after
+// cacheDom(), before it reads the store, restores any setting or binds a single
+// handler. Not granted means another queue tab is live: this one puts up the
+// same full-screen halt as the other fatal storage conditions and returns,
+// having touched nothing. The store also stands down (every video API then
+// throws DbBlockedError) — belt to the checkpoint's braces.
 //
 // The grant is held for the document's LIFETIME by returning a promise that
 // never settles; the browser releases it when the document goes away (closed,
@@ -1649,11 +1653,11 @@ let fatalStorageErrorShown = false;
  * the panel look.
  *
  * FIRST CAUSE WINS: later calls are ignored, because one fatal condition
- * routinely produces another. The single-tab guard is exactly that case — it
- * stands the store down while the keyboard shortcuts are still bound, so the
- * next write rejects with DbBlockedError, whose copy ("running a different
- * version") would otherwise paint over the accurate "already open" one. Every
- * screen ends in Reload, so the earliest, truest diagnosis is the one to keep.
+ * routinely produces another — a mid-session stand-down (onversionchange) makes
+ * every write still in flight reject, one screen per rejection, and an aborted
+ * blocked upgrade sets both sticky flags, so a second, vaguer diagnosis would
+ * paint over the first. Every screen ends in Reload, so the earliest, truest one
+ * is the one to keep.
  * @param {{heading:string, paragraphs:Array<string>, toast:string}} copy
  */
 function showFatalStorageError({ heading, paragraphs, toast }) {

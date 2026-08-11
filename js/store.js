@@ -35,15 +35,14 @@ import {
 import { migrateVideos } from './migrations.js';
 
 /**
- * Thrown by every video API when IndexedDB is BLOCKED by another tab holding the
- * database open at a different schema version. Distinct from
- * DbUnavailableError: here the database opened fine at some point and the data
- * exists, it is just temporarily inaccessible — a condition the user can clear
- * by closing the other tab, so app.js halts startup and says exactly that.
+ * Thrown by every video API when another tab of this app owns the database and
+ * this page must not touch it. Distinct from DbUnavailableError: here IndexedDB
+ * works and the data exists, it is just off-limits — a condition the user can
+ * clear by closing the other tab, so app.js halts startup and says exactly that.
  */
 export class DbBlockedError extends Error {
   constructor() {
-    super('IndexedDB is blocked by another tab holding a different database version.');
+    super('Another tab of this app owns the database; this page must not touch it.');
     this.name = 'DbBlockedError';
   }
 }
