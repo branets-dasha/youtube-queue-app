@@ -158,15 +158,15 @@ export function setCardState(card, state) {
 
 /**
  * Reflect a record's per-video preferred speed on its card's speed buttons
- * (active / deep-blue accent on the matching rate; none active when unset), in
+ * (active / deep-blue accent on the matching speed; none active when unset), in
  * place — no full re-render. Attribute/class only (XSS-safe).
  * @param {HTMLElement} card
- * @param {number|undefined} preferredRate
+ * @param {number|undefined} preferredSpeed
  */
-export function setCardRate(card, preferredRate) {
+export function setCardSpeed(card, preferredSpeed) {
   if (!card) return;
-  for (const b of card.querySelectorAll('.btn--cardrate')) {
-    const active = Number(b.dataset.rate) === preferredRate;
+  for (const b of card.querySelectorAll('.btn--cardspeed')) {
+    const active = Number(b.dataset.speed) === preferredSpeed;
     b.classList.toggle('is-active', active);
     b.setAttribute('aria-pressed', String(active));
   }
@@ -341,7 +341,7 @@ export function renderDescription(container, rec, { onSeek } = {}) {
 /**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
- * @param {object} handlers { onSkip(id), onPlay(id), onCardRate(id, rate) }
+ * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed) }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  * @returns {HTMLLIElement}
  */
@@ -503,21 +503,21 @@ export function buildQueueRow(rec, handlers, channels = {}) {
   const speedGroup = el(
     'div',
     {
-      class: 'row__rates',
+      class: 'row__speeds',
       role: 'group',
       'aria-label': `Preferred speed for "${rec.title}"`,
     },
     [1, 1.5, 2].map((r) => {
       const label = `${r}×`;
       return el('button', {
-        class: 'btn btn--cardrate',
+        class: 'btn btn--cardspeed',
         type: 'button',
-        dataset: { rate: String(r) },
+        dataset: { speed: String(r) },
         text: label,
         'aria-label': `Set ${label} speed for this video`,
         'aria-pressed': 'false',
         title: `${label} preferred speed`,
-        onclick: () => handlers.onCardRate && handlers.onCardRate(rec.videoId, r),
+        onclick: () => handlers.onCardSpeed && handlers.onCardSpeed(rec.videoId, r),
       });
     })
   );
@@ -559,7 +559,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
 
   // Reflect the record's initial state (marked videos render greyed on load).
   setCardState(li, rec.state);
-  setCardRate(li, rec.preferredRate);
+  setCardSpeed(li, rec.preferredSpeed);
 
   return li;
 }
@@ -568,7 +568,7 @@ export function buildQueueRow(rec, handlers, channels = {}) {
  * Render the queue list into `listEl`.
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
- * @param {object} handlers { onSkip, onPlay, onCardRate }
+ * @param {object} handlers { onSkip, onPlay, onCardSpeed }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
  */
 export function renderQueue(listEl, queue, handlers, channels = {}, more = null) {

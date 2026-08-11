@@ -8,7 +8,7 @@ import {
   STATE_NEW,
   STATE_SKIPPED,
   QUEUE_DISPLAY_LIMIT,
-  DEFAULT_PLAYBACK_RATE,
+  DEFAULT_PLAYBACK_SPEED,
   INCREMENTAL_REFRESH_BUFFER_MS,
 } from './config.js';
 import {
@@ -25,10 +25,11 @@ import {
   loadChannels,
   saveChannels,
   loadChannelPrefs,
-  getPlaybackRate,
-  setPlaybackRate,
-  getDefaultRate,
-  setDefaultRate,
+  getPlaybackSpeed,
+  setPlaybackSpeed,
+  getDefaultSpeed,
+  setDefaultSpeed,
+  clearLegacySpeedKeys,
   getHideMarked,
   setHideMarked,
   DbBlockedError,
@@ -57,7 +58,7 @@ import {
   lastSkipped,
   nextPlayable,
   resumeStart,
-  effectiveRate,
+  effectiveSpeed,
   daysAgoIso,
   incrementalSince,
   isChannelIgnored,
@@ -72,13 +73,13 @@ import {
   renderPlayerMeta,
   renderDescription,
   setCardState,
-  setCardRate,
+  setCardSpeed,
   setVisible,
 } from './ui.js';
 import {
   initPlayer,
   loadVideo as playerLoad,
-  setRate as playerSetRate,
+  setSpeed as playerSetSpeed,
   capturePosition,
   togglePlay,
   seekBy,
@@ -106,8 +107,8 @@ const state = {
   refreshing: false,
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
-  rate: 1, // player playback rate (1 / 1.5 / 2)
-  defaultRate: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
+  speed: 1, // player playback speed (1 / 1.5 / 2)
+  defaultSpeed: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
   hideMarked: false, // view filter: hide skipped (handled) videos (persisted)
   curtain: false, // privacy curtain overlay: true = covering the page
@@ -158,18 +159,22 @@ async function init() {
   // avatars appear immediately for already-stored videos (zero API cost).
   state.channels = loadChannels();
 
-  // Restore the persisted playback rate (validated; fall back to default 1x for
+  // Restore the persisted playback speed (validated; fall back to default 1x for
   // anything not 1/1.5/2). player.js applies it on each video load; the button
-  // highlight is set by updateRateButtons when the app view shows.
-  const storedRate = getPlaybackRate();
-  state.rate = [1, 1.5, 2].includes(storedRate) ? storedRate : DEFAULT_PLAYBACK_RATE;
-  playerSetRate(state.rate);
+  // highlight is set by updateSpeedButtons when the app view shows.
+  const storedSpeed = getPlaybackSpeed();
+  state.speed = [1, 1.5, 2].includes(storedSpeed) ? storedSpeed : DEFAULT_PLAYBACK_SPEED;
+  playerSetSpeed(state.speed);
 
   // Restore the persisted DEFAULT-speed setting (validated; unset unless 1/1.5/2)
   // and reflect the toolbar button label.
-  const storedDefault = getDefaultRate();
-  state.defaultRate = [1, 1.5, 2].includes(storedDefault) ? storedDefault : null;
-  updateDefaultRateButton();
+  const storedDefault = getDefaultSpeed();
+  state.defaultSpeed = [1, 1.5, 2].includes(storedDefault) ? storedDefault : null;
+  updateDefaultSpeedButton();
+
+  // Drop the pre-rename speed keys; nothing reads them, their values are not
+  // migrated.
+  clearLegacySpeedKeys();
 
   // Restore the persisted "hide handled" view toggle and reflect the button.
   state.hideMarked = getHideMarked();
@@ -220,7 +225,7 @@ function cacheDom() {
   dom.hideMarkedBtn = byId('hide-marked-btn');
   dom.scrollSkippedBtn = byId('scroll-skipped-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
-  dom.defaultRateBtn = byId('default-rate-btn');
+  dom.defaultSpeedBtn = byId('default-speed-btn');
   dom.changeCutoffBtn = byId('change-cutoff-btn');
   dom.changeClientBtn = byId('change-client-btn');
 
@@ -239,9 +244,9 @@ function cacheDom() {
   dom.playerMeta = byId('player-meta');
   dom.playerDescription = byId('player-description');
   dom.playerEmpty = byId('player-empty');
-  dom.rate1x = byId('rate-1x');
-  dom.rate15x = byId('rate-15x');
-  dom.rate2x = byId('rate-2x');
+  dom.speed1x = byId('speed-1x');
+  dom.speed15x = byId('speed-15x');
+  dom.speed2x = byId('speed-2x');
   dom.skipBtn = byId('skip-btn');
   dom.likeBtn = byId('like-btn');
 }
@@ -263,12 +268,12 @@ function bindEvents() {
   if (dom.scrollSkippedBtn)
     dom.scrollSkippedBtn.addEventListener('click', onScrollToLastSkipped);
   if (dom.scrollPlayingBtn) dom.scrollPlayingBtn.addEventListener('click', onScrollToPlaying);
-  if (dom.defaultRateBtn) dom.defaultRateBtn.addEventListener('click', onCycleDefaultRate);
+  if (dom.defaultSpeedBtn) dom.defaultSpeedBtn.addEventListener('click', onCycleDefaultSpeed);
   dom.changeCutoffBtn.addEventListener('click', openCutoffPanel);
   dom.changeClientBtn.addEventListener('click', openSetupPanel);
-  if (dom.rate1x) dom.rate1x.addEventListener('click', () => onRate(1));
-  if (dom.rate15x) dom.rate15x.addEventListener('click', () => onRate(1.5));
-  if (dom.rate2x) dom.rate2x.addEventListener('click', () => onRate(2));
+  if (dom.speed1x) dom.speed1x.addEventListener('click', () => onSpeed(1));
+  if (dom.speed15x) dom.speed15x.addEventListener('click', () => onSpeed(1.5));
+  if (dom.speed2x) dom.speed2x.addEventListener('click', () => onSpeed(2));
   if (dom.skipBtn) dom.skipBtn.addEventListener('click', onSkipNext);
   if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
 
@@ -474,16 +479,16 @@ async function onRefreshNew() {
 
 /**
  * Shared refresh pipeline. `bound` is the per-channel lower bound passed to the
- * uploads fetch, and `sweepRates` says how far a channel's preferred speed
+ * uploads fetch, and `sweepSpeeds` says how far a channel's preferred speed
  * reaches — the ONLY two things that differ between "Refresh all" (floor, sweep)
  * and "Refresh new" (incremental, newly-inserted records only). The mode is
  * passed explicitly, never inferred from the bound. Everything else —
  * subscriptions + avatars, the per-channel uploads paging, details backfill,
  * upsert, cleanup, render, the progress toast and the summary — is identical.
  * @param {string|null} bound ISO lower bound for the per-channel uploads fetch
- * @param {boolean} sweepRates fill channel speeds across ALL stored records
+ * @param {boolean} sweepSpeeds fill channel speeds across ALL stored records
  */
-async function runRefresh(bound, sweepRates) {
+async function runRefresh(bound, sweepSpeeds) {
   if (state.refreshing) return;
   if (!hasSession()) {
     return onSignIn();
@@ -547,7 +552,7 @@ async function runRefresh(bound, sweepRates) {
         }
         if (err instanceof ApiError && err.kind === 'quota') {
           // Quota exhausted mid-run: persist what we have, then report.
-          await mergeAndPersist(collected, prefs, sweepRates);
+          await mergeAndPersist(collected, prefs, sweepSpeeds);
           throw err;
         }
         // auth/network/http: abort the run and report.
@@ -555,7 +560,7 @@ async function runRefresh(bound, sweepRates) {
       }
     }
 
-    await mergeAndPersist(collected, prefs, sweepRates);
+    await mergeAndPersist(collected, prefs, sweepSpeeds);
 
     // SYNC is a CLEANUP site: after upserting, recompute the marker, delete the
     // handled prefix, and advance the floor.
@@ -587,13 +592,13 @@ async function runRefresh(bound, sweepRates) {
  * Merge freshly fetched records into the store and persist. The merge itself is
  * the pure `mergeRefresh` (upsert by videoId preserving state, then fill in each
  * channel's preferred speed where a video has none — see its doc for the reach
- * of `sweepRates`); here it is one write of the merged set, then a recompute.
+ * of `sweepSpeeds`); here it is one write of the merged set, then a recompute.
  * @param {Array<object>} incoming
- * @param {Record<string,{ignored?:boolean,rate?:number}>} prefs per-channel prefs
- * @param {boolean} sweepRates fill across ALL stored records, not just new ones
+ * @param {Record<string,{ignored?:boolean,speed?:number}>} prefs per-channel prefs
+ * @param {boolean} sweepSpeeds fill across ALL stored records, not just new ones
  */
-async function mergeAndPersist(incoming, prefs, sweepRates) {
-  state.records = mergeRefresh(state.records, incoming, prefs, { sweepRates });
+async function mergeAndPersist(incoming, prefs, sweepSpeeds) {
+  state.records = mergeRefresh(state.records, incoming, prefs, { sweepSpeeds });
   await putVideos(state.records);
   recompute();
 }
@@ -863,10 +868,10 @@ function ensurePlayer() {
   initPlayer({
     mountId: 'player-mount',
     onEnded: onPlayerEnded,
-    onReady: () => updateRateButtons(),
+    onReady: () => updateSpeedButtons(),
     onProgress: onPlayerProgress,
   });
-  updateRateButtons();
+  updateSpeedButtons();
 }
 
 /**
@@ -884,11 +889,11 @@ function playVideo(videoId) {
   }
   ensurePlayer();
   state.playing = videoId;
-  // Apply the EFFECTIVE rate before loading — via onRate, so the player +
-  // speed-button highlight + the persisted global rate all update and carry
-  // forward. Priority: this video's preferredRate, else the user's default-speed
-  // setting, else the current rate (retain the previous video's speed).
-  onRate(effectiveRate(rec.preferredRate, state.defaultRate, state.rate));
+  // Apply the EFFECTIVE speed before loading — via onSpeed, so the player +
+  // speed-button highlight + the persisted global speed all update and carry
+  // forward. Priority: this video's preferredSpeed, else the user's default-speed
+  // setting, else the current speed (retain the previous video's speed).
+  onSpeed(effectiveSpeed(rec.preferredSpeed, state.defaultSpeed, state.speed));
   // Resume from the saved position when it's a meaningful mid-point, else start 0.
   const start = resumeStart(rec.positionSeconds, rec.durationSeconds);
   playerLoad(videoId, start);
@@ -1018,44 +1023,44 @@ function markPlayingCard(videoId) {
   }
 }
 
-function onRate(rate) {
-  state.rate = rate;
-  playerSetRate(rate);
-  setPlaybackRate(rate); // persist across reloads
-  updateRateButtons();
+function onSpeed(speed) {
+  state.speed = speed;
+  playerSetSpeed(speed);
+  setPlaybackSpeed(speed); // persist across reloads
+  updateSpeedButtons();
 }
 
-function updateRateButtons() {
-  const rates = [
-    [dom.rate1x, 1],
-    [dom.rate15x, 1.5],
-    [dom.rate2x, 2],
+function updateSpeedButtons() {
+  const speeds = [
+    [dom.speed1x, 1],
+    [dom.speed15x, 1.5],
+    [dom.speed2x, 2],
   ];
-  for (const [btn, r] of rates) {
+  for (const [btn, s] of speeds) {
     if (!btn) continue;
-    btn.classList.toggle('is-active', state.rate === r);
-    btn.setAttribute('aria-pressed', String(state.rate === r));
+    btn.classList.toggle('is-active', state.speed === s);
+    btn.setAttribute('aria-pressed', String(state.speed === s));
   }
 }
 
 /**
  * Set/toggle a card's per-video preferred speed. Does NOT start playback: it
- * persists `preferredRate` on the record and updates just that card's speed
+ * persists `preferredSpeed` on the record and updates just that card's speed
  * buttons in place. Clicking the active speed toggles it OFF. If the card IS the
  * currently-playing video, SETTING a speed applies it live (unsetting does not).
  * @param {string} videoId
- * @param {number} rate 1 | 1.5 | 2
+ * @param {number} speed 1 | 1.5 | 2
  */
-function onCardRate(videoId, rate) {
+function onCardSpeed(videoId, speed) {
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;
-  const wasActive = rec.preferredRate === rate;
-  rec.preferredRate = wasActive ? undefined : rate; // click active -> toggle off
+  const wasActive = rec.preferredSpeed === speed;
+  rec.preferredSpeed = wasActive ? undefined : speed; // click active -> toggle off
   putVideo(rec).catch(reportIfFatalDb); // persist (whole-record write)
   const card = findCard(videoId);
-  if (card) setCardRate(card, rec.preferredRate);
+  if (card) setCardSpeed(card, rec.preferredSpeed);
   // Live-apply only when SETTING a speed for the currently-playing video.
-  if (!wasActive && state.playing === videoId) onRate(rate);
+  if (!wasActive && state.playing === videoId) onSpeed(speed);
 }
 
 /**
@@ -1229,7 +1234,7 @@ function render() {
     {
       onSkip: (id) => markVideo(id, STATE_SKIPPED),
       onPlay: (id) => playVideo(id),
-      onCardRate: (id, rate) => onCardRate(id, rate),
+      onCardSpeed: (id, speed) => onCardSpeed(id, speed),
     },
     state.channels,
     more
@@ -1266,24 +1271,24 @@ function updateHideMarkedButton() {
 /**
  * Cycle the DEFAULT-speed setting on click: unset -> 1× -> 1.5× -> 2× -> unset.
  * Persists the choice and updates the toolbar label. Does not touch the current
- * playback rate — it only changes the fallback applied to future plays of videos
- * that have no per-video preferred speed (via effectiveRate).
+ * playback speed — it only changes the fallback applied to future plays of videos
+ * that have no per-video preferred speed (via effectiveSpeed).
  */
-function onCycleDefaultRate() {
+function onCycleDefaultSpeed() {
   const cycle = [null, 1, 1.5, 2];
-  const i = cycle.indexOf(state.defaultRate);
+  const i = cycle.indexOf(state.defaultSpeed);
   const next = cycle[(Math.max(0, i) + 1) % cycle.length];
-  state.defaultRate = next;
-  setDefaultRate(next); // null removes the key
-  updateDefaultRateButton();
+  state.defaultSpeed = next;
+  setDefaultSpeed(next); // null removes the key
+  updateDefaultSpeedButton();
 }
 
 /** Reflect the default-speed setting on the toolbar button ("off" when unset). */
-function updateDefaultRateButton() {
-  if (!dom.defaultRateBtn) return;
-  const dr = state.defaultRate;
-  const label = [1, 1.5, 2].includes(dr) ? `${dr}×` : 'off';
-  dom.defaultRateBtn.textContent = `Default speed: ${label}`;
+function updateDefaultSpeedButton() {
+  if (!dom.defaultSpeedBtn) return;
+  const ds = state.defaultSpeed;
+  const label = [1, 1.5, 2].includes(ds) ? `${ds}×` : 'off';
+  dom.defaultSpeedBtn.textContent = `Default speed: ${label}`;
 }
 
 function onShowAll() {
@@ -1359,16 +1364,16 @@ function hideProgress() {
 }
 
 /**
- * Step the playback rate up/down through the [1, 1.5, 2] presets (clamped, no
- * wrap) via onRate (which sets, persists, and updates the buttons).
+ * Step the playback speed up/down through the [1, 1.5, 2] presets (clamped, no
+ * wrap) via onSpeed (which sets, persists, and updates the buttons).
  * @param {number} dir -1 (slower) or +1 (faster)
  */
-function cyclePlaybackRate(dir) {
-  const rates = [1, 1.5, 2];
-  let i = rates.indexOf(state.rate);
+function cyclePlaybackSpeed(dir) {
+  const speeds = [1, 1.5, 2];
+  let i = speeds.indexOf(state.speed);
   if (i === -1) i = 0;
-  const next = rates[Math.min(rates.length - 1, Math.max(0, i + dir))];
-  if (next !== state.rate) onRate(next);
+  const next = speeds[Math.min(speeds.length - 1, Math.max(0, i + dir))];
+  if (next !== state.speed) onSpeed(next);
 }
 
 // ---------------------------------------------------------------------------
@@ -1380,9 +1385,9 @@ function cyclePlaybackRate(dir) {
 
 // Digit -> preferred speed for the FOCUSED card. 1 and 2 are literal; '5' is the
 // "point-five" mnemonic for 1.5× — hence an explicit table rather than
-// Number(key), which would read '5' as the (invalid) rate 5. A Map, so stray
+// Number(key), which would read '5' as the (invalid) speed 5. A Map, so stray
 // key names can never resolve to an inherited Object property.
-const CARD_RATE_KEYS = new Map([
+const CARD_SPEED_KEYS = new Map([
   ['1', 1],
   ['5', 1.5],
   ['2', 2],
@@ -1476,9 +1481,9 @@ function onGlobalKeydown(e) {
       e.preventDefault();
       markVideo(rows[idx].dataset.videoId, STATE_SKIPPED, { advanceFocus: true });
     }
-  } else if (CARD_RATE_KEYS.has(key)) {
+  } else if (CARD_SPEED_KEYS.has(key)) {
     // Set the FOCUSED card's preferred speed (1 = 1×, 5 = 1.5×, 2 = 2× — see
-    // CARD_RATE_KEYS). Reuses the card speed-button behavior: toggles off if
+    // CARD_SPEED_KEYS). Reuses the card speed-button behavior: toggles off if
     // already set, no playback, applies live only if the focused card is the one
     // currently playing. No-op on a non-embeddable card: it has no in-app
     // playback (its speed group renders inert), so there is nothing to set —
@@ -1487,7 +1492,7 @@ function onGlobalKeydown(e) {
       e.preventDefault();
       const videoId = rows[idx].dataset.videoId;
       const rec = state.records.find((r) => r.videoId === videoId);
-      if (!rec || rec.embeddable !== false) onCardRate(videoId, CARD_RATE_KEYS.get(key));
+      if (!rec || rec.embeddable !== false) onCardSpeed(videoId, CARD_SPEED_KEYS.get(key));
     }
   } else if (key === 'u') {
     e.preventDefault();
@@ -1521,9 +1526,9 @@ function onGlobalKeydown(e) {
       seekBy(5);
     }
   } else if (key === '-') {
-    cyclePlaybackRate(-1);
+    cyclePlaybackSpeed(-1);
   } else if (key === '=' || key === '+') {
-    cyclePlaybackRate(1);
+    cyclePlaybackSpeed(1);
   } else if (key === 'n') {
     onSkipNext();
   } else if (key === 'l') {

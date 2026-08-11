@@ -20,13 +20,13 @@ import {
   isShort,
   SHORTS_MAX_SECONDS,
   resumeStart,
-  effectiveRate,
+  effectiveSpeed,
   incrementalSince,
   parseDescription,
   sortChannels,
   isChannelIgnored,
-  channelPreferredRate,
-  applyChannelRates,
+  channelPreferredSpeed,
+  applyChannelSpeeds,
   setChannelPref,
   mergeRefresh,
 } from './queue.js';
@@ -293,27 +293,27 @@ test('resumeStart resumes when duration is unknown (only the min threshold appli
   assert.equal(resumeStart(3, undefined), 0);
 });
 
-// --- effectiveRate: preferred > default > current, with preset validation ---
+// --- effectiveSpeed: preferred > default > current, with preset validation ---
 
-test('effectiveRate: a valid preferredRate always wins', () => {
-  assert.equal(effectiveRate(2, 1.5, 1), 2); // preferred beats default + current
-  assert.equal(effectiveRate(1.5, 2, 2), 1.5);
-  assert.equal(effectiveRate(1, 2, 1.5), 1);
-  assert.equal(effectiveRate(2, null, 1), 2); // preferred wins with no default
+test('effectiveSpeed: a valid preferredSpeed always wins', () => {
+  assert.equal(effectiveSpeed(2, 1.5, 1), 2); // preferred beats default + current
+  assert.equal(effectiveSpeed(1.5, 2, 2), 1.5);
+  assert.equal(effectiveSpeed(1, 2, 1.5), 1);
+  assert.equal(effectiveSpeed(2, null, 1), 2); // preferred wins with no default
 });
 
-test('effectiveRate: falls back to a valid default when there is no preferred', () => {
-  assert.equal(effectiveRate(undefined, 2, 1), 2); // no preferred -> default
-  assert.equal(effectiveRate(null, 1.5, 1), 1.5);
-  assert.equal(effectiveRate(3, 2, 1), 2); // invalid preferred -> default
-  assert.equal(effectiveRate('2', 1.5, 1), 1.5); // wrong-type preferred -> default
+test('effectiveSpeed: falls back to a valid default when there is no preferred', () => {
+  assert.equal(effectiveSpeed(undefined, 2, 1), 2); // no preferred -> default
+  assert.equal(effectiveSpeed(null, 1.5, 1), 1.5);
+  assert.equal(effectiveSpeed(3, 2, 1), 2); // invalid preferred -> default
+  assert.equal(effectiveSpeed('2', 1.5, 1), 1.5); // wrong-type preferred -> default
 });
 
-test('effectiveRate: retains currentRate when neither preferred nor default is valid', () => {
-  assert.equal(effectiveRate(undefined, null, 1.5), 1.5); // both unset -> current
-  assert.equal(effectiveRate(null, undefined, 2), 2);
-  assert.equal(effectiveRate(3, 0, 1), 1); // both invalid presets -> current
-  assert.equal(effectiveRate('2', '1.5', 2), 2); // wrong types -> current
+test('effectiveSpeed: retains currentSpeed when neither preferred nor default is valid', () => {
+  assert.equal(effectiveSpeed(undefined, null, 1.5), 1.5); // both unset -> current
+  assert.equal(effectiveSpeed(null, undefined, 2), 2);
+  assert.equal(effectiveSpeed(3, 0, 1), 1); // both invalid presets -> current
+  assert.equal(effectiveSpeed('2', '1.5', 2), 2); // wrong types -> current
 });
 
 // --- incrementalSince: cheap lower bound for "Refresh new" ---
@@ -377,40 +377,40 @@ test('sortChannels tolerates missing fields / empty maps; ties break by channelI
 });
 
 test('isChannelIgnored is true only for ignored: true', () => {
-  const prefs = { UCa: { ignored: true }, UCb: { rate: 2 } };
+  const prefs = { UCa: { ignored: true }, UCb: { speed: 2 } };
   assert.equal(isChannelIgnored(prefs, 'UCa'), true);
   assert.equal(isChannelIgnored(prefs, 'UCb'), false);
   assert.equal(isChannelIgnored(prefs, 'UCz'), false); // unknown channel
   assert.equal(isChannelIgnored(null, 'UCa'), false); // no prefs at all
 });
 
-test('channelPreferredRate returns a valid preset rate, else undefined', () => {
-  const prefs = { UCa: { rate: 2 }, UCb: { ignored: true }, UCc: { rate: 3 } };
-  assert.equal(channelPreferredRate(prefs, 'UCa'), 2);
-  assert.equal(channelPreferredRate(prefs, 'UCb'), undefined); // no rate set
-  assert.equal(channelPreferredRate(prefs, 'UCc'), undefined); // invalid preset
-  assert.equal(channelPreferredRate(prefs, 'UCz'), undefined); // unknown channel
-  assert.equal(channelPreferredRate(undefined, 'UCa'), undefined);
+test('channelPreferredSpeed returns a valid preset speed, else undefined', () => {
+  const prefs = { UCa: { speed: 2 }, UCb: { ignored: true }, UCc: { speed: 3 } };
+  assert.equal(channelPreferredSpeed(prefs, 'UCa'), 2);
+  assert.equal(channelPreferredSpeed(prefs, 'UCb'), undefined); // no speed set
+  assert.equal(channelPreferredSpeed(prefs, 'UCc'), undefined); // invalid preset
+  assert.equal(channelPreferredSpeed(prefs, 'UCz'), undefined); // unknown channel
+  assert.equal(channelPreferredSpeed(undefined, 'UCa'), undefined);
 });
 
 test('setChannelPref stores only non-default values and drops empty entries', () => {
   let prefs = {};
   prefs = setChannelPref(prefs, 'UCa', { ignored: true });
   assert.deepEqual(prefs, { UCa: { ignored: true } });
-  prefs = setChannelPref(prefs, 'UCa', { rate: 2 });
-  assert.deepEqual(prefs, { UCa: { ignored: true, rate: 2 } });
+  prefs = setChannelPref(prefs, 'UCa', { speed: 2 });
+  assert.deepEqual(prefs, { UCa: { ignored: true, speed: 2 } });
   prefs = setChannelPref(prefs, 'UCa', { ignored: false }); // un-ignore -> key removed
-  assert.deepEqual(prefs, { UCa: { rate: 2 } });
-  prefs = setChannelPref(prefs, 'UCa', { rate: undefined }); // toggle speed off
+  assert.deepEqual(prefs, { UCa: { speed: 2 } });
+  prefs = setChannelPref(prefs, 'UCa', { speed: undefined }); // toggle speed off
   assert.deepEqual(prefs, {}); // empty per-channel object dropped
 });
 
-test('setChannelPref rejects invalid rates and never mutates its input', () => {
-  const orig = { UCa: { rate: 2 } };
-  assert.deepEqual(setChannelPref(orig, 'UCa', { rate: 3 }), {}); // invalid -> removed
-  assert.deepEqual(orig, { UCa: { rate: 2 } }); // input untouched
+test('setChannelPref rejects invalid speeds and never mutates its input', () => {
+  const orig = { UCa: { speed: 2 } };
+  assert.deepEqual(setChannelPref(orig, 'UCa', { speed: 3 }), {}); // invalid -> removed
+  assert.deepEqual(orig, { UCa: { speed: 2 } }); // input untouched
   assert.deepEqual(setChannelPref(orig, 'UCb', { ignored: true }), {
-    UCa: { rate: 2 },
+    UCa: { speed: 2 },
     UCb: { ignored: true },
   });
 });
@@ -419,77 +419,77 @@ test('setChannelPref treats a non-object stored value as empty, so it drops clea
   // A string would otherwise spread its characters into index keys and the
   // never-empty entry could never be dropped.
   assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { ignored: false }), {});
-  assert.deepEqual(setChannelPref({ UCa: ['x'] }, 'UCa', { rate: undefined }), {});
+  assert.deepEqual(setChannelPref({ UCa: ['x'] }, 'UCa', { speed: undefined }), {});
   assert.deepEqual(setChannelPref({ UCa: null }, 'UCa', { ignored: false }), {});
-  assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { rate: 2 }), {
-    UCa: { rate: 2 },
+  assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { speed: 2 }), {
+    UCa: { speed: 2 },
   });
 });
 
-// --- preferredRate: an explicitly-set per-video speed always survives a refresh ---
+// --- preferredSpeed: an explicitly-set per-video speed always survives a refresh ---
 
-test('upsertVideos never overwrites or clears an explicitly-set preferredRate', () => {
+test('upsertVideos never overwrites or clears an explicitly-set preferredSpeed', () => {
   const existing = [
-    { ...rec('a', T1, 'new'), preferredRate: 1 },
-    { ...rec('b', T2, 'skipped'), preferredRate: 2 },
+    { ...rec('a', T1, 'new'), preferredSpeed: 1 },
+    { ...rec('b', T2, 'skipped'), preferredSpeed: 2 },
   ];
   const incoming = [
-    { ...rec('a', T1, undefined), preferredRate: 2 }, // rate on incoming
-    rec('b', T2, undefined), // no rate on incoming
-    { ...rec('c', T3, undefined), preferredRate: 2 }, // genuinely new record
+    { ...rec('a', T1, undefined), preferredSpeed: 2 }, // speed on incoming
+    rec('b', T2, undefined), // no speed on incoming
+    { ...rec('c', T3, undefined), preferredSpeed: 2 }, // genuinely new record
   ];
   const byId = new Map(upsertVideos(existing, incoming).map((r) => [r.videoId, r]));
-  assert.equal(byId.get('a').preferredRate, 1); // incoming rate ignored
-  assert.equal(byId.get('b').preferredRate, 2); // stored rate not cleared
-  assert.equal(byId.get('c').preferredRate, 2); // new record keeps the preset
+  assert.equal(byId.get('a').preferredSpeed, 1); // incoming speed ignored
+  assert.equal(byId.get('b').preferredSpeed, 2); // stored speed not cleared
+  assert.equal(byId.get('c').preferredSpeed, 2); // new record keeps the preset
   assert.equal(byId.get('b').state, 'skipped'); // and state stays preserved
 });
 
-test('applyChannelRates fills the channel rate only where a video has none', () => {
-  const prefs = { UCa: { rate: 2 }, UCi: { ignored: true, rate: 2 } };
+test('applyChannelSpeeds fills the channel speed only where a video has none', () => {
+  const prefs = { UCa: { speed: 2 }, UCi: { ignored: true, speed: 2 } };
   const records = [
-    { ...rec('a', T1, 'new'), channelId: 'UCa' }, // no rate -> filled
-    { ...rec('b', T2, 'skipped'), channelId: 'UCa', preferredRate: 1 }, // explicit -> kept
-    { ...rec('c', T3, 'new'), channelId: 'UCn' }, // channel has no rate pref
+    { ...rec('a', T1, 'new'), channelId: 'UCa' }, // no speed -> filled
+    { ...rec('b', T2, 'skipped'), channelId: 'UCa', preferredSpeed: 1 }, // explicit -> kept
+    { ...rec('c', T3, 'new'), channelId: 'UCn' }, // channel has no speed pref
     { ...rec('d', T4, 'new'), channelId: 'UCi' }, // ignored channel -> untouched
-    { ...rec('e', T4, 'new'), channelId: 'UCa', preferredRate: null }, // legacy null -> filled
+    { ...rec('e', T4, 'new'), channelId: 'UCa', preferredSpeed: null }, // legacy null -> filled
   ];
-  const byId = new Map(applyChannelRates(records, prefs).map((r) => [r.videoId, r]));
-  assert.equal(byId.get('a').preferredRate, 2);
-  assert.equal(byId.get('b').preferredRate, 1);
-  assert.equal(byId.get('c').preferredRate, undefined);
-  assert.equal(byId.get('d').preferredRate, undefined);
-  assert.equal(byId.get('e').preferredRate, 2); // null counts as "unset"
+  const byId = new Map(applyChannelSpeeds(records, prefs).map((r) => [r.videoId, r]));
+  assert.equal(byId.get('a').preferredSpeed, 2);
+  assert.equal(byId.get('b').preferredSpeed, 1);
+  assert.equal(byId.get('c').preferredSpeed, undefined);
+  assert.equal(byId.get('d').preferredSpeed, undefined);
+  assert.equal(byId.get('e').preferredSpeed, 2); // null counts as "unset"
   assert.equal(byId.get('b').state, 'skipped'); // fill is state-agnostic
 });
 
-test('applyChannelRates limits the fill to onlyVideoIds when given', () => {
-  const prefs = { UCa: { rate: 2 } };
+test('applyChannelSpeeds limits the fill to onlyVideoIds when given', () => {
+  const prefs = { UCa: { speed: 2 } };
   const records = [
     { ...rec('a', T1, 'new'), channelId: 'UCa' },
     { ...rec('b', T2, 'new'), channelId: 'UCa' },
   ];
-  const set = new Map(applyChannelRates(records, prefs, new Set(['b'])).map((r) => [r.videoId, r]));
-  assert.equal(set.get('a').preferredRate, undefined); // out of scope
-  assert.equal(set.get('b').preferredRate, 2);
-  const arr = new Map(applyChannelRates(records, prefs, ['a']).map((r) => [r.videoId, r]));
-  assert.equal(arr.get('a').preferredRate, 2); // an array works too
-  assert.equal(arr.get('b').preferredRate, undefined);
-  const none = applyChannelRates(records, prefs, []); // empty scope -> nothing filled
-  assert.equal(none[0].preferredRate, undefined);
-  assert.equal(none[1].preferredRate, undefined);
-  assert.equal(applyChannelRates(records, prefs, null)[0].preferredRate, 2); // null = all
+  const set = new Map(applyChannelSpeeds(records, prefs, new Set(['b'])).map((r) => [r.videoId, r]));
+  assert.equal(set.get('a').preferredSpeed, undefined); // out of scope
+  assert.equal(set.get('b').preferredSpeed, 2);
+  const arr = new Map(applyChannelSpeeds(records, prefs, ['a']).map((r) => [r.videoId, r]));
+  assert.equal(arr.get('a').preferredSpeed, 2); // an array works too
+  assert.equal(arr.get('b').preferredSpeed, undefined);
+  const none = applyChannelSpeeds(records, prefs, []); // empty scope -> nothing filled
+  assert.equal(none[0].preferredSpeed, undefined);
+  assert.equal(none[1].preferredSpeed, undefined);
+  assert.equal(applyChannelSpeeds(records, prefs, null)[0].preferredSpeed, 2); // null = all
 });
 
-test('applyChannelRates never mutates its input and tolerates garbage prefs', () => {
+test('applyChannelSpeeds never mutates its input and tolerates garbage prefs', () => {
   const records = [{ ...rec('a', T1, 'new'), channelId: 'UCa' }];
-  assert.equal(applyChannelRates(records, { UCa: { rate: 1.5 } })[0].preferredRate, 1.5);
-  assert.equal(records[0].preferredRate, undefined); // input untouched
-  assert.equal(applyChannelRates(records, null)[0], records[0]); // no prefs -> passthrough
-  assert.equal(applyChannelRates(records, { UCa: { rate: 3 } })[0], records[0]); // invalid preset
-  assert.equal(applyChannelRates(records, { UCa: null })[0], records[0]); // hand-edited junk
-  assert.equal(applyChannelRates(records, { UCa: 'x' })[0], records[0]);
-  assert.deepEqual(applyChannelRates(undefined, { UCa: { rate: 2 } }), []);
+  assert.equal(applyChannelSpeeds(records, { UCa: { speed: 1.5 } })[0].preferredSpeed, 1.5);
+  assert.equal(records[0].preferredSpeed, undefined); // input untouched
+  assert.equal(applyChannelSpeeds(records, null)[0], records[0]); // no prefs -> passthrough
+  assert.equal(applyChannelSpeeds(records, { UCa: { speed: 3 } })[0], records[0]); // invalid preset
+  assert.equal(applyChannelSpeeds(records, { UCa: null })[0], records[0]); // hand-edited junk
+  assert.equal(applyChannelSpeeds(records, { UCa: 'x' })[0], records[0]);
+  assert.deepEqual(applyChannelSpeeds(undefined, { UCa: { speed: 2 } }), []);
 });
 
 // --- mergeRefresh: the real refresh composition (upsert, then fill-if-absent) ---
@@ -498,18 +498,18 @@ test('applyChannelRates never mutates its input and tolerates garbage prefs', ()
 const merged = (existing, incoming, prefs, options) =>
   new Map(mergeRefresh(existing, incoming, prefs, options).map((r) => [r.videoId, r]));
 
-test('mergeRefresh: a brand-new video arrives carrying its channel rate', () => {
-  const prefs = { UCa: { rate: 2 } };
+test('mergeRefresh: a brand-new video arrives carrying its channel speed', () => {
+  const prefs = { UCa: { speed: 2 } };
   const incoming = [{ ...rec('a', T1, undefined), channelId: 'UCa' }];
   // The fill runs AFTER the upsert, so brand-new arrivals are in scope either way.
-  assert.equal(merged([], incoming, prefs, { sweepRates: false }).get('a').preferredRate, 2);
-  assert.equal(merged([], incoming, prefs, { sweepRates: true }).get('a').preferredRate, 2);
+  assert.equal(merged([], incoming, prefs, { sweepSpeeds: false }).get('a').preferredSpeed, 2);
+  assert.equal(merged([], incoming, prefs, { sweepSpeeds: true }).get('a').preferredSpeed, 2);
 });
 
 const REFRESH_EXISTING = [
-  { ...rec('old', T1, 'new'), channelId: 'UCa' }, // stored, rate-less, not re-fetched
+  { ...rec('old', T1, 'new'), channelId: 'UCa' }, // stored, speed-less, not re-fetched
   { ...rec('buf', T2, 'skipped'), channelId: 'UCa' }, // re-returned inside the buffer window
-  { ...rec('own', T3, 'new'), channelId: 'UCa', preferredRate: 1 }, // explicit per-video rate
+  { ...rec('own', T3, 'new'), channelId: 'UCa', preferredSpeed: 1 }, // explicit per-video speed
   { ...rec('ign', T4, 'new'), channelId: 'UCi' }, // ignored channel
 ];
 const REFRESH_INCOMING = [
@@ -517,49 +517,49 @@ const REFRESH_INCOMING = [
   { ...rec('own', T3, undefined), channelId: 'UCa' },
   { ...rec('fresh', T4, undefined), channelId: 'UCa' },
 ];
-const REFRESH_PREFS = { UCa: { rate: 2 }, UCi: { ignored: true, rate: 2 } };
+const REFRESH_PREFS = { UCa: { speed: 2 }, UCi: { ignored: true, speed: 2 } };
 
-test('mergeRefresh: "Fetch new" rates only the newly-inserted records', () => {
+test('mergeRefresh: "Fetch new" speeds only the newly-inserted records', () => {
   const byId = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {
-    sweepRates: false,
+    sweepSpeeds: false,
   });
-  assert.equal(byId.get('fresh').preferredRate, 2); // newly inserted
-  assert.equal(byId.get('buf').preferredRate, undefined); // re-returned in the buffer: untouched
-  assert.equal(byId.get('old').preferredRate, undefined); // older queue: untouched
-  assert.equal(byId.get('own').preferredRate, 1); // explicit rate never overwritten
-  assert.equal(byId.get('ign').preferredRate, undefined); // ignored channel excluded
+  assert.equal(byId.get('fresh').preferredSpeed, 2); // newly inserted
+  assert.equal(byId.get('buf').preferredSpeed, undefined); // re-returned in the buffer: untouched
+  assert.equal(byId.get('old').preferredSpeed, undefined); // older queue: untouched
+  assert.equal(byId.get('own').preferredSpeed, 1); // explicit speed never overwritten
+  assert.equal(byId.get('ign').preferredSpeed, undefined); // ignored channel excluded
   assert.equal(byId.get('buf').state, 'skipped'); // upsert preserved the state
 });
 
-test('mergeRefresh: "Refresh all" rates every stored record that has none', () => {
+test('mergeRefresh: "Refresh all" speeds every stored record that has none', () => {
   const byId = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {
-    sweepRates: true,
+    sweepSpeeds: true,
   });
-  assert.equal(byId.get('fresh').preferredRate, 2);
-  assert.equal(byId.get('buf').preferredRate, 2);
-  assert.equal(byId.get('old').preferredRate, 2); // swept even though not re-fetched
-  assert.equal(byId.get('own').preferredRate, 1); // explicit rate still wins
-  assert.equal(byId.get('ign').preferredRate, undefined); // ignored channel still excluded
+  assert.equal(byId.get('fresh').preferredSpeed, 2);
+  assert.equal(byId.get('buf').preferredSpeed, 2);
+  assert.equal(byId.get('old').preferredSpeed, 2); // swept even though not re-fetched
+  assert.equal(byId.get('own').preferredSpeed, 1); // explicit speed still wins
+  assert.equal(byId.get('ign').preferredSpeed, undefined); // ignored channel still excluded
 });
 
 test('mergeRefresh: omitted options / {} default to the "Fetch new" scope', () => {
   const bare = new Map(
     mergeRefresh(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS).map((r) => [r.videoId, r])
   );
-  assert.equal(bare.get('old').preferredRate, undefined); // not swept
-  assert.equal(bare.get('fresh').preferredRate, 2);
+  assert.equal(bare.get('old').preferredSpeed, undefined); // not swept
+  assert.equal(bare.get('fresh').preferredSpeed, 2);
   const empty = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {});
-  assert.equal(empty.get('old').preferredRate, undefined);
-  assert.equal(empty.get('fresh').preferredRate, 2);
+  assert.equal(empty.get('old').preferredSpeed, undefined);
+  assert.equal(empty.get('fresh').preferredSpeed, 2);
 });
 
 test('mergeRefresh never mutates its inputs', () => {
   const existing = [{ ...rec('old', T1, 'new'), channelId: 'UCa' }];
   const incoming = [{ ...rec('fresh', T2, undefined), channelId: 'UCa' }];
-  mergeRefresh(existing, incoming, { UCa: { rate: 2 } }, { sweepRates: true });
+  mergeRefresh(existing, incoming, { UCa: { speed: 2 } }, { sweepSpeeds: true });
   assert.equal(existing.length, 1);
-  assert.equal(existing[0].preferredRate, undefined);
-  assert.equal(incoming[0].preferredRate, undefined);
+  assert.equal(existing[0].preferredSpeed, undefined);
+  assert.equal(incoming[0].preferredSpeed, undefined);
   assert.equal(incoming[0].state, undefined); // the 'new' default lands on the copy only
 });
 

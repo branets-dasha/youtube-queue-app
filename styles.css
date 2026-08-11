@@ -675,7 +675,7 @@ main {
 }
 /* Per-video preferred-speed group: compact, tightly grouped, with a subtle
    divider before the Skip button. */
-.row__rates {
+.row__speeds {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -686,7 +686,7 @@ main {
 }
 /* One fixed width for all three, so they stay equal and the widest label ("1.5×")
    never clips. The width sets the box; the padding only sets the height. */
-.btn--cardrate {
+.btn--cardspeed {
   flex: 0 0 auto;
   width: 36px;
   padding: 6px 0;
@@ -694,12 +694,12 @@ main {
   line-height: 1;
 }
 /* Active preference uses the SAME deep-blue accent as the player speed/like buttons. */
-.row__actions .btn--cardrate.is-active {
+.row__actions .btn--cardspeed.is-active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--primary-text);
 }
-.row__actions .btn--cardrate.is-active:hover:not(:disabled) {
+.row__actions .btn--cardspeed.is-active:hover:not(:disabled) {
   /* Keep the glyph light on hover; only nudge the fill a touch darker. */
   background: color-mix(in srgb, var(--accent) 90%, #000);
   color: var(--primary-text);
@@ -965,7 +965,7 @@ body.app-active #app-main.app {
 .player__desc-link:focus-visible {
   text-decoration: underline;
 }
-.player__rates {
+.player__speeds {
   display: flex;
   gap: 6px;
 }
@@ -975,15 +975,15 @@ body.app-active #app-main.app {
 .player__controls .btn {
   min-width: 3.5rem;
 }
-.btn--rate {
+.btn--speed {
   padding: 6px 12px;
 }
-.btn--rate.is-active {
+.btn--speed.is-active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--primary-text);
 }
-.btn--rate.is-active:hover:not(:disabled) {
+.btn--speed.is-active:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 90%, #000);
   color: var(--primary-text);
 }
@@ -1183,7 +1183,7 @@ body.app-active #app-main.app {
   background: var(--surface-2);
   color: var(--text);
 }
-.chan__rates {
+.chan__speeds {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1192,12 +1192,12 @@ body.app-active #app-main.app {
   border-right: 1px solid var(--border);
 }
 /* Active speed: the same deep-blue accent as the card speed buttons. */
-.chan__controls .btn--cardrate.is-active {
+.chan__controls .btn--cardspeed.is-active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--primary-text);
 }
-.chan__controls .btn--cardrate.is-active:hover:not(:disabled) {
+.chan__controls .btn--cardspeed.is-active:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 90%, #000);
   color: var(--primary-text);
 }

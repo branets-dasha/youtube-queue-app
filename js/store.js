@@ -21,8 +21,10 @@ import {
   LS_CUTOFF,
   LS_CHANNELS,
   LS_CHANNEL_PREFS,
-  LS_PLAYBACK_RATE,
-  LS_DEFAULT_RATE,
+  LS_PLAYBACK_SPEED,
+  LS_DEFAULT_SPEED,
+  LS_PLAYBACK_RATE_LEGACY,
+  LS_DEFAULT_RATE_LEGACY,
   LS_HIDE_MARKED,
   IDB_NAME,
   IDB_VERSION,
@@ -33,10 +35,15 @@ import {
 } from './config.js';
 
 /**
- * Migrate loaded records to the single "handled" state model: any record whose
- * state is not 'new' (old 'watched' / 'not_interested', or anything unexpected)
- * becomes 'skipped'. Mutates + returns the array. Applied on every read so the
- * in-memory model is always normalized regardless of what's on disk.
+ * Migrate loaded records to the current on-disk shape. Two normalizations:
+ *   - the single "handled" state model: any record whose state is not 'new'
+ *     (old 'watched' / 'not_interested', or anything unexpected) becomes
+ *     'skipped';
+ *   - the legacy per-video `preferredRate` field becomes `preferredSpeed` (the
+ *     old name is dropped either way, so it never lingers).
+ * Mutates + returns the array. Applied on every read so the in-memory model is
+ * always normalized regardless of what's on disk; the next putVideos persists
+ * the new shape, so no IDB_VERSION bump is needed.
  * @param {Array<object>} records
  * @returns {Array<object>}
  */
@@ -68,7 +75,12 @@ export class DbUnavailableError extends Error {
 
 function migrateStates(records) {
   for (const r of records) {
-    if (r && r.state !== STATE_NEW) r.state = STATE_SKIPPED;
+    if (!r) continue;
+    if (r.state !== STATE_NEW) r.state = STATE_SKIPPED;
+    if (r.preferredSpeed == null && r.preferredRate != null) {
+      r.preferredSpeed = r.preferredRate;
+    }
+    delete r.preferredRate;
   }
   return records;
 }
@@ -131,42 +143,54 @@ export function setCutoff(iso) {
   }
 }
 
-// The persisted player playback rate (yqa_playback_rate). Returns a Number, or
+// The persisted player playback speed (yqa_playback_speed). Returns a Number, or
 // null if absent/unreadable (caller validates + falls back to the default).
 
-export function getPlaybackRate() {
+export function getPlaybackSpeed() {
   try {
-    const raw = localStorage.getItem(LS_PLAYBACK_RATE);
+    const raw = localStorage.getItem(LS_PLAYBACK_SPEED);
     return raw == null ? null : Number(raw);
   } catch {
     return null;
   }
 }
 
-export function setPlaybackRate(rate) {
+export function setPlaybackSpeed(speed) {
   try {
-    localStorage.setItem(LS_PLAYBACK_RATE, String(rate));
+    localStorage.setItem(LS_PLAYBACK_SPEED, String(speed));
   } catch {
     /* ignore */
   }
 }
 
-// The persisted DEFAULT-speed setting (yqa_default_rate). Returns a Number, or
+// The persisted DEFAULT-speed setting (yqa_default_speed). Returns a Number, or
 // null when unset/unreadable (caller validates against the 1/1.5/2 presets).
 
-export function getDefaultRate() {
+export function getDefaultSpeed() {
   try {
-    const raw = localStorage.getItem(LS_DEFAULT_RATE);
+    const raw = localStorage.getItem(LS_DEFAULT_SPEED);
     return raw == null ? null : Number(raw);
   } catch {
     return null;
   }
 }
 
-export function setDefaultRate(rate) {
+export function setDefaultSpeed(speed) {
   try {
-    if (rate == null) localStorage.removeItem(LS_DEFAULT_RATE);
-    else localStorage.setItem(LS_DEFAULT_RATE, String(rate));
+    if (speed == null) localStorage.removeItem(LS_DEFAULT_SPEED);
+    else localStorage.setItem(LS_DEFAULT_SPEED, String(speed));
+  } catch {
+    /* ignore */
+  }
+}
+
+// One-shot cleanup of the pre-rename speed keys, whose values are intentionally
+// NOT migrated (re-picking a speed by hand is trivial). Idempotent, never throws.
+
+export function clearLegacySpeedKeys() {
+  try {
+    localStorage.removeItem(LS_PLAYBACK_RATE_LEGACY);
+    localStorage.removeItem(LS_DEFAULT_RATE_LEGACY);
   } catch {
     /* ignore */
   }
@@ -225,15 +249,32 @@ export function saveChannels(map) {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage: per-channel prefs (channelId -> { ignored?, rate? })
+// localStorage: per-channel prefs (channelId -> { ignored?, speed? })
 // ---------------------------------------------------------------------------
+
+/**
+ * Migrate a loaded prefs map to the current shape: the legacy per-channel `rate`
+ * key becomes `speed` (the old name is dropped either way, so it never lingers).
+ * Mutates + returns the map. Applied on every read, so the next saveChannelPrefs
+ * persists the new shape; idempotent and tolerant of malformed entries.
+ * @param {Record<string,object>} map
+ * @returns {Record<string,{ignored?:boolean,speed?:number}>}
+ */
+function migrateChannelSpeeds(map) {
+  for (const prefs of Object.values(map)) {
+    if (!prefs || typeof prefs !== 'object') continue;
+    if (prefs.speed == null && prefs.rate != null) prefs.speed = prefs.rate;
+    delete prefs.rate;
+  }
+  return map;
+}
 
 /**
  * Load the persisted per-channel prefs map, or {} if absent/unparseable. Only
  * non-default values are stored (see setChannelPref in queue.js). Read FRESH at
  * refresh time so edits made on channels.html in another tab apply to the next
  * fetch without reloading.
- * @returns {Record<string,{ignored?:boolean,rate?:number}>}
+ * @returns {Record<string,{ignored?:boolean,speed?:number}>}
  */
 export function loadChannelPrefs() {
   try {
@@ -241,7 +282,7 @@ export function loadChannelPrefs() {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed
+      ? migrateChannelSpeeds(parsed)
       : {};
   } catch {
     return {};
@@ -251,7 +292,7 @@ export function loadChannelPrefs() {
 /**
  * Persist the per-channel prefs map. An EMPTY map removes the key entirely
  * (no '{}' garbage). Best-effort — quota / serialization failures are ignored.
- * @param {Record<string,{ignored?:boolean,rate?:number}>} map
+ * @param {Record<string,{ignored?:boolean,speed?:number}>} map
  */
 export function saveChannelPrefs(map) {
   try {

@@ -17,7 +17,7 @@
 //     embeddable:   boolean,   // optional; can be played in the on-page player
 //     positionSeconds: number, // optional; last watch position, for resume
 //     liked:        boolean,   // optional; locally-tracked YouTube like state
-//     preferredRate: number,   // optional; per-video preferred speed (1 | 1.5 | 2)
+//     preferredSpeed: number,  // optional; per-video preferred speed (1 | 1.5 | 2)
 //     state:        'new' | 'skipped'   // 'skipped' is the single "handled" state
 //   }
 
@@ -394,21 +394,21 @@ export function resumeStart(positionSeconds, durationSeconds) {
 }
 
 /**
- * The playback rate to use when a video plays, in PRIORITY order:
- *   1. the video's per-video `preferredRate`, when it is a valid preset (1/1.5/2);
- *   2. else the user's `defaultRate` setting, when it is a valid preset;
- *   3. else `currentRate` — retain the speed carried over from the previous video.
+ * The playback speed to use when a video plays, in PRIORITY order:
+ *   1. the video's per-video `preferredSpeed`, when it is a valid preset (1/1.5/2);
+ *   2. else the user's `defaultSpeed` setting, when it is a valid preset;
+ *   3. else `currentSpeed` — retain the speed carried over from the previous video.
  * "valid" means exactly one of 1 / 1.5 / 2. Pure.
- * @param {number|undefined|null} preferredRate per-video preference
- * @param {number|undefined|null} defaultRate user's default-speed setting (null = unset)
- * @param {number} currentRate the current/global rate (previous video's speed)
+ * @param {number|undefined|null} preferredSpeed per-video preference
+ * @param {number|undefined|null} defaultSpeed user's default-speed setting (null = unset)
+ * @param {number} currentSpeed the current/global speed (previous video's speed)
  * @returns {number}
  */
-export function effectiveRate(preferredRate, defaultRate, currentRate) {
-  const isPreset = (r) => r === 1 || r === 1.5 || r === 2;
-  if (isPreset(preferredRate)) return preferredRate;
-  if (isPreset(defaultRate)) return defaultRate;
-  return currentRate;
+export function effectiveSpeed(preferredSpeed, defaultSpeed, currentSpeed) {
+  const isPreset = (s) => s === 1 || s === 1.5 || s === 2;
+  if (isPreset(preferredSpeed)) return preferredSpeed;
+  if (isPreset(defaultSpeed)) return defaultSpeed;
+  return currentSpeed;
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +441,7 @@ export function sortChannels(channels) {
 /**
  * True when a channel is marked ignored in the prefs map — its uploads are
  * skipped entirely on future fetches (existing records stay untouched). Pure.
- * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
  * @param {string} channelId
  * @returns {boolean}
  */
@@ -453,37 +453,37 @@ export function isChannelIgnored(prefs, channelId) {
 /**
  * A channel's preferred speed when it is a valid preset (1/1.5/2), else
  * undefined (no preference). Pure.
- * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
  * @param {string} channelId
  * @returns {number|undefined}
  */
-export function channelPreferredRate(prefs, channelId) {
+export function channelPreferredSpeed(prefs, channelId) {
   const p = prefs && channelId ? prefs[channelId] : null;
-  const r = p ? p.rate : undefined;
-  return r === 1 || r === 1.5 || r === 2 ? r : undefined;
+  const s = p ? p.speed : undefined;
+  return s === 1 || s === 1.5 || s === 2 ? s : undefined;
 }
 
 /**
  * Fill in each channel's preferred speed on the records that do not have one:
- * a record whose `preferredRate` is unset (undefined/null) and whose channel
- * has a preferred rate gets that rate. A record that already carries an
- * explicit `preferredRate` is NEVER overwritten or cleared, and records of
- * IGNORED channels (or of channels with no rate pref) are left exactly as they
+ * a record whose `preferredSpeed` is unset (undefined/null) and whose channel
+ * has a preferred speed gets that speed. A record that already carries an
+ * explicit `preferredSpeed` is NEVER overwritten or cleared, and records of
+ * IGNORED channels (or of channels with no speed pref) are left exactly as they
  * are.
  *
  * `onlyVideoIds` limits which records are ELIGIBLE for the fill (a Set or array
  * of videoIds); null/undefined means every record is. "Refresh all" passes null
  * (fill the whole stored set), while "Fetch new" passes just the videoIds it
- * newly inserted, so an incremental fetch never re-rates already-stored videos.
+ * newly inserted, so an incremental fetch never re-speeds already-stored videos.
  *
  * Returns a NEW array; unchanged records are passed through by reference and
  * nothing is mutated. Pure.
  * @param {Array<object>} records
- * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
  * @param {Set<string>|Array<string>|null|undefined} [onlyVideoIds] eligible ids
  * @returns {Array<object>}
  */
-export function applyChannelRates(records, prefs, onlyVideoIds) {
+export function applyChannelSpeeds(records, prefs, onlyVideoIds) {
   const list = Array.isArray(records) ? records : [];
   const only =
     onlyVideoIds == null
@@ -492,23 +492,23 @@ export function applyChannelRates(records, prefs, onlyVideoIds) {
         ? onlyVideoIds
         : new Set(onlyVideoIds);
   return list.map((rec) => {
-    if (!rec || rec.preferredRate != null) return rec;
+    if (!rec || rec.preferredSpeed != null) return rec;
     if (only && !only.has(rec.videoId)) return rec;
     if (isChannelIgnored(prefs, rec.channelId)) return rec;
-    const rate = channelPreferredRate(prefs, rec.channelId);
-    return rate === undefined ? rec : { ...rec, preferredRate: rate };
+    const speed = channelPreferredSpeed(prefs, rec.channelId);
+    return speed === undefined ? rec : { ...rec, preferredSpeed: speed };
   });
 }
 
 /**
  * Return a NEW prefs map with `patch` applied to `channelId`, storing only
- * non-default values: `ignored` is kept only when exactly true, `rate` only
+ * non-default values: `ignored` is kept only when exactly true, `speed` only
  * when a valid preset (1/1.5/2) — anything else REMOVES the key. A per-channel
  * object left empty is dropped from the map. Neither input is mutated. Pure.
- * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
  * @param {string} channelId
- * @param {{ignored?:boolean,rate?:(number|undefined)}} patch
- * @returns {Record<string,{ignored?:boolean,rate?:number}>}
+ * @param {{ignored?:boolean,speed?:(number|undefined)}} patch
+ * @returns {Record<string,{ignored?:boolean,speed?:number}>}
  */
 export function setChannelPref(prefs, channelId, patch) {
   const next = { ...(prefs || {}) };
@@ -524,10 +524,10 @@ export function setChannelPref(prefs, channelId, patch) {
     if (p.ignored === true) cur.ignored = true;
     else delete cur.ignored;
   }
-  if ('rate' in p) {
-    const r = p.rate;
-    if (r === 1 || r === 1.5 || r === 2) cur.rate = r;
-    else delete cur.rate;
+  if ('speed' in p) {
+    const s = p.speed;
+    if (s === 1 || s === 1.5 || s === 2) cur.speed = s;
+    else delete cur.speed;
   }
   if (Object.keys(cur).length === 0) delete next[channelId];
   else next[channelId] = cur;
@@ -542,12 +542,12 @@ export function setChannelPref(prefs, channelId, patch) {
  * The complete refresh merge, as ONE pure step: upsert the freshly fetched
  * records into the stored set (existing state preserved, never duplicated),
  * then fill in each channel's preferred speed on the records that lack one.
- * FILL-IF-ABSENT: a record carrying an explicit `preferredRate` is never
+ * FILL-IF-ABSENT: a record carrying an explicit `preferredSpeed` is never
  * overwritten or cleared, and records of ignored channels are left as they are.
  *
- * `sweepRates` is the refresh MODE (passed explicitly — never inferred from the
+ * `sweepSpeeds` is the refresh MODE (passed explicitly — never inferred from the
  * fetch bound): "Refresh all" sweeps the WHOLE stored set, so older
- * already-stored videos pick up their channel's rate too, while "Fetch new"
+ * already-stored videos pick up their channel's speed too, while "Fetch new"
  * reaches only this fetch's arrivals — a video re-returned inside the buffer
  * window counts as already-stored and keeps what it has.
  *
@@ -555,19 +555,19 @@ export function setChannelPref(prefs, channelId, patch) {
  *
  * @param {Array<object>} existing stored video records
  * @param {Array<object>} incoming freshly fetched records
- * @param {Record<string,{ignored?:boolean,rate?:number}>|null|undefined} prefs
- * @param {{sweepRates?:boolean}} [options] defaults to the "Fetch new" scope
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
+ * @param {{sweepSpeeds?:boolean}} [options] defaults to the "Fetch new" scope
  * @returns {Array<object>}
  */
-export function mergeRefresh(existing, incoming, prefs, { sweepRates = false } = {}) {
+export function mergeRefresh(existing, incoming, prefs, { sweepSpeeds = false } = {}) {
   const stored = new Set(existing.map((r) => r.videoId));
   const arrivals = new Set(
     incoming.map((v) => v.videoId).filter((id) => !stored.has(id))
   );
   const merged = upsertVideos(existing, incoming);
-  return sweepRates
-    ? applyChannelRates(merged, prefs, null) // "Refresh all": every record
-    : applyChannelRates(merged, prefs, arrivals); // "Fetch new": arrivals only
+  return sweepSpeeds
+    ? applyChannelSpeeds(merged, prefs, null) // "Refresh all": every record
+    : applyChannelSpeeds(merged, prefs, arrivals); // "Fetch new": arrivals only
 }
 
 // ---------------------------------------------------------------------------

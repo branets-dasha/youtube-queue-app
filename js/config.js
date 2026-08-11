@@ -24,20 +24,24 @@ export const LS_START_CUTOFF = 'yqa_start_cutoff';
 export const LS_CUTOFF = 'yqa_cutoff';
 // Persisted channel map (channelId -> { title, avatarUrl }) for card avatars.
 export const LS_CHANNELS = 'yqa_channels';
-// Per-channel preferences (channelId -> { ignored?: true, rate?: number }),
+// Per-channel preferences (channelId -> { ignored?: true, speed?: number }),
 // edited on channels.html. Only non-default values are stored. Read FRESH at
 // refresh time (never cached at startup): ignored channels are skipped in the
-// fetch loop; a rate fills preferredRate on the records a fetch newly inserts,
+// fetch loop; a speed fills preferredSpeed on the records a fetch newly inserts,
 // and on "Refresh all" over every stored record of that channel that has none
-// (an explicitly-set per-video rate is never overwritten).
+// (an explicitly-set per-video speed is never overwritten).
 export const LS_CHANNEL_PREFS = 'yqa_channel_prefs';
-// Persisted player playback rate (one of 1 / 1.5 / 2). Source of truth + default.
-export const LS_PLAYBACK_RATE = 'yqa_playback_rate';
-export const DEFAULT_PLAYBACK_RATE = 1;
+// Persisted player playback speed (one of 1 / 1.5 / 2). Source of truth + default.
+export const LS_PLAYBACK_SPEED = 'yqa_playback_speed';
+export const DEFAULT_PLAYBACK_SPEED = 1;
 // Persisted DEFAULT-speed setting for newly played videos (one of 1 / 1.5 / 2, or
-// absent/null = unset). Distinct from LS_PLAYBACK_RATE (the live/current rate):
-// this is the fallback applied to a video that has no per-video preferredRate.
-export const LS_DEFAULT_RATE = 'yqa_default_rate';
+// absent/null = unset). Distinct from LS_PLAYBACK_SPEED (the live/current speed):
+// this is the fallback applied to a video that has no per-video preferredSpeed.
+export const LS_DEFAULT_SPEED = 'yqa_default_speed';
+// Legacy playback-speed keys, kept ONLY so clearLegacySpeedKeys() in store.js can
+// delete them once on load; their values are deliberately not carried over.
+export const LS_PLAYBACK_RATE_LEGACY = 'yqa_playback_rate';
+export const LS_DEFAULT_RATE_LEGACY = 'yqa_default_rate';
 // Persisted "hide handled (skipped) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 

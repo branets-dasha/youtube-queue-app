@@ -15,9 +15,9 @@ import {
   sortChannels,
   setChannelPref,
   isChannelIgnored,
-  channelPreferredRate,
+  channelPreferredSpeed,
 } from './queue.js';
-import { el, buildAvatar, setCardRate, setVisible } from './ui.js';
+import { el, buildAvatar, setCardSpeed, setVisible } from './ui.js';
 
 let prefs = {};
 
@@ -63,26 +63,26 @@ function buildChannelRow(ch, channels) {
   );
 
   // Mirrors the per-video speed group on queue cards: same 1× / 1.5× / 2×
-  // presets, same classes (btn--cardrate + is-active/aria-pressed via
-  // setCardRate), same toggle-off-on-active-click semantics.
-  const rates = el(
+  // presets, same classes (btn--cardspeed + is-active/aria-pressed via
+  // setCardSpeed), same toggle-off-on-active-click semantics.
+  const speeds = el(
     'div',
     {
-      class: 'chan__rates',
+      class: 'chan__speeds',
       role: 'group',
       'aria-label': `Preferred speed for videos from "${ch.title}"`,
     },
     [1, 1.5, 2].map((r) => {
       const label = `${r}×`;
       return el('button', {
-        class: 'btn btn--cardrate',
+        class: 'btn btn--cardspeed',
         type: 'button',
-        dataset: { rate: String(r) },
+        dataset: { speed: String(r) },
         'aria-label': `Set ${label} speed for videos from this channel`,
         'aria-pressed': 'false',
         title: `${label} preferred speed`,
         text: label,
-        onclick: () => onRate(ch.channelId, r),
+        onclick: () => onSpeed(ch.channelId, r),
       });
     })
   );
@@ -100,7 +100,7 @@ function buildChannelRow(ch, channels) {
   const li = el(
     'li',
     { class: 'chan', role: 'listitem', dataset: { channelId: ch.channelId } },
-    [link, el('div', { class: 'chan__controls' }, [rates, ignoreBtn])]
+    [link, el('div', { class: 'chan__controls' }, [speeds, ignoreBtn])]
   );
   syncRow(li, ch.channelId);
   return li;
@@ -117,7 +117,7 @@ function findRow(channelId) {
 /** Reflect the current prefs onto a row: speed buttons + ignore state, in place. */
 function syncRow(row, channelId) {
   if (!row) return;
-  setCardRate(row, channelPreferredRate(prefs, channelId));
+  setCardSpeed(row, channelPreferredSpeed(prefs, channelId));
   const ignored = isChannelIgnored(prefs, channelId);
   row.classList.toggle('chan--ignored', ignored);
   const btn = row.querySelector('.chan__ignore');
@@ -136,10 +136,10 @@ function onToggleIgnore(channelId) {
 }
 
 /** Set/toggle a channel's preferred speed: clicking the active one turns it off. */
-function onRate(channelId, rate) {
+function onSpeed(channelId, speed) {
   prefs = loadChannelPrefs(); // read fresh before the write (see onToggleIgnore)
-  const wasActive = channelPreferredRate(prefs, channelId) === rate;
-  prefs = setChannelPref(prefs, channelId, { rate: wasActive ? undefined : rate });
+  const wasActive = channelPreferredSpeed(prefs, channelId) === speed;
+  prefs = setChannelPref(prefs, channelId, { speed: wasActive ? undefined : speed });
   saveChannelPrefs(prefs);
   syncRow(findRow(channelId), channelId);
 }

@@ -10,7 +10,7 @@ const IFRAME_API_SRC = 'https://www.youtube.com/iframe_api';
 let player = null; // YT.Player instance (once created)
 let ready = false; // true once the player's onReady has fired
 let currentVideoId = null; // id of the video currently loaded
-let currentRate = 1; // playback rate, re-applied on each new video
+let currentSpeed = 1; // playback speed, re-applied on each new video
 let pending = null; // { videoId, startSeconds } requested before the player was ready
 let handlers = {}; // { onEnded(videoId), onReady(), onProgress(videoId, seconds) }
 let progressTimer = null; // interval polling getCurrentTime() while playing
@@ -56,7 +56,7 @@ function createPlayer(mountId) {
     events: {
       onReady: () => {
         ready = true;
-        applyRate();
+        applySpeed();
         if (pending) {
           const p = pending;
           pending = null;
@@ -95,7 +95,7 @@ function doLoad(videoId, startSeconds = 0) {
     // that blocks it simply loads the video paused (an acceptable fallback). The
     // session begins from a user gesture (Play).
     player.loadVideoById(startSeconds > 0 ? { videoId, startSeconds } : { videoId });
-    applyRate();
+    applySpeed();
   } catch {
     /* ignore transient player errors */
   }
@@ -145,22 +145,23 @@ export function capturePosition() {
   captureProgress();
 }
 
-function applyRate() {
+function applySpeed() {
   try {
-    if (player && player.setPlaybackRate) player.setPlaybackRate(currentRate);
+    // setPlaybackRate is the YouTube IFrame Player API's own method name — keep it.
+    if (player && player.setPlaybackRate) player.setPlaybackRate(currentSpeed);
   } catch {
     /* ignore */
   }
 }
 
-/** Set the playback rate; persists across subsequent in-session video loads. */
-export function setRate(rate) {
-  currentRate = rate;
-  applyRate();
+/** Set the playback speed; persists across subsequent in-session video loads. */
+export function setSpeed(speed) {
+  currentSpeed = speed;
+  applySpeed();
 }
 
-export function getRate() {
-  return currentRate;
+export function getSpeed() {
+  return currentSpeed;
 }
 
 export function getCurrentVideoId() {

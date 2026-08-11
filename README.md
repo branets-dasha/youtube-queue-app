@@ -96,11 +96,11 @@ The app is deliberately quota-frugal and **never** uses `search.list`:
     - `yqa_start_cutoff` — the floor (deletion/fetch boundary).
     - `yqa_cutoff` — the live handled-prefix cutoff marker.
     - `yqa_channels` — channel id → `{ title, avatarUrl }` map for avatars.
-    - `yqa_channel_prefs` — channel id → `{ ignored?, rate? }` from the Channels page (absent when nothing is set).
-    - `yqa_playback_rate` — the current player speed.
-    - `yqa_default_rate` — the Default-speed setting (absent when off).
+    - `yqa_channel_prefs` — channel id → `{ ignored?, speed? }` from the Channels page (absent when nothing is set).
+    - `yqa_playback_speed` — the current player speed.
+    - `yqa_default_speed` — the Default-speed setting (absent when off).
     - `yqa_hide_marked` — the Hide-handled toggle.
-- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (IndexedDB is required — if it can't be opened the app stops with an error). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredRate`, `positionSeconds` (resume), and `liked`.
+- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (IndexedDB is required — if it can't be opened the app stops with an error). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredSpeed`, `positionSeconds` (resume), and `liked`.
 - The **like** state is stored **locally** and is never fetched back from YouTube, so a like/unlike you make directly on YouTube will **not** be reflected here.
 - Nothing is ever sent to any server other than Google's.
 
@@ -155,7 +155,7 @@ js/auth.js          GIS token client: init, request/refresh/revoke, in-memory to
 js/api.js           YouTube fetch: subscriptions, uploads, videos.list details, videos.rate; errors
 js/queue.js         PURE queue logic (no browser globals; Node-importable & unit-testable)
 js/queue.test.mjs   Node unit tests for js/queue.js (run: node js/queue.test.mjs)
-js/player.js        YouTube IFrame Player API wrapper (load/play, rate, seek, resume, fullscreen)
+js/player.js        YouTube IFrame Player API wrapper (load/play, speed, seek, resume, fullscreen)
 js/ui.js            XSS-safe DOM building (cards, player meta) and state screens
 js/toast.js         Top-right toast notifications (progress / success / error / info)
 js/app.js           Wiring: auth → fetch → store → queue → ui/player, event binding, shortcuts
