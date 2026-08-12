@@ -71,6 +71,17 @@ export const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 // out of order isn't missed. Tunable. Default: 6 hours.
 export const INCREMENTAL_REFRESH_BUFFER_MS = 6 * 60 * 60 * 1000;
 
+// A video whose length is at most this many seconds is treated as a "Short".
+// Heuristic only — the API exposes no isShort flag.
+export const SHORTS_MAX_SECONDS = 90;
+
+// Resume thresholds for a stored watch position: a position must be more than
+// this many seconds in to be worth resuming at all, and — when the duration is
+// known — at least this many seconds before the end, so we never resume at the
+// tail. Otherwise playback starts from the beginning.
+export const RESUME_MIN_SECONDS = 5;
+export const RESUME_END_MARGIN_SECONDS = 15;
+
 // Valid video states. Within the app everything that's not STATE_NEW is considered
 // "handled" (skipped).
 export const STATE_NEW = 'new';

@@ -4,6 +4,8 @@
 // (no window, document, fetch, localStorage, IndexedDB) at module scope or
 // inside its functions, so it can be imported directly by a Node.js test
 // runner:  import { computeCutoff, computeQueue, ... } from './js/queue.js'
+// Its ONLY import is config.js (constants), which must stay browser-global-free
+// for the same reason.
 //
 // A "video record" is a plain object of the shape:
 //   {
@@ -21,15 +23,15 @@
 //     state:        'new' | 'skipped'   // 'skipped' is the single "handled" state
 //   }
 
-// A single "handled" state. Every handled check below is expressed as
+// There is a single "handled" state. Every handled check below is expressed as
 // `state === STATE_NEW` (or its negation), so nothing depends on the exact
 // handled value — a record is "handled" iff its state is not 'new'.
-export const STATE_NEW = 'new';
-export const STATE_SKIPPED = 'skipped';
-
-// A video whose length is at most this many seconds is treated as a "Short".
-// Heuristic only — the API exposes no isShort flag to the client.
-export const SHORTS_MAX_SECONDS = 90;
+import {
+  STATE_NEW,
+  SHORTS_MAX_SECONDS,
+  RESUME_MIN_SECONDS,
+  RESUME_END_MARGIN_SECONDS,
+} from './config.js';
 
 /**
  * Compare two ISO timestamps. Returns a negative number if a < b, positive if
@@ -367,11 +369,6 @@ export function isShort(durationSeconds) {
     durationSeconds <= SHORTS_MAX_SECONDS
   );
 }
-
-// A saved position must be at least this many seconds in to be worth resuming,
-// and at least this many seconds before the end (so we don't resume at the tail).
-export const RESUME_MIN_SECONDS = 5;
-export const RESUME_END_MARGIN_SECONDS = 15;
 
 /**
  * Where playback should START for resume. Returns `positionSeconds` only when it

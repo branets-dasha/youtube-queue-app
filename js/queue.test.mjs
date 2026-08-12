@@ -18,7 +18,6 @@ import {
   parseIsoDuration,
   formatDuration,
   isShort,
-  SHORTS_MAX_SECONDS,
   resumeStart,
   effectiveSpeed,
   incrementalSince,
@@ -31,6 +30,7 @@ import {
   pruneChannels,
   mergeRefresh,
 } from './queue.js';
+import { SHORTS_MAX_SECONDS } from './config.js';
 
 let passed = 0;
 function test(name, fn) {
