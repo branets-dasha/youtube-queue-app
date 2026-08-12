@@ -27,6 +27,7 @@ import {
   loadChannels,
   saveChannels,
   loadChannelPrefs,
+  saveChannelPrefs,
   getPlaybackSpeed,
   setPlaybackSpeed,
   getDefaultSpeed,
@@ -64,6 +65,7 @@ import {
   daysAgoIso,
   incrementalSince,
   isChannelIgnored,
+  pruneChannels,
   mergeRefresh,
 } from './queue.js';
 import {
@@ -650,6 +652,12 @@ async function runRefresh(bound, sweepSpeeds) {
     // handled prefix, and advance the floor.
     await cleanup();
 
+    // Silent housekeeping, run on the FINAL record set of this refresh (after
+    // the merge AND the cleanup above), so a channel whose last video was just
+    // deleted drops in the same pass. Only reachable past the non-empty-subs
+    // early return, so `subs` always describes a real subscriptions fetch.
+    pruneStaleChannels(subs);
+
     // Duration + embeddability are not in playlistItems: batch
     // videos.list?part=contentDetails,status (<=50 ids/call, 1 unit each; adding
     // `status` is 0 extra quota) for the surviving visible videos lacking either
@@ -685,6 +693,30 @@ async function mergeAndPersist(incoming, prefs, sweepSpeeds) {
   state.records = mergeRefresh(state.records, incoming, prefs, { sweepSpeeds });
   await putVideos(state.records);
   recompute();
+}
+
+/**
+ * Forget channels you are no longer subscribed to, so `yqa_channels` and
+ * `yqa_channel_prefs` stop growing forever. The condition is the pure
+ * `pruneChannels`: gone from `subs` AND no stored record left (a channel with
+ * videos still queued keeps its entry — the cards need its avatar/title — and
+ * drops on a later refresh once they drain). It sweeps both maps, so an orphan
+ * prefs entry with no channels entry goes the same way. Prefs are re-read FRESH
+ * here rather than reusing the refresh's snapshot: a Channels tab may have
+ * edited them mid-run. Silent — no toast; and each map is written only if it
+ * changed, since a prune can touch just one of the two.
+ * @param {Array<{channelId:string}>} subs the freshly-fetched subscriptions
+ */
+function pruneStaleChannels(subs) {
+  const channels = state.channels;
+  const prefs = loadChannelPrefs();
+  const pruned = pruneChannels(channels, prefs, subs, state.records);
+  if (pruned.removed.length === 0) return;
+  if (pruned.channels !== channels) {
+    state.channels = pruned.channels;
+    saveChannels(state.channels);
+  }
+  if (pruned.prefs !== prefs) saveChannelPrefs(pruned.prefs);
 }
 
 /**

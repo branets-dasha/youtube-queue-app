@@ -534,6 +534,97 @@ export function setChannelPref(prefs, channelId, patch) {
   return next;
 }
 
+/**
+ * Prune the stored channel map (and the matching per-channel prefs) of channels
+ * that are gone. A channel is removed only when BOTH hold: its channelId is
+ * ABSENT from the freshly-fetched subscriptions, AND no stored record still
+ * belongs to it. A channel with videos still in the queue therefore KEEPS its
+ * entry — its cards need the avatar/title — and drops on a later refresh once
+ * those videos drain.
+ *
+ * The sweep covers the UNION of both maps (deduped; channel keys first, then
+ * prefs-only keys), so an ORPHAN prefs entry — one with no channels entry at
+ * all — is judged by those same two conditions instead of lingering forever.
+ *
+ * DEFENSIVE: an empty (or non-array, or all-malformed) `subs` prunes NOTHING —
+ * an empty subscriptions list reads as a failed/suspect fetch, never as
+ * "unsubscribed from everything".
+ *
+ * Neither input is mutated, and neither is normalized on the caller's behalf:
+ * this helper PRUNES, nothing more. Whatever is not pruned comes back VERBATIM
+ * by identity — the `channels` and `prefs` arguments themselves when nothing is
+ * pruned, and either one alone when only the OTHER map lost an entry, malformed
+ * or absent ones included. So the caller can compare identities to skip the
+ * writes it does not need, and can never be handed a map this helper invented.
+ * Pure.
+ *
+ * @param {Record<string,{title?:string,avatarUrl?:string}>|null|undefined} channels
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
+ * @param {Array<{channelId?:string}>|null|undefined} subs freshly fetched subscriptions
+ * @param {Array<object>|null|undefined} records stored video records
+ * @returns {{channels:*,prefs:*,removed:Array<string>}} a pruned map is a fresh
+ *   object, an unpruned one is the argument as given; removed = pruned channelIds
+ */
+export function pruneChannels(channels, prefs, subs, records) {
+  const chanMap =
+    channels && typeof channels === 'object' && !Array.isArray(channels)
+      ? channels
+      : {};
+  const prefMap =
+    prefs && typeof prefs === 'object' && !Array.isArray(prefs) ? prefs : {};
+  // The RAW arguments, not the normalized maps: an untouched input is handed
+  // back exactly as it came in (see the identity contract above).
+  const unchanged = { channels, prefs, removed: [] };
+
+  // A missing/empty subscriptions list means the fetch failed, not that every
+  // subscription is gone: prune nothing.
+  if (!Array.isArray(subs) || subs.length === 0) return unchanged;
+  const subscribed = new Set();
+  for (const s of subs) {
+    if (s && s.channelId) subscribed.add(s.channelId);
+  }
+  if (subscribed.size === 0) return unchanged; // only malformed entries: same as a failed fetch
+
+  // Channels that still own at least one stored video keep their entry.
+  const withVideos = new Set();
+  for (const r of records || []) {
+    if (r && r.channelId) withVideos.add(r.channelId);
+  }
+
+  // Candidates are the UNION of both maps, so a prefs entry with no channels
+  // entry (an orphan — hand-edited storage, or predating pruning) sweeps out on
+  // the very same two conditions. Deduped, channels keys first then prefs-only
+  // keys, each in insertion order: `removed` is deterministic.
+  const has = (map, id) => Object.prototype.hasOwnProperty.call(map, id);
+  const candidates = Object.keys(chanMap).concat(
+    Object.keys(prefMap).filter((id) => !has(chanMap, id))
+  );
+  const removed = candidates.filter(
+    (id) => !subscribed.has(id) && !withVideos.has(id)
+  );
+  if (removed.length === 0) return unchanged;
+
+  const nextChannels = { ...chanMap };
+  const nextPrefs = { ...prefMap };
+  let channelsChanged = false;
+  let prefsChanged = false;
+  for (const id of removed) {
+    if (has(chanMap, id)) {
+      delete nextChannels[id];
+      channelsChanged = true;
+    }
+    if (has(prefMap, id)) {
+      delete nextPrefs[id];
+      prefsChanged = true;
+    }
+  }
+  return {
+    channels: channelsChanged ? nextChannels : channels,
+    prefs: prefsChanged ? nextPrefs : prefs,
+    removed,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Refresh merge ("Fetch new" / "Refresh all" — the whole composition)
 // ---------------------------------------------------------------------------

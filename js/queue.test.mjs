@@ -28,6 +28,7 @@ import {
   channelPreferredSpeed,
   applyChannelSpeeds,
   setChannelPref,
+  pruneChannels,
   mergeRefresh,
 } from './queue.js';
 
@@ -424,6 +425,171 @@ test('setChannelPref treats a non-object stored value as empty, so it drops clea
   assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { speed: 2 }), {
     UCa: { speed: 2 },
   });
+});
+
+// --- pruneChannels: drop unsubscribed channels once their videos have drained ---
+
+const CHANNELS = {
+  UCkeep: { title: 'Still subscribed', avatarUrl: 'k.jpg' },
+  UCgone: { title: 'Unsubscribed, drained', avatarUrl: 'g.jpg' },
+  UCdrain: { title: 'Unsubscribed, still queued', avatarUrl: 'd.jpg' },
+};
+const SUBS = [{ channelId: 'UCkeep', channelTitle: 'Still subscribed' }];
+const VIDS = [{ ...rec('v', T1, 'new'), channelId: 'UCdrain' }];
+
+test('pruneChannels drops an unsubscribed channel with no stored videos', () => {
+  const out = pruneChannels(CHANNELS, {}, SUBS, VIDS);
+  assert.deepEqual(out.removed, ['UCgone']); // unsubscribed AND drained
+  assert.deepEqual(Object.keys(out.channels).sort(), ['UCdrain', 'UCkeep']);
+  assert.equal(out.channels.UCkeep.avatarUrl, 'k.jpg'); // surviving entries intact
+});
+
+test('pruneChannels keeps an unsubscribed channel that still has videos', () => {
+  const out = pruneChannels(CHANNELS, {}, SUBS, VIDS);
+  assert.equal(out.channels.UCdrain.title, 'Unsubscribed, still queued'); // cards need it
+  assert.equal(out.removed.includes('UCdrain'), false);
+  // Once that last video drains, the SAME channel prunes on a later refresh.
+  assert.deepEqual(pruneChannels(CHANNELS, {}, SUBS, []).removed.sort(), [
+    'UCdrain',
+    'UCgone',
+  ]);
+});
+
+test('pruneChannels keeps a subscribed channel that has no videos', () => {
+  const out = pruneChannels({ UCkeep: { title: 'Still subscribed' } }, {}, SUBS, []);
+  assert.deepEqual(out.removed, []); // subscribed: never pruned
+  assert.equal(out.channels.UCkeep.title, 'Still subscribed');
+});
+
+test('pruneChannels prunes prefs for exactly the pruned channels, leaving the rest', () => {
+  const prefs = {
+    UCkeep: { ignored: true },
+    UCgone: { speed: 2 },
+    UCdrain: { ignored: true, speed: 1.5 },
+    UCorphan: { speed: 1 }, // no channels entry, unsubscribed, drained: swept too
+  };
+  const out = pruneChannels(CHANNELS, prefs, SUBS, VIDS);
+  assert.deepEqual(out.removed, ['UCgone', 'UCorphan']); // channels keys, then prefs-only
+  assert.deepEqual(out.prefs, {
+    UCkeep: { ignored: true },
+    UCdrain: { ignored: true, speed: 1.5 }, // channel kept -> prefs kept
+  });
+});
+
+test('pruneChannels sweeps an ORPHAN prefs entry that has no channels entry', () => {
+  // Hand-edited storage, or prefs written before pruning existed: judged by the
+  // same two conditions instead of lingering forever.
+  const prefs = { UCorphan: { speed: 2 } };
+  const out = pruneChannels(CHANNELS, prefs, SUBS, VIDS);
+  assert.deepEqual(out.removed, ['UCgone', 'UCorphan']); // a prefs-only id is a candidate
+  assert.deepEqual(out.prefs, {}); // the orphan is gone
+});
+
+test('pruneChannels keeps an orphan prefs entry whose channel is still subscribed', () => {
+  const prefs = { UCkeep: { speed: 2 } }; // no channels entry, but still subscribed
+  const out = pruneChannels({}, prefs, SUBS, VIDS);
+  assert.deepEqual(out.removed, []);
+  assert.equal(out.prefs, prefs); // identity: nothing to write
+});
+
+test('pruneChannels keeps an orphan prefs entry whose channel still has videos', () => {
+  const prefs = { UCdrain: { speed: 1.5 } }; // unsubscribed, but VIDS still holds one
+  const out = pruneChannels({}, prefs, SUBS, VIDS);
+  assert.deepEqual(out.removed, []);
+  assert.equal(out.prefs, prefs); // identity: nothing to write
+  // Once that video drains, the SAME orphan prunes on a later refresh.
+  assert.deepEqual(pruneChannels({}, prefs, SUBS, []).removed, ['UCdrain']);
+});
+
+test('pruneChannels returns the channels by identity when only a prefs orphan went', () => {
+  const channels = { UCkeep: { title: 'Still subscribed' } };
+  const prefs = { UCorphan: { speed: 2 } };
+  const out = pruneChannels(channels, prefs, SUBS, VIDS);
+  assert.equal(out.channels, channels); // untouched map -> caller skips saveChannels
+  assert.notEqual(out.prefs, prefs); // prefs DID change: a fresh object
+  assert.deepEqual(out.removed, ['UCorphan']);
+});
+
+test('pruneChannels lists an id present in BOTH maps exactly once in removed', () => {
+  const prefs = { UCgone: { speed: 2 } }; // also a channels key
+  const out = pruneChannels(CHANNELS, prefs, SUBS, VIDS);
+  assert.deepEqual(out.removed, ['UCgone']); // the union is deduped
+  assert.equal(out.removed.filter((id) => id === 'UCgone').length, 1);
+  assert.equal(out.channels.UCgone, undefined); // dropped from both maps
+  assert.deepEqual(out.prefs, {});
+});
+
+test('pruneChannels returns the prefs by identity when only channels changed', () => {
+  const prefs = { UCkeep: { ignored: true } };
+  const out = pruneChannels(CHANNELS, prefs, SUBS, VIDS);
+  assert.equal(out.prefs, prefs); // no prefs entry pruned -> caller can skip that write
+  assert.notEqual(out.channels, CHANNELS); // channels did change
+});
+
+test('pruneChannels prunes NOTHING when the subs list is empty or not an array', () => {
+  // An empty subscriptions list is a failed/suspect fetch, not "unsubscribed
+  // from everything" — the whole channel map would otherwise be wiped.
+  // [{ noChannelId: 1 }] is the all-malformed-subs early return: same treatment.
+  const prefs = { UCgone: { speed: 2 } };
+  for (const subs of [[], null, undefined, 'UCkeep', {}, [{ noChannelId: 1 }]]) {
+    const out = pruneChannels(CHANNELS, prefs, subs, []);
+    assert.deepEqual(out.removed, []);
+    assert.equal(out.channels, CHANNELS); // original identities, nothing to write
+    assert.equal(out.prefs, prefs); // both maps, not just the channel one
+    assert.deepEqual(Object.keys(out.channels).sort(), ['UCdrain', 'UCgone', 'UCkeep']);
+    // The early returns hand back the RAW arguments too — never an invented {}.
+    const raw = pruneChannels(null, undefined, subs, []);
+    assert.strictEqual(raw.channels, null); // not normalized to {}
+    assert.strictEqual(raw.prefs, undefined); // and undefined stays undefined
+  }
+});
+
+test('pruneChannels returns the original identities when nothing is pruned', () => {
+  const channels = { UCkeep: { title: 'Still subscribed' } };
+  const prefs = { UCkeep: { speed: 2 } };
+  const out = pruneChannels(channels, prefs, SUBS, VIDS);
+  assert.equal(out.channels, channels); // same object: caller skips saveChannels
+  assert.equal(out.prefs, prefs); // same object: caller skips saveChannelPrefs
+  assert.deepEqual(out.removed, []);
+});
+
+test('pruneChannels never mutates its inputs', () => {
+  const channels = { ...CHANNELS };
+  const prefs = { UCgone: { speed: 2 }, UCkeep: { ignored: true } };
+  const records = VIDS.slice();
+  const subs = SUBS.slice();
+  pruneChannels(channels, prefs, subs, records);
+  assert.deepEqual(Object.keys(channels).sort(), ['UCdrain', 'UCgone', 'UCkeep']);
+  assert.deepEqual(prefs, { UCgone: { speed: 2 }, UCkeep: { ignored: true } });
+  assert.equal(records.length, 1); // record set untouched
+  assert.equal(subs.length, 1);
+});
+
+test('pruneChannels tolerates malformed entries and missing maps', () => {
+  const subs = [null, { channelId: '' }, { channelTitle: 'no id' }, ...SUBS];
+  const records = [null, { videoId: 'x' }, ...VIDS]; // null / channel-less records
+  const out = pruneChannels(CHANNELS, null, subs, records);
+  assert.deepEqual(out.removed, ['UCgone']); // malformed entries just ignored
+  assert.strictEqual(out.prefs, null); // a real prune, but nothing pruned from prefs
+  assert.notEqual(out.channels, CHANNELS); // channels DID change: a fresh object
+  assert.deepEqual(Object.keys(out.channels).sort(), ['UCdrain', 'UCkeep']);
+});
+
+test('pruneChannels hands malformed or absent maps straight back by identity', () => {
+  // It prunes; it does not normalize on the caller's behalf. A caller trusting
+  // the result must never end up writing a '{}' this helper invented.
+  const arrChannels = [];
+  const arrPrefs = [];
+  for (const [channels, prefs] of [
+    [null, null],
+    [undefined, undefined],
+    [arrChannels, arrPrefs], // array-shaped: read as empty, returned as given
+  ]) {
+    const out = pruneChannels(channels, prefs, SUBS, VIDS);
+    assert.strictEqual(out.channels, channels); // identity, not a fresh {}
+    assert.strictEqual(out.prefs, prefs); // identity, not a fresh {}
+    assert.deepEqual(out.removed, []); // neither map -> no candidates to prune
+  }
 });
 
 // --- preferredSpeed: an explicitly-set per-video speed always survives a refresh ---
