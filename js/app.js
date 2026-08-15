@@ -60,6 +60,7 @@ import {
   videosToClean,
   lastSkipped,
   nextPlayable,
+  firstPlayable,
   resumeStart,
   effectiveSpeed,
   daysAgoIso,
@@ -111,6 +112,7 @@ const state = {
   refreshing: false,
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
+  playerCaughtUp: false, // TEXT-selector only: playback stopped because the queue ran out
   speed: 1, // player playback speed (1 / 1.5 / 2)
   defaultSpeed: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
@@ -266,7 +268,10 @@ function cacheDom() {
   dom.playerTitle = byId('player-title');
   dom.playerMeta = byId('player-meta');
   dom.playerDescription = byId('player-description');
+  dom.playerBar = byId('player-bar');
   dom.playerEmpty = byId('player-empty');
+  dom.playerEmptyText = byId('player-empty-text');
+  dom.startQueueBtn = byId('start-queue-btn');
   dom.speed1x = byId('speed-1x');
   dom.speed15x = byId('speed-15x');
   dom.speed2x = byId('speed-2x');
@@ -297,6 +302,7 @@ function bindEvents() {
   if (dom.speed1x) dom.speed1x.addEventListener('click', () => onSpeed(1));
   if (dom.speed15x) dom.speed15x.addEventListener('click', () => onSpeed(1.5));
   if (dom.speed2x) dom.speed2x.addEventListener('click', () => onSpeed(2));
+  if (dom.startQueueBtn) dom.startQueueBtn.addEventListener('click', onStartQueue);
   if (dom.skipBtn) dom.skipBtn.addEventListener('click', onSkipNext);
   if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
 
@@ -821,9 +827,10 @@ async function setVideoState(videoId, nextState, opts = {}) {
       if (next) next.focus();
     }
   }
-  // This optimistic path skips render(), so re-evaluate the "scroll to playing"
-  // button directly: skipping the playing video with Hide-skipped ON removes its
-  // card above, leaving nothing to scroll to.
+  // This optimistic path skips render(), so re-evaluate the playback controls
+  // directly: skipping the playing video with Hide-skipped ON removes its card
+  // above, leaving nothing to scroll to, and marking/un-marking changes whether
+  // the empty player still has anything to start.
   updatePlayingControls();
   // Recompute the live cutoff marker (persist if it moved) + refresh the header
   // counts / Cleanup button. No data re-render/deletion here.
@@ -942,6 +949,10 @@ async function onUndo() {
   // Un-marking a video inside the handled prefix moves the cutoff BACK (to the
   // floor if it was the oldest); that video stays visible in the queue.
   refreshMarkerAndStats();
+  // Like the marking path, this optimistic update skips render(), so re-evaluate
+  // the playback controls directly: un-marking can make the queue playable again
+  // (the empty player's "Start the queue" button).
+  updatePlayingControls();
   state.lastAction = null;
 
   try {
@@ -1032,6 +1043,22 @@ function playVideo(videoId) {
   updateLikeButton(); // from the record's local `liked` flag (no fetch)
 }
 
+/**
+ * "Start the queue" button in the empty player: play the FIRST still-'new',
+ * embeddable video of the render list (oldest first) through the SAME playVideo()
+ * path a card's Play button uses. The button is hidden whenever firstPlayable()
+ * finds nothing, so the null branch is only a guard against a stale click (the
+ * list can change between paint and click) — it just re-syncs the button.
+ */
+function onStartQueue() {
+  const first = firstPlayable(state.visible);
+  if (!first) {
+    updatePlayingControls(); // nothing to play after all: hide the stale button
+    return;
+  }
+  playVideo(first.videoId);
+}
+
 function openOnYouTube(videoId) {
   const url = 'https://www.youtube.com/watch?v=' + encodeURIComponent(videoId);
   window.open(url, '_blank', 'noopener');
@@ -1068,38 +1095,72 @@ function setPlayerNowPlaying(rec) {
   // rather than keeping the previous video's (possibly scrolled) position.
   if (dom.playerPane) dom.playerPane.scrollTop = 0;
   setVisible(dom.playerEmpty, false);
+  state.playerCaughtUp = false; // playing again: the next stop re-decides the text
   if (dom.skipBtn) dom.skipBtn.disabled = false;
 }
 
-/** Show the player's empty state ("select" initially, "caught up" after a run). */
+/**
+ * Show the player's empty state. `caughtUp` only records HOW playback stopped
+ * (the queue ran out, vs nothing has played yet); the overlay's text and button
+ * are both derived in updatePlayingControls() below, which this calls — so an
+ * empty player that later gains a playable video updates itself.
+ */
 function showPlayerEmpty(caughtUp) {
   state.playing = null;
+  state.playerCaughtUp = !!caughtUp;
   if (dom.playerTitle) dom.playerTitle.textContent = '';
   renderPlayerMeta(dom.playerMeta, null);
   renderDescription(dom.playerDescription, null, { onSeek: seekTo });
-  if (dom.playerEmpty) {
-    dom.playerEmpty.textContent = caughtUp
-      ? 'All caught up — nothing left to play.'
-      : 'Select a video to play';
-    setVisible(dom.playerEmpty, true);
-  }
+  setVisible(dom.playerEmpty, true);
   if (dom.skipBtn) dom.skipBtn.disabled = true;
-  updatePlayingControls(); // stopped -> disable the "scroll to playing" jump
+  updatePlayingControls(); // stopped -> disable the jump, show/hide "Start the queue"
   updateLikeButton(); // state.playing is null -> disabled, not liked
   markPlayingCard(null);
 }
 
 /**
- * Reflect playback + list state onto the "Scroll to playing" jump button: it is
- * enabled only when a video is playing AND that card is actually present in the
- * rendered queue (findCard). If the playing card is outside the render window or
- * filtered out (e.g. by Hide-skipped), there is nothing to scroll to, so the
- * button is disabled. Called from the spots that flip state.playing (play start /
- * stop / empty) AND from render() (the visible set changes independently of it).
+ * Reflect playback + list state onto the two controls that depend on BOTH, at the
+ * same moments — hence one function, called from the spots that flip state.playing
+ * (play start / stop / empty), from the optimistic marking path, AND from render()
+ * (the visible set changes independently of state.playing):
+ *
+ *  - "Scroll to playing" jump: enabled only when a video is playing AND that card
+ *    is actually present in the rendered queue (findCard). If the playing card is
+ *    outside the render window or filtered out (e.g. by Hide-skipped), there is
+ *    nothing to scroll to, so the button is disabled.
+ *  - The empty-player overlay, text AND its "Start the queue" button, derived from
+ *    ONE condition: nothing is playing and firstPlayable() finds something (over
+ *    the FULL visible list — the Hide-skipped filter and the render window don't
+ *    limit what can be PLAYED). So a queue that was drained to "all caught up" and
+ *    then refilled by a refresh flips back to a working button on that refresh's
+ *    render(), with no stale "nothing left to play" left over. The button is
+ *    HIDDEN rather than disabled, so it never sits in the tab order dead.
+ *    state.playerCaughtUp only picks the text for the nothing-playable case; it
+ *    can never suppress the button.
  */
 function updatePlayingControls() {
-  if (!dom.scrollPlayingBtn) return;
-  dom.scrollPlayingBtn.disabled = !state.playing || !findCard(state.playing);
+  if (dom.scrollPlayingBtn) {
+    dom.scrollPlayingBtn.disabled = !state.playing || !findCard(state.playing);
+  }
+  // The whole now-playing bar (title + meta + Like / speeds / Skip) belongs to a
+  // loaded video: with none, the title and meta are empty and every control is a
+  // disabled stub, so hide the bar outright rather than show an empty box. This is
+  // a VISIBILITY layer only — updateLikeButton / the skip + speed buttons keep
+  // their own disabled/active logic untouched underneath. The frame's height comes
+  // from its own aspect-ratio (not from siblings) and the pane is top-aligned, so
+  // the bar appearing/disappearing below it never moves or resizes the video.
+  setVisible(dom.playerBar, !!state.playing);
+  const canStart = !state.playing && !!firstPlayable(state.visible);
+  setVisible(dom.startQueueBtn, canStart);
+  // Exactly ONE of {button, text} — "Select a video to play" next to a button that
+  // does exactly that contradicts it. The text is HIDDEN (not blanked) so it takes
+  // no layout space and leaves the a11y tree with it.
+  setVisible(dom.playerEmptyText, !canStart);
+  if (dom.playerEmptyText) {
+    dom.playerEmptyText.textContent = state.playerCaughtUp
+      ? 'All caught up — nothing left to play.'
+      : 'Select a video to play';
+  }
 }
 
 /**

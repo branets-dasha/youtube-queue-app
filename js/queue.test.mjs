@@ -14,6 +14,7 @@ import {
   videosToClean,
   lastSkipped,
   nextPlayable,
+  firstPlayable,
   compareIso,
   parseIsoDuration,
   formatDuration,
@@ -269,6 +270,34 @@ test('nextPlayable handles a current id not present (searches from the start)', 
   const sorted = [play('a', 'skipped', true), play('b', 'new', true)];
   assert.equal(nextPlayable(sorted, 'ZZZ').videoId, 'b'); // graceful: first eligible
   assert.equal(nextPlayable([], 'ZZZ'), null); // empty list -> null
+});
+
+// --- firstPlayable: the player's "Start the queue" target (same rule, from the head) ---
+
+test('firstPlayable returns the OLDEST still-new, embeddable record', () => {
+  const sorted = [
+    play('s1', 'skipped', true), // skip (handled)
+    play('ne', 'new', false), // skip (non-embeddable)
+    play('ok', 'new', true), // <- first eligible
+    play('ok2', 'new', true),
+  ];
+  assert.equal(firstPlayable(sorted).videoId, 'ok');
+  // embeddable === undefined counts as playable, like nextPlayable
+  assert.equal(firstPlayable([play('u', 'new', undefined)]).videoId, 'u');
+});
+
+test('firstPlayable returns null when nothing is playable', () => {
+  assert.equal(firstPlayable([]), null); // empty queue
+  assert.equal(firstPlayable([play('a', 'skipped', true)]), null); // all handled
+  assert.equal(firstPlayable([play('a', 'new', false)]), null); // all non-embeddable
+  assert.equal(firstPlayable(null), null); // defensive: not an array
+});
+
+test('firstPlayable ignores a malformed record and does not mutate the list', () => {
+  const sorted = [null, { videoId: null, state: 'skipped' }, play('ok', 'new', true)];
+  const snapshot = sorted.slice();
+  assert.equal(firstPlayable(sorted).videoId, 'ok');
+  assert.deepEqual(sorted, snapshot);
 });
 
 // --- resumeStart: where to resume playback ---

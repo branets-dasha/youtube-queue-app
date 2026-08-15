@@ -180,8 +180,36 @@ export function nextPlayable(sorted, currentVideoId) {
   const idx = list.findIndex((r) => r && r.videoId === currentVideoId);
   const start = idx < 0 ? 0 : idx + 1;
   for (let k = start; k < list.length; k++) {
-    const r = list[k];
-    if (r && r.state === STATE_NEW && r.embeddable !== false) return r;
+    if (isPlayable(list[k])) return list[k];
+  }
+  return null;
+}
+
+/**
+ * The single eligibility rule shared by nextPlayable and firstPlayable: a record
+ * is playable when it is still 'new' (skips any handled video) and embeddable
+ * (embeddable !== false — undefined means "not known to be blocked").
+ * @param {object|null|undefined} r
+ * @returns {boolean}
+ */
+function isPlayable(r) {
+  return !!r && r.state === STATE_NEW && r.embeddable !== false;
+}
+
+/**
+ * The FIRST playable record in an ascending (oldest->newest) list — same
+ * eligibility rule as nextPlayable, but scanning from the head instead of from a
+ * current video. This is what the player's "Start the queue" button plays: the
+ * oldest still-'new', embeddable video. Returns null when nothing is eligible
+ * (empty list, everything handled, or every remaining video non-embeddable).
+ * Pure; does not mutate.
+ * @param {Array<object>} sorted visible records, ascending by publishedAt
+ * @returns {object|null}
+ */
+export function firstPlayable(sorted) {
+  const list = Array.isArray(sorted) ? sorted : [];
+  for (let k = 0; k < list.length; k++) {
+    if (isPlayable(list[k])) return list[k];
   }
   return null;
 }

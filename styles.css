@@ -879,8 +879,12 @@ body.app-active #app-main.app {
 }
 .player__empty {
   display: flex;
+  /* Column so the "Start the queue" button sits under the message, both centred
+     in the (16:9, height-capped) frame. Unchanged when the button is hidden. */
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   padding: 12px;
   text-align: center;
   color: var(--text-dim);
@@ -888,6 +892,13 @@ body.app-active #app-main.app {
 }
 /* An author display value overrides the UA [hidden] rule, so hide explicitly. */
 .player__empty[hidden] {
+  display: none;
+}
+.player__empty-text {
+  margin: 0;
+}
+/* .btn is inline-flex, which likewise overrides the UA [hidden] rule. */
+.player__empty-btn[hidden] {
   display: none;
 }
 .player__bar {
@@ -901,6 +912,12 @@ body.app-active #app-main.app {
   align-items: flex-start; /* multi-line title top-aligns with the controls */
   gap: 10px;
   justify-content: space-between;
+}
+/* An author display value overrides the UA [hidden] rule, so hide explicitly.
+   Hidden whenever nothing is playing; .player's flex `gap` applies only BETWEEN
+   visible items, so no empty box, border or gap is left behind. */
+.player__bar[hidden] {
+  display: none;
 }
 .player__info {
   min-width: 0; /* allow the flex item to shrink below its content's width */

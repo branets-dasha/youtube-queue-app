@@ -272,10 +272,30 @@
               <div class="player__frame">
                 <div id="player-mount"></div>
                 <div id="player-empty" class="player__empty">
-                  Select a video to play
+                  <p id="player-empty-text" class="player__empty-text">
+                    Select a video to play
+                  </p>
+                  <!-- Starts the queue at the first still-unwatched video. Hidden
+                       (not just disabled) whenever there is nothing playable, so
+                       the caught-up state stays text-only and it never sits in
+                       the tab order as a dead control. -->
+                  <button
+                    id="start-queue-btn"
+                    class="btn btn--primary player__empty-btn"
+                    type="button"
+                    aria-label="Start the queue at the first unwatched video"
+                    title="Start the queue at the first unwatched video"
+                    hidden
+                  >
+                    ▶ Start the queue
+                  </button>
                 </div>
               </div>
-              <div class="player__bar">
+              <!-- Now-playing info + controls. Hidden whenever nothing is playing
+                   (see updatePlayingControls): the title/meta are empty and every
+                   control is a disabled stub in that state, so the empty player
+                   reads as just the frame. Ships hidden — nothing plays at load. -->
+              <div id="player-bar" class="player__bar" hidden>
                 <div class="player__info">
                   <p id="player-title" class="player__title" aria-live="polite"></p>
                   <div id="player-meta" class="player__meta"></div>
