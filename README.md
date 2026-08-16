@@ -67,26 +67,25 @@ The app runs entirely in your browser. It fetches your data using the YouTube Da
 
 ### Connect the player to your YouTube account (optional)
 
-The embedded video player is a **cross-origin YouTube iframe** (from `youtube.com`), so it's a *third party* relative to the app's own origin. By default, modern browsers' tracking prevention / third-party-cookie blocking stops that iframe from seeing your YouTube login: the player runs **signed-out**, so it isn't tied to your account and, if you have YouTube Premium, you'll still see ads.
+The embedded video player is a **cross-origin YouTube iframe** — it's a window into `youtube.com` from the app page. If tracking prevention is enabled (in modern browsers it's often on by default), the browser will not send cookies belonging to `youtube.com` to that iframe. It means that the player will not recognize your YouTube login, and will run **signed-out**, showing ads even if you have YouTube Premium.
 
-This is separate from signing into the app. **Signing in** with Google OAuth only authorizes the **Data API** (your subscriptions, marking, likes) — it does **not** sign the *player* in. Whether the player recognizes your account and Premium depends entirely on whether your browser lets the `youtube.com` iframe use its cookies as a third party.
-
-This step is **optional** — playback works without it. It only affects account-connected / Premium (ad-free) playback, and it only relaxes protection for **this one site**; tracking prevention stays on everywhere else. Note that connecting the player does **not** make your watches count toward a video's public view count — see Limitations. To connect the player, allow YouTube's third-party cookies for the app:
+Disable tracking prevention for the app's page to connect the player to your YouTube account. This step is **optional** — playback works without it. It only affects account-connected / Premium (ad-free) playback. Note that connecting the player does **not** make your watches count toward a video's public view count — see Limitations. To connect the player, allow YouTube's third-party cookies for the app:
 
 - **Edge:** turn **off** Tracking prevention for `https://branets-dasha.github.io` — via the site-info / shield icon in the address bar, or **Settings → Privacy, search, and services → Tracking prevention → Exceptions**. Alternatively, allow-list `[*.]youtube.com` under cookies.
 - **Chrome / others:** allow **third-party cookies** for the site — via the cookie / tune icon in the address bar — or add a site exception for `[*.]youtube.com`.
+
+This is separate from signing into the app. **Signing in** with Google OAuth only authorizes the **Data API** (your subscriptions, marking, likes) — it does **not** sign the *player* in. Whether the player recognizes your account and Premium depends entirely on whether your browser lets the `youtube.com` iframe use its cookies as a third party.
 
 ### Quota notes
 
 Each YouTube Data API call spends quota units associated with your Client. The default daily quota is **10,000 units**. If you hit it you'll see a friendly "daily quota reached" message; it resets at midnight Pacific time.
 
-The app is deliberately quota-frugal and **never** uses `search.list`:
+The app is deliberately quota-frugal. It uses the following methods:
 
-- `subscriptions.list` and `playlistItems.list` — **1 unit** per page. Upload playlists are derived cheaply by replacing the leading `UC` of a channel id with `UU` (no extra call); the rare non-`UC` channel costs one `channels.list`.
-- Per channel, paging stops as soon as it reaches a video at or older than your cutoff (uploads come newest-first), so a normal refresh is cheap.
-- `videos.list?part=contentDetails,status` — batched **≤ 50 ids per call, 1 unit** each — backfills video **durations** (badges) and **embeddability**. Adding the `status` part is 0 extra quota.
+- `subscriptions.list` — gets a list of subscribed channels. **1 unit per page** (page size is 50 results max).
+- `playlistItems.list` — gets channel videos. **1 unit per page**, requested **per channel**, paging stops as soon as it reaches the cutoff point (for "Refresh all") or the point of the last saved video + 6h buffer (for "Fetch new"). Upload playlist ids are derived cheaply by replacing the leading `UC` of a channel id with `UU` (no extra call); the rare non-`UC` channel costs one additional `channels.list` request.
+- `videos.list?part=contentDetails,status,snippet` — backfills video durations, descriptions and embeddability. Batched **≤ 50 ids per call, 1 unit** each.
 - `videos.rate` (the Like button) — roughly **50 units** per like/unlike.
-- Channel avatars ride along in the `subscriptions.list` snippets at **no extra quota**.
 
 ### Data & privacy
 
@@ -98,9 +97,9 @@ The app is deliberately quota-frugal and **never** uses `search.list`:
     - `yqa_channels` — channel id → `{ title, avatarUrl }` map for avatars.
     - `yqa_channel_prefs` — channel id → `{ ignored?, speed? }` from the Channels page (absent when nothing is set).
     - `yqa_playback_speed` — the current player speed.
-    - `yqa_default_speed` — the Default-speed setting (absent when off).
-    - `yqa_hide_marked` — the Hide-handled toggle.
-- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (IndexedDB is required — if it can't be opened the app stops with an error). Each record holds: `videoId`, `title`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredSpeed`, `positionSeconds` (resume), and `liked`.
+    - `yqa_default_speed` — the "Default speed" setting (absent when off).
+    - `yqa_hide_marked` — the "Hide skipped" toggle.
+- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (IndexedDB is required — if it can't be opened the app stops with an error). Each record holds: `videoId`, `title`, `description`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredSpeed`, `positionSeconds` (resume), and `liked`.
 - The **like** state is stored **locally** and is never fetched back from YouTube, so a like/unlike you make directly on YouTube will **not** be reflected here.
 - Nothing is ever sent to any server other than Google's.
 
@@ -108,13 +107,13 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 
 ### Known limitations
 
-- **Likes made on YouTube are not reflected here.** The like state is tracked locally (never fetched), so liking/unliking in the YouTube app or website won't show up in the app, and vice-versa is one-way (this app → YouTube).
-- **Shorts** are detected by a **heuristic** (duration ≤ 90s) and merely badged — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the badge can be wrong for edge cases.
-- **One queue tab at a time.** A second queue tab stops with a "close the other tab and reload" message so the two can't write over each other; the Channels page can stay open alongside.
+- **Watching a video here does not count toward its public view count.** YouTube only counts a playback that's [started with the player's **native play button**](https://developers.google.com/youtube/iframe_api_reference); this app starts playback programmatically (its own controls plus auto-advance) through the IFrame API, which that rule excludes.
+- **Likes made on YouTube are not reflected here.** The like state is tracked locally (never fetched), so liking/unliking directly on YouTube won't show up in the app. But liking/unliking in the app will be properly reflected on YouTube regardless of initial state.
 - **Resume** only covers **in-app** playback position (tracked by the embedded player); it does not sync with YouTube's own watch history.
+- **Shorts** are detected by a **heuristic** (duration ≤ 90s) — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the "Shorts" badge can be wrong for edge cases.
+- **One queue tab at a time.** A second queue tab stops with a "close the other tab and reload" message so the two can't write over each other; the Channels page can stay open alongside.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
-- **Watching a video here does not count toward its public view count.** YouTube only counts a playback that's [started with the player's **native play button**](https://developers.google.com/youtube/iframe_api_reference); this app starts playback programmatically (its own controls plus auto-advance) through the IFrame API, which that rule excludes.
 
 ## Part 2 — For developers: running it yourself
 
@@ -145,24 +144,25 @@ For **local development**, register your localhost origin instead of the hosted 
 
 ### Project layout
 
-```text
-index.html          DOM skeleton + loads GIS, the IFrame API (via player.js), and js/app.js
-channels.html       Standalone channel-list page (per-channel prefs); loads js/channels-page.js
-styles.css          Light/dark, responsive two-pane styling; player container query
-README.md           This file
-js/config.js        Constants (API base, OAuth scope, storage keys, IndexedDB names, limits)
-js/store.js         Persistence: IndexedDB video CRUD + localStorage for id/cutoff/settings/channels
-js/migrations.js    All data migrations, in one place (records, channel prefs, localStorage keys)
-js/auth.js          GIS token client: init, request/refresh/revoke, in-memory token
-js/api.js           YouTube fetch: subscriptions, uploads, videos.list details, videos.rate; errors
-js/queue.js         PURE queue logic (no browser globals; Node-importable & unit-testable)
-js/queue.test.mjs   Node unit tests for js/queue.js (run: node js/queue.test.mjs)
-js/player.js        YouTube IFrame Player API wrapper (load/play, speed, seek, resume, fullscreen)
-js/ui.js            XSS-safe DOM building (cards, player meta) and state screens
-js/toast.js         Top-right toast notifications (progress / success / error / info)
-js/app.js           Wiring: auth → fetch → store → queue → ui/player, event binding, shortcuts
-js/channels-page.js Channels page wiring: channel rows + ignore/speed prefs (no auth, no API)
-```
+| File | Purpose |
+| --- | --- |
+| `index.html` | DOM skeleton + loads GIS, the IFrame API (via player.js), and js/app.js |
+| `channels.html` | Standalone channel-list page (per-channel prefs); loads js/channels-page.js |
+| `styles.css` | Light/dark, responsive two-pane styling; player container query |
+| `README.md` | This file |
+| `js/config.js` | Constants (API base, OAuth scope, storage keys, IndexedDB names, limits) |
+| `js/store.js` | Persistence: IndexedDB video CRUD + localStorage for id/cutoff/settings/channels |
+| `js/migrations.js` | All data migrations, in one place (records, channel prefs, localStorage keys) |
+| `js/migrations.test.mjs` | Node unit tests for js/migrations.js (run: node js/migrations.test.mjs) |
+| `js/auth.js` | GIS token client: init, request/refresh/revoke, in-memory token |
+| `js/api.js` | YouTube fetch: subscriptions, uploads, videos.list details, videos.rate; errors |
+| `js/queue.js` | PURE queue logic (no browser globals; Node-importable & unit-testable) |
+| `js/queue.test.mjs` | Node unit tests for js/queue.js (run: node js/queue.test.mjs) |
+| `js/player.js` | YouTube IFrame Player API wrapper (load/play, speed, seek, resume, fullscreen) |
+| `js/ui.js` | XSS-safe DOM building (cards, player meta) and state screens |
+| `js/toast.js` | Top-right toast notifications (progress / success / error / info) |
+| `js/app.js` | Wiring: auth → fetch → store → queue → ui/player, event binding, shortcuts |
+| `js/channels-page.js` | Channels page wiring: channel rows + ignore/speed prefs (no auth, no API) |
 
 ### Testing the pure logic in Node
 
