@@ -249,7 +249,6 @@ function cacheDom() {
   dom.addForm = byId('stash-add-form');
   dom.urlInput = byId('stash-url-input');
   dom.addBtn = byId('stash-add-btn');
-  dom.addStatus = byId('stash-add-status');
 
   dom.cleanupBtn = byId('cleanup-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
@@ -288,8 +287,9 @@ function bindEvents() {
 
   // A real <form>, so Enter submits for free; the handler preventDefault()s.
   if (dom.addForm) dom.addForm.addEventListener('submit', onAddSubmit);
-  // Typing clears the last inline message (and any invalid marking) — no timers.
-  if (dom.urlInput) dom.urlInput.addEventListener('input', clearAddStatus);
+  // Typing clears the field's invalid marking. The messages themselves are
+  // toasts now, and dismiss on their own timer.
+  if (dom.urlInput) dom.urlInput.addEventListener('input', clearAddInvalid);
 
   if (dom.cleanupBtn) dom.cleanupBtn.addEventListener('click', onCleanup);
   if (dom.scrollPlayingBtn) dom.scrollPlayingBtn.addEventListener('click', onScrollToPlaying);
@@ -416,27 +416,41 @@ async function onSignOut() {
 // ---------------------------------------------------------------------------
 // Add a video (the ONLY way records enter the stash)
 //
-// Feedback is INLINE, on #stash-add-status, never a toast: the message belongs
-// next to the field it is about, and it is cleared by the next keystroke rather
-// than by a timer. Toasts stay for events with no field (Clean up, sign-out).
+// EVERY message here is a TOAST — errors, the duplicate notice, progress and
+// success alike. The inline status line this replaced appeared and disappeared
+// per message, reflowing the page on every add; toasts float above the layout
+// and cost no vertical space. Moving only some cases would have kept the jump
+// for the rest, so none of them stayed. What did stay on the field is
+// aria-invalid for a parse failure: that is validity STATE, not a message, and
+// the next keystroke clears it (clearAddInvalid).
 // ---------------------------------------------------------------------------
 
-/** Write an inline message under the add field (no-op without the node). */
-function setAddStatus(message, kind) {
-  if (!dom.addStatus) return;
-  showStatus(dom.addStatus, message, kind);
-}
-
-/** Clear the inline message AND the field's invalid marking (on input). */
-function clearAddStatus() {
-  if (dom.addStatus) hideStatus(dom.addStatus);
+/** Clear the field's invalid marking (on input); the messages self-dismiss. */
+function clearAddInvalid() {
   if (dom.urlInput) dom.urlInput.removeAttribute('aria-invalid');
 }
 
-/** Mark the URL field invalid (parse failures only) and explain why, inline. */
+/** Mark the URL field invalid (parse failures only) and say why, in a toast. */
 function rejectInput(message) {
   if (dom.urlInput) dom.urlInput.setAttribute('aria-invalid', 'true');
-  setAddStatus(message, 'error');
+  showToast(message, { type: 'error' });
+}
+
+// The add flow's single PROGRESS toast ("authorizing…", "looking up…"), updated
+// in place rather than stacked, and always dismissed in onAddSubmit's finally —
+// the same pattern subscriptions-page.js uses around a refresh.
+let progressToast = null;
+/** Show or UPDATE the single progress toast in place (sticky until hidden). */
+function showProgress(message) {
+  if (progressToast) progressToast.update(message);
+  else progressToast = showToast(message, { type: 'progress' });
+}
+/** Dismiss the progress toast if one is showing. */
+function hideProgress() {
+  if (progressToast) {
+    progressToast.dismiss();
+    progressToast = null;
+  }
 }
 
 /** Reflect an in-flight add on the form (the button is the only visible part). */
@@ -466,31 +480,31 @@ async function onAddSubmit(e) {
   // addedAt, same Remove mark — and just point at it. No write, no API call.
   const existing = state.records.find((r) => r.videoId === videoId);
   if (existing) {
-    setAddStatus('That video is already in your stash.', 'info');
+    showToast('That video is already in your stash.', { type: 'info' });
     scrollToCard(videoId);
     return;
   }
 
   if (!state.clientId) {
-    setAddStatus('Add your OAuth Client ID first (Change Client ID).', 'error');
+    showToast('Add your OAuth Client ID first (Change Client ID).', { type: 'error' });
     return;
   }
 
   setAdding(true);
   try {
-    if (!hasSession()) setAddStatus('Authorizing with Google…', 'progress');
+    if (!hasSession()) showProgress('Authorizing with Google…');
     await ensureAuthReady();
     // Silent when a token is already live; falls back to the consent prompt.
     await ensureToken({ interactiveFallback: true });
     updateAuthUi(); // a fresh token flips the label + the Like button
 
-    setAddStatus('Looking up the video…', 'progress');
+    showProgress('Looking up the video…');
     const [incoming] = await getVideosByIds([videoId]);
     if (!incoming) {
       // getVideosByIds simply omits ids the API does not return.
-      setAddStatus(
+      showToast(
         'YouTube has no such video — it may be private, deleted, or the link may be wrong.',
-        'error'
+        { type: 'error' }
       );
       return;
     }
@@ -508,7 +522,7 @@ async function onAddSubmit(e) {
     });
     if (!added) {
       // Raced with another add of the same id: still no mutation, by contract.
-      setAddStatus('That video is already in your stash.', 'info');
+      showToast('That video is already in your stash.', { type: 'info' });
       scrollToCard(record.videoId);
       return;
     }
@@ -517,13 +531,13 @@ async function onAddSubmit(e) {
     state.records = sortStash(records);
     render();
     if (dom.urlInput) dom.urlInput.value = '';
-    setAddStatus(`Added “${record.title}” to your stash.`, 'success');
+    showToast(`Added “${record.title}” to your stash.`, { type: 'success' });
     scrollToCard(record.videoId);
   } catch (err) {
-    setAddStatus(describeAddFailure(err), 'error');
+    showToast(describeAddFailure(err), { type: 'error' });
     if (err instanceof DbBlockedError || err instanceof DbUnavailableError) {
       // A fatal storage condition is bigger than this form: put up the halt
-      // screen too (the inline line alone would understate it).
+      // screen too (the toast alone would understate it).
       handleError(err);
     } else if (err instanceof ApiError && err.kind === 'auth') {
       // The grant is genuinely dead: end the session so the label and the Like
@@ -532,6 +546,8 @@ async function onAddSubmit(e) {
       updateAuthUi();
     }
   } finally {
+    // Always dismiss the progress toast when an add ends (success/error/early).
+    hideProgress();
     setAdding(false);
   }
 }
@@ -561,7 +577,7 @@ async function attachAvatar(rec) {
 }
 
 /**
- * The inline message for a failed add — a pure string picker (the caller decides
+ * The toast message for a failed add — a pure string picker (the caller decides
  * what else the failure warrants). Two of these are PLAIN Errors, not ApiErrors,
  * so they carry no `kind` and would fall through an ApiError-only router: GIS
  * not loaded yet, and a token request already in progress.
@@ -1283,8 +1299,8 @@ function cyclePlaybackSpeed(dir) {
 //
 // The full-screen halt screens live in page-chrome.js (identical on both queue
 // pages); this is the page-LOCAL router — an auth failure ends the session and
-// repaints THIS page's auth UI. Add failures do not come through here: they are
-// reported inline, next to the field (see describeAddFailure).
+// repaints THIS page's auth UI. Add failures do not come through here: they get
+// their own toast, worded by describeAddFailure.
 // ---------------------------------------------------------------------------
 
 function handleError(err) {

@@ -133,6 +133,9 @@
           <!-- No refresh and no cutoff here: the stash is filled by hand, one
                link at a time, and has no FLOOR/CUTOFF window. -->
           <div class="toolbar__actions">
+            <button id="change-client-btn" class="btn btn--ghost" type="button">
+              Change Client ID
+            </button>
             <button
               id="default-speed-btn"
               class="btn btn--ghost"
@@ -141,31 +144,26 @@
             >
               Default speed: off
             </button>
-            <button id="change-client-btn" class="btn btn--ghost" type="button">
-              Change Client ID
-            </button>
           </div>
         </div>
 
         <!-- The only way videos enter the stash. A real <form>, so Enter submits
              for free and the button is a genuine submit control; the JS handler
-             calls preventDefault(). #stash-add-status ships in the markup with
-             role="status" so the live region exists BEFORE the first message is
-             written into it, and carries ONLY class="status" — showStatus() in
-             ui.js overwrites className wholesale, so any extra class would be
-             destroyed on first use. -->
+             calls preventDefault(). ALL of its feedback is a TOAST: an inline
+             status line under the field appeared and disappeared per message,
+             reflowing the page on every add, while toasts float above the layout
+             and cost no vertical space. The <label> is the field's whole
+             description — no placeholder, no aria-describedby — and the only
+             thing the field itself carries is aria-invalid on a parse failure. -->
         <div class="stash-add-block">
           <form id="stash-add-form" class="stash-add" autocomplete="off">
             <label class="stash-add__label" for="stash-url-input">Add a video by YouTube link</label>
             <div class="stash-add__row">
               <input id="stash-url-input" class="field__input stash-add__input" type="text"
-                     inputmode="url" autocomplete="off" spellcheck="false"
-                     placeholder="youtu.be/dQw4w9WgXcQ, watch?v=dQw4w9WgXcQ, or dQw4w9WgXcQ"
-                     aria-describedby="stash-add-status" />
-              <button id="stash-add-btn" class="btn btn--primary stash-add__btn" type="submit">Add</button>
+                     inputmode="url" autocomplete="off" spellcheck="false" />
+              <button id="stash-add-btn" class="btn stash-add__btn" type="submit">Add</button>
             </div>
           </form>
-          <div id="stash-add-status" class="status" role="status" aria-atomic="true" hidden></div>
         </div>
 
         <p class="shortcuts" aria-hidden="false">

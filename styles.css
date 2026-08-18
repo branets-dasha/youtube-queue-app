@@ -1339,12 +1339,6 @@ body.app-active #app-main.app[hidden] {
 .stash-add__btn {
   flex: 0 0 auto;
 }
-/* The status line sits directly under the row; .status carries only a bottom
-   margin, so give it the gap above. */
-.stash-add-block > .status {
-  margin-top: 8px;
-}
-
 @media (max-width: 620px) {
   /* Once the button has wrapped onto its own line, let it span the row — a
      full-width tap target instead of a stranded pill. */
