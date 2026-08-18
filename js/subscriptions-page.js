@@ -38,9 +38,7 @@ import {
   DbUnavailableError,
 } from './store.js';
 import {
-  waitForGis,
-  initAuth,
-  requestToken,
+  ensureAuthorized,
   hasSession,
   clearToken,
   revoke,
@@ -100,6 +98,7 @@ import {
   showSupersededError,
   showDbReadError,
   reportIfFatalDb,
+  describeAuthFailure,
   initCurtain,
   bindIframeFocusGuard,
 } from './page-chrome.js';
@@ -119,6 +118,7 @@ const state = {
   handledThisSession: 0,
   lastAction: null, // { videoId, prevState } for undo
   refreshing: false,
+  liking: false, // a Like (possibly incl. its authorization) is in flight
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
   playerCaughtUp: false, // TEXT-selector only: playback stopped because the queue ran out
@@ -481,37 +481,42 @@ function showMainApp() {
 }
 
 function updateAuthUi() {
-  // SINGLE source of truth for every auth-gated indicator: the status label, the
-  // sign in/out buttons, the refresh buttons AND the Like button all derive from
-  // hasSession() (an active authorized session), NOT from live-token validity.
-  // A token silently expires ~1h in but the session stays alive (the next API
-  // call refreshes it on demand), so the label and the Like button can never
-  // drift apart as the token ages — they both flip only at a real auth
-  // transition (sign-in / sign-out / unrecoverable auth failure), each of which
-  // routes through here.
+  // Auth state DISPLAYS here; it no longer GATES anything. The status label and
+  // the sign in/out pair derive from hasSession() (an active authorized session,
+  // not live-token validity: a token silently expires ~1h in while the session
+  // stays alive, and the next API call refreshes it on demand). The three
+  // API-backed controls — Fetch new, Refresh all and Like — are deliberately
+  // NOT gated on it: clicking one authorizes on demand (ensureAuthorized) and
+  // then does the work, in a single gesture, so a signed-out user never has to
+  // click twice. Their own non-auth reasons to be disabled stay: an in-flight
+  // refresh for the pair, and (in updateLikeButton) a video actually playing.
   const signed = hasSession();
   dom.authStatus.textContent = signed ? 'Signed in' : 'Not signed in';
   dom.authStatus.classList.toggle('is-signed-in', signed);
   setVisible(dom.signinBtn, !signed);
   setVisible(dom.signoutBtn, signed);
-  dom.refreshBtn.disabled = !signed || state.refreshing;
-  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = !signed || state.refreshing;
+  dom.refreshBtn.disabled = state.refreshing;
+  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = state.refreshing;
   updateCleanupUi();
-  updateLikeButton(); // re-evaluate: signing out disables it (visual liked stays)
+  updateLikeButton();
 }
 
+/**
+ * The explicit Sign in button. It is no longer a PREREQUISITE for anything —
+ * Fetch new / Refresh all / Like each authorize on demand — but it stays as the
+ * way to authorize deliberately (and it is the only thing that reveals Sign
+ * out). Signing in still fetches nothing: it only updates auth/UI state.
+ */
 async function onSignIn() {
   try {
-    await waitForGis();
-    initAuth(state.clientId);
     showProgress('Opening Google sign-in…');
-    await requestToken({ interactive: true });
-    hideProgress();
-    updateAuthUi();
-    // Do NOT auto-fetch here: signing in only updates auth/UI state. Videos load
-    // only when the user explicitly clicks Refresh (onRefresh).
+    // forceNew: there is no session to reuse — go straight to GIS.
+    await ensureAuthorized(state.clientId, { forceNew: true });
   } catch (err) {
     handleError(err);
+  } finally {
+    // In the finally, so a cancelled/failed sign-in cannot strand the toast.
+    hideProgress();
     updateAuthUi();
   }
 }
@@ -555,22 +560,27 @@ async function onRefreshNew() {
  * passed explicitly, never inferred from the bound. Everything else —
  * subscriptions + avatars, the per-channel uploads paging, details backfill,
  * upsert, cleanup, render, the progress toast and the summary — is identical.
+ *
+ * Signed out is not a special case: the run AUTHORIZES ON DEMAND as its first
+ * step (inside the click, so the GIS popup is not blocked) and then keeps going,
+ * so one click fetches. `state.refreshing` is raised BEFORE that await — it is
+ * what stops a second click (either button, or the keyboard) from stacking a
+ * second token request, which auth.js rejects outright while one is in flight.
  * @param {string|null} bound ISO lower bound for the per-channel uploads fetch
  * @param {boolean} sweepSpeeds fill channel speeds across ALL stored records
  */
 async function runRefresh(bound, sweepSpeeds) {
   if (state.refreshing) return;
-  if (!hasSession()) {
-    return onSignIn();
-  }
   state.refreshing = true;
   dom.refreshBtn.disabled = true;
   if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = true;
   hideProgress();
 
   try {
-    await waitForGis();
-    initAuth(state.clientId);
+    // Silent when a token is already live; falls back to the consent prompt.
+    if (!hasSession()) showProgress('Authorizing with Google…');
+    await ensureAuthorized(state.clientId);
+    updateAuthUi(); // a fresh token flips the status label straight away
 
     showProgress('Loading your subscriptions…');
     const subs = await getSubscriptions();
@@ -1283,12 +1293,11 @@ function playingRecord() {
 /**
  * Reflect the Like button from the CURRENT record's LOCAL `liked` flag (no API
  * fetch). The VISUAL filled/active state is informational and shown even when
- * signed out; the button is ENABLED only when there is an active session
- * (hasSession) AND a video is playing. Gating on hasSession() — the SAME flag the
- * status label uses — rather than live-token validity is what keeps the two in
- * agreement: an expired token still counts as "signed in", and a like click
- * refreshes it on demand via rateVideo (getToken -> ensureToken), falling back
- * to a fresh interactive consent on a 401/403 (see onLike).
+ * signed out. Being signed in is NOT a condition for the button: a like
+ * authorizes on demand (see onLike), so the only reasons it is disabled are
+ * that nothing is playing, or that a like is already in flight — which is what
+ * stops a second click stacking a second token request while the first one's
+ * consent popup is open.
  */
 function updateLikeButton() {
   if (!dom.likeBtn) return;
@@ -1301,9 +1310,7 @@ function updateLikeButton() {
     'aria-label',
     liked ? 'Remove like from this video' : 'Like this video'
   );
-  // Enabled only with an ACTIVE SESSION and a video playing (visual state is
-  // separate). hasSession() matches the status label, so the two never disagree.
-  dom.likeBtn.disabled = !state.playing || !hasSession();
+  dom.likeBtn.disabled = !state.playing || state.liking;
 }
 
 /**
@@ -1311,9 +1318,17 @@ function updateLikeButton() {
  * on success the local `liked` flag is set + PERSISTED (so it survives reload
  * with no fetch/quota). Optimistic; reverts the flag on error. A scope error
  * (401/403) triggers a fresh interactive consent, then retries once.
+ *
+ * Signed out is not a special case — the click authorizes on demand and then
+ * likes, with no second click. AUTHORIZATION HAPPENS BEFORE THE OPTIMISTIC FLIP,
+ * deliberately: a cancelled sign-in must leave the heart exactly as it was, and
+ * there is nothing to revert if the flag was never flipped. `state.liking` is
+ * raised for the whole run (button + `l` key both read it through
+ * updateLikeButton) so a second click cannot stack a second token request.
  */
 async function onLike() {
   const videoId = state.playing;
+  if (state.liking) return;
   if (!videoId || !dom.likeBtn || dom.likeBtn.disabled) return;
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;
@@ -1326,32 +1341,54 @@ async function onLike() {
     updateLikeButton();
   };
 
-  // Optimistic (visual) update.
-  rec.liked = nextLiked;
-  updateLikeButton();
-
+  state.liking = true;
+  updateLikeButton(); // disables the button for the duration (incl. the popup)
   try {
-    await rateVideo(videoId, nextRating); // ~50 quota units; writes to YouTube
-    putVideo(rec).catch(reportIfFatalDb); // persist the local liked flag on success
-  } catch (err) {
-    if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
-      // Write scope not granted yet: re-consent for the new scope, then retry once.
-      try {
-        showToast('Requesting YouTube access to like videos…', { type: 'info' });
-        await waitForGis();
-        initAuth(state.clientId);
-        await requestToken({ interactive: true });
-        await rateVideo(videoId, nextRating);
-        putVideo(rec).catch(reportIfFatalDb); // persist on success
-        return;
-      } catch (e2) {
-        revert();
-        handleError(e2);
-        return;
-      }
+    if (!hasSession()) {
+      showToast('Authorizing with Google…', { type: 'info' });
     }
-    revert();
+    // Silent when a token is already live; falls back to the consent prompt.
+    // Anything thrown here (cancelled popup, GIS missing) lands in the outer
+    // catch with the like flag UNTOUCHED.
+    await ensureAuthorized(state.clientId);
+    updateAuthUi(); // a fresh token flips the status label straight away
+
+    // Optimistic (visual) update — only now that we are authorized.
+    rec.liked = nextLiked;
+    updateLikeButton();
+
+    try {
+      await rateVideo(videoId, nextRating); // ~50 quota units; writes to YouTube
+      putVideo(rec).catch(reportIfFatalDb); // persist the local liked flag on success
+    } catch (err) {
+      if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
+        // Write scope not granted yet. forceNew, because the token we already
+        // hold IS the problem — ensureAuthorized's default silent path would
+        // hand back that same scope-less token and the retry would fail
+        // identically. No double prompt: the call above was silent (or its
+        // consent produced the token this one is replacing).
+        try {
+          showToast('Requesting YouTube access to like videos…', { type: 'info' });
+          await ensureAuthorized(state.clientId, { forceNew: true });
+          await rateVideo(videoId, nextRating);
+          putVideo(rec).catch(reportIfFatalDb); // persist on success
+          return;
+        } catch (e2) {
+          revert();
+          handleError(e2);
+          return;
+        }
+      }
+      revert();
+      handleError(err);
+    }
+  } catch (err) {
+    // Authorization itself failed (cancelled popup, GIS not loaded, no Client
+    // ID). Nothing was flipped, so there is nothing to revert.
     handleError(err);
+  } finally {
+    state.liking = false;
+    updateLikeButton();
   }
 }
 
@@ -1676,6 +1713,11 @@ function onGlobalKeydown(e) {
 // The full-screen halt screens themselves live in page-chrome.js (they are the
 // same on both queue pages); this is the page-specific router — auth failures
 // end the session and repaint this page's auth UI.
+//
+// NOTE the plain-Error tail: auth.js throws bare Errors (no `kind`) for GIS not
+// loaded yet, a token request already in flight, a missing Client ID, and a
+// cancelled/blocked popup. They fall straight through the ApiError branch, so
+// they are worded here rather than reaching the user as raw internal text.
 // ---------------------------------------------------------------------------
 
 function handleError(err) {
@@ -1713,9 +1755,7 @@ function handleError(err) {
     showToast(`Error: ${err.message}`, { type: 'error' });
     return;
   }
-  // Auth-cancellation and generic errors.
-  const msg = (err && err.message) || 'Something went wrong.';
-  showToast(msg, { type: 'error' });
+  showToast(describeAuthFailure(err), { type: 'error' });
 }
 
 // ---------------------------------------------------------------------------

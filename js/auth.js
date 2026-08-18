@@ -5,8 +5,9 @@
 //     scope.
 //   - The access token is kept in memory ONLY. It is never written to
 //     localStorage / IndexedDB.
-//   - Callers request a token on demand (Sign in), and the API layer can force
-//     a silent refresh when a call returns 401 or the token is near expiry.
+//   - Callers authorize on demand from inside a click (ensureAuthorized), and
+//     the API layer can force a silent refresh when a call returns 401 or the
+//     token is near expiry.
 //
 // No client secret and no API key are used anywhere: the OAuth access token
 // authorizes every YouTube Data API call.
@@ -208,6 +209,49 @@ export async function ensureToken({ interactiveFallback = false } = {}) {
     }
     throw err;
   }
+}
+
+/**
+ * Authorize on demand, in ONE call: make sure GIS has loaded, make sure the
+ * token client is initialized for `clientId`, then produce a token. This is the
+ * whole “the button signs you in and then does the thing” gesture — every
+ * API-backed control (Add, Fetch new, Refresh all, Like, Sign in) calls this
+ * instead of gating itself on hasSession(), so none of them needs a second
+ * click. Call it straight from the click handler: the popup GIS may open is
+ * only exempt from the browser's popup blocker while the gesture is still live.
+ *
+ * There is deliberately NO once-per-load “already prepared” memo: initAuth() is
+ * itself idempotent per Client ID (it no-ops on an unchanged one and
+ * re-initializes on a changed one, so “Change Client ID” mid-session can never
+ * authorize against the stale client), and waitForGis() resolves synchronously
+ * once GIS is up. A cached flag would only be a second thing to keep in sync
+ * with the Client ID.
+ *
+ * Layering: the Client ID is still the CALLER's to supply — this module reads no
+ * storage and touches no DOM.
+ *
+ * @param {string} clientId OAuth 2.0 Web-application Client ID
+ * @param {object} [opts]
+ * @param {boolean} [opts.forceNew=false] Ask GIS for a fresh token instead of
+ *        reusing one we already hold. Only for the cases where the held token IS
+ *        the problem: the 401/403 re-consent retry after a scope error, where
+ *        ensureToken() would hand back that same unusable token and the retry
+ *        would fail identically — and Sign in, which has no session to reuse.
+ *        The default path tries a silent (prompt: 'none') refresh first, so a
+ *        user who already granted the scope usually sees no popup at all.
+ * @returns {Promise<string>} the access token
+ */
+export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
+  if (!clientId) {
+    // Never let initAuth() build a token client around a missing id — GIS would
+    // fail later and far less legibly. Same wording as requestToken()'s guard.
+    throw new Error('Auth is not initialized. Provide a Client ID first.');
+  }
+  await waitForGis();
+  initAuth(clientId);
+  return forceNew
+    ? requestToken({ interactive: true })
+    : ensureToken({ interactiveFallback: true });
 }
 
 /**

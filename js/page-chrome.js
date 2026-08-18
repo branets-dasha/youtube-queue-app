@@ -235,6 +235,32 @@ export function describeError(err) {
 }
 
 /**
+ * Word a NON-ApiError failure — in practice everything auth.js throws, since it
+ * raises plain Errors that carry no `kind` for an ApiError router to switch on.
+ * Lives here rather than in either page because BOTH queue pages authorize on
+ * demand and would otherwise keep a copy each; the copy is therefore NEUTRAL
+ * about what was being attempted, and a caller that needs context adds its own
+ * (cf. stash-page.js's describeAddFailure, whose add-specific wording is
+ * deliberate). Pure string picker.
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function describeAuthFailure(err) {
+  const message = (err && err.message) || '';
+  if (/Identity Services/i.test(message)) {
+    return 'Google sign-in has not loaded yet. Give it a moment, then try again.';
+  }
+  if (/already in progress/i.test(message)) {
+    return 'A sign-in is already in progress — finish that one first.';
+  }
+  const code = err && err.code;
+  if (code === 'popup_closed' || code === 'access_denied' || /cancel/i.test(message)) {
+    return 'Sign-in was cancelled, so nothing was changed.';
+  }
+  return message || 'Something went wrong.';
+}
+
+/**
  * Swallow a best-effort (optional) store write's failure — EXCEPT the fatal DB
  * conditions, which put up their halt screen so the user is actually told.
  * `dbBlocked` can flip AFTER init via db.onversionchange (another tab starting a
