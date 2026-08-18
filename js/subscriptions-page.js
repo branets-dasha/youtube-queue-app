@@ -64,6 +64,7 @@ import {
   effectiveSpeed,
   daysAgoIso,
   incrementalSince,
+  subscriptionChannelInfo,
   isChannelIgnored,
   pruneChannels,
   mergeRefresh,
@@ -1060,11 +1061,24 @@ function onPlayerEnded(endedId) {
   else showPlayerEmpty(true);
 }
 
+/**
+ * This page's channel resolver, handed to ui.js wherever a channel is rendered
+ * (the cards and the now-playing meta). The policy is the yqa_channels map
+ * ALONE: this is the page that WRITES that map on every refresh, so
+ * `state.channels` is the authority — read here at call time, never re-read
+ * from storage and never snapshotted a second time.
+ * @param {object} rec video record
+ * @returns {{title:string,avatarUrl:string}}
+ */
+function resolveChannel(rec) {
+  return subscriptionChannelInfo(rec, state.channels);
+}
+
 function setPlayerNowPlaying(rec) {
   if (dom.playerTitle) dom.playerTitle.textContent = rec ? rec.title : ''; // safe text
   // Channel avatar + name + posted date, like the queue cards (updated on every
   // load, incl. auto-advance).
-  renderPlayerMeta(dom.playerMeta, rec, state.channels);
+  renderPlayerMeta(dom.playerMeta, rec, resolveChannel);
   // Description below the player: clickable in-video timestamps seek the built-in
   // player; plain URLs open in a new tab. Hidden when the record has no description.
   renderDescription(dom.playerDescription, rec, { onSeek: seekTo });
@@ -1403,7 +1417,7 @@ function render() {
       onPlay: (id) => playVideo(id),
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
     },
-    state.channels,
+    resolveChannel,
     more
   );
 

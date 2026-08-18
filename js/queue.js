@@ -462,6 +462,66 @@ export function sortChannels(channels) {
     return 0;
   });
 }
+/**
+ * Resolve the channel display info for a SUBSCRIPTION record from the channels
+ * map ALONE (yqa_channels, keyed by channelId) — an avatar carried on the record
+ * itself is deliberately IGNORED here, and that is what keeps this policy
+ * genuinely distinct from the stash one below. Subscription records are written
+ * by the refresh path and carry no avatar of their own, while the map is
+ * rewritten by every refresh, so the map is the single authority: a video stored
+ * before its channel had an avatar self-heals on the next render, for free.
+ * The TITLE still falls back from the record to the map, so a record stored
+ * without one shows the name the map knows instead of nothing.
+ * Pure — the caller supplies the map, and owns whether it is a fresh read or a
+ * snapshot.
+ * @param {object|null|undefined} rec video record
+ * @param {Record<string,{title?:string,avatarUrl?:string}>|null|undefined} channels
+ * @returns {{title:string,avatarUrl:string}} either may be '' when nothing resolves
+ */
+export function subscriptionChannelInfo(rec, channels) {
+  const ch = channelEntry(rec, channels);
+  return {
+    title: (rec && rec.channelTitle) || (ch && ch.title) || '',
+    avatarUrl: (ch && ch.avatarUrl) || '',
+  };
+}
+
+/**
+ * Resolve the channel display info for a STASH record: the avatar the record
+ * carries ITSELF (`channelAvatarUrl`) wins, and the channels map is only the
+ * fallback. The record-carried copy is what frees the stash from yqa_channels —
+ * pruneChannels may drop the entry of a channel a stashed video still references,
+ * and that card must keep its picture. The fallback is load-bearing all the same:
+ * records stashed before avatars were captured, and ones whose avatar fetch
+ * failed, have nothing of their own and resolve through the map. The TITLE falls
+ * back from the record to the map, exactly as above. Pure.
+ * @param {object|null|undefined} rec stash record (may carry `channelAvatarUrl`)
+ * @param {Record<string,{title?:string,avatarUrl?:string}>|null|undefined} channels
+ * @returns {{title:string,avatarUrl:string}} either may be '' when nothing resolves
+ */
+export function stashChannelInfo(rec, channels) {
+  const ch = channelEntry(rec, channels);
+  return {
+    title: (rec && rec.channelTitle) || (ch && ch.title) || '',
+    avatarUrl: (rec && rec.channelAvatarUrl) || (ch && ch.avatarUrl) || '',
+  };
+}
+
+/**
+ * The channels-map entry for a record's channel, or null — the ONE lookup both
+ * resolvers above share, so "which key, and when is there no entry" is written
+ * down once. Tolerant of a missing record, a missing/blank channelId, and a
+ * missing or non-object (or array) map.
+ * @param {object|null|undefined} rec
+ * @param {*} channels
+ * @returns {{title?:string,avatarUrl?:string}|null}
+ */
+function channelEntry(rec, channels) {
+  const id = rec && rec.channelId;
+  if (!id) return null;
+  if (!channels || typeof channels !== 'object' || Array.isArray(channels)) return null;
+  return channels[id] || null;
+}
 
 /**
  * True when a channel is marked ignored in the prefs map — its uploads are

@@ -24,6 +24,8 @@ import {
   incrementalSince,
   parseDescription,
   sortChannels,
+  subscriptionChannelInfo,
+  stashChannelInfo,
   isChannelIgnored,
   channelPreferredSpeed,
   applyChannelSpeeds,
@@ -471,6 +473,145 @@ test('setChannelPref treats a non-object stored value as empty, so it drops clea
   assert.deepEqual(setChannelPref({ UCa: 'garbage' }, 'UCa', { speed: 2 }), {
     UCa: { speed: 2 },
   });
+});
+
+// --- channel display info: the two per-page resolution policies ---
+
+// One map for every case below: a channel with both fields, one whose avatar is
+// blank, and one that is simply absent ('UCgone').
+const CHMAP = {
+  UCa: { title: 'Channel A', avatarUrl: 'https://img/a.png' },
+  UCblank: { title: 'Channel Blank', avatarUrl: '' },
+};
+
+test('subscriptionChannelInfo: map hit gives the map avatar', () => {
+  const info = subscriptionChannelInfo({ channelId: 'UCa', channelTitle: 'Channel A' }, CHMAP);
+  assert.deepEqual(info, { title: 'Channel A', avatarUrl: 'https://img/a.png' });
+});
+
+test('subscriptionChannelInfo: map miss gives no avatar at all', () => {
+  const info = subscriptionChannelInfo({ channelId: 'UCgone', channelTitle: 'Gone' }, CHMAP);
+  assert.deepEqual(info, { title: 'Gone', avatarUrl: '' }); // title still from the record
+});
+
+test('subscriptionChannelInfo: an entry with a blank avatarUrl is a miss', () => {
+  const info = subscriptionChannelInfo(
+    { channelId: 'UCblank', channelTitle: 'Channel Blank' },
+    CHMAP
+  );
+  assert.equal(info.avatarUrl, ''); // '' means placeholder, exactly like no entry
+});
+
+test('subscriptionChannelInfo IGNORES a record-carried channelAvatarUrl', () => {
+  // THE distinction between the two policies. A subscription record never
+  // carries one, and if a stray one appeared it must not win: the map is the
+  // authority on this page, so it self-heals on the next refresh.
+  const withNoEntry = subscriptionChannelInfo(
+    { channelId: 'UCgone', channelTitle: 'Gone', channelAvatarUrl: 'https://img/rec.png' },
+    CHMAP
+  );
+  assert.equal(withNoEntry.avatarUrl, ''); // record avatar ignored -> placeholder
+  const withEntry = subscriptionChannelInfo(
+    { channelId: 'UCa', channelTitle: 'Channel A', channelAvatarUrl: 'https://img/rec.png' },
+    CHMAP
+  );
+  assert.equal(withEntry.avatarUrl, 'https://img/a.png'); // the MAP wins
+});
+
+test('subscriptionChannelInfo: title falls back from the record to the map', () => {
+  assert.equal(subscriptionChannelInfo({ channelId: 'UCa' }, CHMAP).title, 'Channel A');
+  assert.equal(subscriptionChannelInfo({ channelId: 'UCa', channelTitle: '' }, CHMAP).title, 'Channel A');
+  // A record title always wins over the map one.
+  assert.equal(
+    subscriptionChannelInfo({ channelId: 'UCa', channelTitle: 'Renamed' }, CHMAP).title,
+    'Renamed'
+  );
+  // Nothing anywhere -> '' (buildAvatar then draws the '?' placeholder).
+  assert.deepEqual(subscriptionChannelInfo({ channelId: 'UCgone' }, CHMAP), {
+    title: '',
+    avatarUrl: '',
+  });
+});
+
+test('stashChannelInfo: the record avatar wins, with NO map entry', () => {
+  const info = stashChannelInfo(
+    { channelId: 'UCgone', channelTitle: 'Gone', channelAvatarUrl: 'https://img/rec.png' },
+    CHMAP
+  );
+  assert.deepEqual(info, { title: 'Gone', avatarUrl: 'https://img/rec.png' });
+});
+
+test('stashChannelInfo: the record avatar wins over a DIFFERENT map avatar', () => {
+  const info = stashChannelInfo(
+    { channelId: 'UCa', channelTitle: 'Channel A', channelAvatarUrl: 'https://img/rec.png' },
+    CHMAP
+  );
+  assert.equal(info.avatarUrl, 'https://img/rec.png'); // never the map's a.png
+});
+
+test('stashChannelInfo: the map is the load-bearing FALLBACK, not dead code', () => {
+  // Records stashed before avatars were captured, and ones whose avatar fetch
+  // failed, carry nothing of their own and must still show a picture.
+  const info = stashChannelInfo({ channelId: 'UCa', channelTitle: 'Channel A' }, CHMAP);
+  assert.equal(info.avatarUrl, 'https://img/a.png');
+  // A null/empty own-avatar is treated the same as an absent one.
+  assert.equal(
+    stashChannelInfo({ channelId: 'UCa', channelAvatarUrl: null }, CHMAP).avatarUrl,
+    'https://img/a.png'
+  );
+  assert.equal(
+    stashChannelInfo({ channelId: 'UCa', channelAvatarUrl: '' }, CHMAP).avatarUrl,
+    'https://img/a.png'
+  );
+});
+
+test('stashChannelInfo: no avatar anywhere resolves to the empty string', () => {
+  assert.deepEqual(stashChannelInfo({ channelId: 'UCgone', channelTitle: 'Gone' }, CHMAP), {
+    title: 'Gone',
+    avatarUrl: '',
+  });
+  assert.equal(stashChannelInfo({ channelId: 'UCblank' }, CHMAP).avatarUrl, '');
+});
+
+test('stashChannelInfo: title falls back from the record to the map', () => {
+  assert.equal(stashChannelInfo({ channelId: 'UCa' }, CHMAP).title, 'Channel A');
+  assert.equal(
+    stashChannelInfo({ channelId: 'UCa', channelTitle: 'Renamed' }, CHMAP).title,
+    'Renamed'
+  );
+});
+
+test('both resolvers: a missing or empty channelId consults no map entry', () => {
+  for (const rec of [{}, { channelId: undefined }, { channelId: null }]) {
+    assert.deepEqual(subscriptionChannelInfo(rec, CHMAP), { title: '', avatarUrl: '' });
+    assert.deepEqual(stashChannelInfo(rec, CHMAP), { title: '', avatarUrl: '' });
+  }
+  // A record's OWN avatar does not depend on the channelId, so the stash still
+  // shows it; the map-only policy still has nothing to show.
+  const orphan = { channelTitle: 'No Id', channelAvatarUrl: 'https://img/rec.png' };
+  assert.deepEqual(stashChannelInfo(orphan, CHMAP), { title: 'No Id', avatarUrl: 'https://img/rec.png' });
+  assert.deepEqual(subscriptionChannelInfo(orphan, CHMAP), { title: 'No Id', avatarUrl: '' });
+});
+
+test('both resolvers tolerate a missing, non-object or malformed channels map', () => {
+  const rec = { channelId: 'UCa', channelTitle: 'Channel A' };
+  for (const bad of [undefined, null, 0, 'nope', [], [{ title: 'x' }], { UCa: null }, { UCa: 'x' }]) {
+    assert.deepEqual(subscriptionChannelInfo(rec, bad), { title: 'Channel A', avatarUrl: '' });
+    assert.deepEqual(stashChannelInfo(rec, bad), { title: 'Channel A', avatarUrl: '' });
+  }
+  // A missing record is tolerated the same way (the player meta clears with null).
+  for (const r of [null, undefined]) {
+    assert.deepEqual(subscriptionChannelInfo(r, CHMAP), { title: '', avatarUrl: '' });
+    assert.deepEqual(stashChannelInfo(r, CHMAP), { title: '', avatarUrl: '' });
+  }
+});
+
+test('both resolvers mutate neither the record nor the map', () => {
+  const rec = { channelId: 'UCa', channelTitle: 'Channel A' };
+  const before = JSON.stringify({ rec, CHMAP });
+  subscriptionChannelInfo(rec, CHMAP);
+  stashChannelInfo(rec, CHMAP);
+  assert.equal(JSON.stringify({ rec, CHMAP }), before);
 });
 
 // --- pruneChannels: drop unsubscribed channels once their videos have drained ---

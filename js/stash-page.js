@@ -50,6 +50,7 @@ import {
 import { getVideosByIds, getChannelAvatars, rateVideo, ApiError } from './api.js';
 import {
   parseVideoId,
+  stashChannelInfo,
   sortStash,
   stashToClean,
   addToStash,
@@ -99,7 +100,6 @@ import {
 const state = {
   clientId: null,
   records: [], // the whole stash, kept sorted by sortStash (oldest addedAt first)
-  channels: {}, // channelId -> { title, avatarUrl }; READ-ONLY here (never written)
   booted: false, // the store read + settings restore have run once this load
   adding: false, // an add is in flight (guards the form AND the token request)
   lastAction: null, // { videoId, prevState } for undo
@@ -196,11 +196,6 @@ async function bootApp() {
       else showDbReadError(err);
       return;
     }
-
-    // Channel avatars/titles from the subscriptions side, read-only: a stash
-    // record carries its OWN channelAvatarUrl (which wins in buildAvatar), so
-    // this is only a fallback for records whose channel is also subscribed.
-    state.channels = loadChannels();
 
     // Restore the persisted playback speed and DEFAULT-speed setting. Both keys
     // are SHARED with the subscriptions page — one global player setting.
@@ -558,11 +553,18 @@ async function onAddSubmit(e) {
  * subscriptions refresh could prune out from under it. The already-known map is
  * tried first, so stashing from a subscribed channel costs no quota. Purely
  * cosmetic — a failure leaves the letter placeholder and never fails the add.
+ *
+ * `yqa_channels` is read FRESH here, and at this page's other two use sites
+ * (render, the now-playing meta) — never cached at startup, the same rule
+ * `yqa_channel_prefs` follows. This page only READS that map, while a
+ * subscriptions refresh in another tab rewrites it, so a boot-time snapshot
+ * would strand a card whose record carries no avatar of its own on the letter
+ * placeholder until the next full page reload.
  * @param {object} rec the freshly fetched record (mutated in place)
  */
 async function attachAvatar(rec) {
   if (!rec || !rec.channelId) return;
-  const known = state.channels[rec.channelId];
+  const known = loadChannels()[rec.channelId];
   if (known && known.avatarUrl) {
     rec.channelAvatarUrl = known.avatarUrl;
     return;
@@ -872,9 +874,21 @@ function onPlayerEnded(endedId) {
   else showPlayerEmpty(true);
 }
 
+/**
+ * This page's channel resolver: the record's OWN channelAvatarUrl first, the
+ * yqa_channels map only as the fallback (stashChannelInfo). The map is read
+ * FRESH at each of the two render sites and closed over for that one render —
+ * never a boot snapshot (see attachAvatar), and never one read per card.
+ * @param {Record<string,{title?:string,avatarUrl?:string}>} channels one fresh read
+ * @returns {(rec:object) => {title:string,avatarUrl:string}}
+ */
+function channelResolver(channels) {
+  return (rec) => stashChannelInfo(rec, channels);
+}
+
 function setPlayerNowPlaying(rec) {
   if (dom.playerTitle) dom.playerTitle.textContent = rec ? rec.title : ''; // safe text
-  renderPlayerMeta(dom.playerMeta, rec, state.channels);
+  renderPlayerMeta(dom.playerMeta, rec, channelResolver(loadChannels()));
   renderDescription(dom.playerDescription, rec, { onSeek: seekTo });
   // A new video loaded: scroll the pane back to the top so the video shows.
   if (dom.playerPane) dom.playerPane.scrollTop = 0;
@@ -1118,6 +1132,8 @@ function render() {
   // (in onGlobalKeydown) passes advanceFocus for rapid down-the-list removing.
   // 'Remove' is the mark button's visible label on this page — the btn--skip
   // CLASS is unchanged, so setCardState and the CSS still key off it.
+  // ONE fresh yqa_channels read for the WHOLE render (see channelResolver):
+  // never a boot snapshot, and never re-parsed once per card.
   renderQueue(
     dom.queueList,
     windowed,
@@ -1126,7 +1142,7 @@ function render() {
       onPlay: (id) => playVideo(id),
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
     },
-    state.channels,
+    channelResolver(loadChannels()),
     more,
     'Remove'
   );

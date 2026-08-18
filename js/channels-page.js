@@ -45,7 +45,7 @@ function init() {
   setVisible(listEl, sorted.length > 0);
   setVisible(emptyEl, sorted.length === 0);
   for (const ch of sorted) {
-    listEl.append(buildChannelRow(ch, channels));
+    listEl.append(buildChannelRow(ch));
   }
 
   // coverOnWheelDown: false is DELIBERATE — do not "fix" this into consistency
@@ -80,11 +80,14 @@ function onKeydown(e) {
  * channel on YouTube, then the controls — the same 1× / 1.5× / 2× speed buttons
  * the video cards use, and an Ignore toggle. All API-derived text is set via
  * textContent (XSS-safe); the id goes through encodeURIComponent.
+ *
+ * This page has no video records and needs none: sortChannels already hands us
+ * the title and avatarUrl, which is exactly what buildAvatar wants, so the
+ * channel IS the display info — no lookup, and no video record to fake.
  * @param {{channelId:string,title:string,avatarUrl:string}} ch
- * @param {Record<string,{title:string,avatarUrl:string}>} channels
  * @returns {HTMLLIElement}
  */
-function buildChannelRow(ch, channels) {
+function buildChannelRow(ch) {
   const link = el(
     'a',
     {
@@ -94,7 +97,7 @@ function buildChannelRow(ch, channels) {
       rel: 'noopener',
     },
     [
-      buildAvatar({ channelId: ch.channelId, channelTitle: ch.title }, channels, true),
+      buildAvatar({ title: ch.title, avatarUrl: ch.avatarUrl }, true),
       el('span', { class: 'chan__title', text: ch.title }), // safe
     ]
   );

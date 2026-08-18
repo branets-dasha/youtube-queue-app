@@ -4,6 +4,11 @@
 // channel name, etc.) is rendered via textContent or created DOM text nodes.
 // We NEVER assign API data into innerHTML. Video URLs are built with
 // encodeURIComponent on the id, and thumbnails are set via img.src only.
+//
+// This module holds NO data policy. It never decides where a channel title or
+// avatar comes from: each page passes a `resolveChannel(rec)` closure built on
+// the pure resolvers in queue.js (subscriptionChannelInfo / stashChannelInfo),
+// and everything here simply renders the answer it is handed.
 
 import { STATE_NEW } from './config.js';
 import { formatDuration, isShort, parseDescription } from './queue.js';
@@ -188,27 +193,22 @@ export function avatarPlaceholder(title) {
 }
 
 /**
- * Build the channel avatar for a card. Precedence: the avatar carried ON THE
- * RECORD (`rec.channelAvatarUrl`), then the channels map looked up by channelId
- * (decoupled from the video record, so it self-heals for already-stored videos
- * once the map is populated), then a placeholder circle.
+ * Build the channel avatar from ALREADY-RESOLVED display info. This function
+ * holds NO resolution policy of its own — where the title and the URL came from
+ * (the record, the yqa_channels map, or both, and in which order) is the calling
+ * page's business, settled by the pure resolvers in queue.js. Given no URL it
+ * renders the neutral letter placeholder, so card height stays uniform.
  * img.src ONLY; alt = channel title, or '' when `decorative` (the avatar sits
  * inside the channel link next to the name, so the name alone is the link's
  * accessible name and the image must not repeat it).
- * @param {object} rec video record (may carry its own `channelAvatarUrl`)
- * @param {Record<string,{title:string,avatarUrl:string}>} channels
+ * @param {{title?:string,avatarUrl?:string}|null} info resolved channel display
+ *        info, from subscriptionChannelInfo / stashChannelInfo (queue.js)
  * @param {boolean} [decorative] render with an empty alt
  * @returns {HTMLElement}
  */
-export function buildAvatar(rec, channels, decorative = false) {
-  const ch = channels && rec.channelId ? channels[rec.channelId] : null;
-  const title = rec.channelTitle || (ch && ch.title) || '';
-  // Record-carried avatar WINS over the map: stash records store their own
-  // avatar so the stash depends on no external map — pruneChannels can delete a
-  // yqa_channels entry that a stashed video still references, and that stashed
-  // card must keep its picture. Subscription records have no channelAvatarUrl,
-  // so this is inert there and the map lookup still self-heals them.
-  const avatarUrl = rec.channelAvatarUrl || (ch && ch.avatarUrl ? ch.avatarUrl : '');
+export function buildAvatar(info, decorative = false) {
+  const title = (info && info.title) || '';
+  const avatarUrl = (info && info.avatarUrl) || '';
   if (!avatarUrl) return avatarPlaceholder(title);
 
   const img = el('img', {
@@ -238,12 +238,18 @@ export function buildAvatar(rec, channels, decorative = false) {
  *
  * Returns a DocumentFragment in the unlinked case so callers can spread it into
  * their flex row exactly as before.
- * @param {object} rec video record
- * @param {Record<string,{title:string,avatarUrl:string}>} channels
+ *
+ * The channel's title and avatar are NOT derived here: `resolveChannel` — the
+ * calling page's policy, bound to that page's channels map — answers both, and
+ * the one resolved title feeds the avatar AND the visible name, so a card can
+ * never show two different answers for the same channel.
+ * @param {object} rec video record (supplies channelId, for the link href)
+ * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel
  * @returns {Node}
  */
-function buildChannelBadge(rec, channels) {
-  const title = rec.channelTitle || '';
+function buildChannelBadge(rec, resolveChannel) {
+  const info = (typeof resolveChannel === 'function' && resolveChannel(rec)) || null;
+  const title = (info && info.title) || '';
   if (rec.channelId) {
     return el(
       'a',
@@ -255,31 +261,34 @@ function buildChannelBadge(rec, channels) {
         onclick: (e) => e.stopPropagation(),
       },
       [
-        buildAvatar(rec, channels, true), // decorative: name below is the link text
+        buildAvatar(info, true), // decorative: name below is the link text
         el('span', { class: 'row__channel', text: title }), // safe
       ]
     );
   }
   const frag = document.createDocumentFragment();
-  frag.append(buildAvatar(rec, channels), el('span', { class: 'row__channel', text: title }));
+  frag.append(buildAvatar(info), el('span', { class: 'row__channel', text: title }));
   return frag;
 }
 
 /**
  * Render the player's info meta row (avatar + channel + posted date) for `rec`
- * into `container`, mirroring a card's meta row and reusing the same avatar
- * rendering + channels map. Pass rec = null to clear it. XSS-safe (textContent,
+ * into `container`, mirroring a card's meta row through the very same channel
+ * badge — so the now-playing bar and the cards can never resolve a channel
+ * differently. Pass rec = null to clear it; the resolver is then never called,
+ * which is why the clearing callers may omit it. XSS-safe (textContent,
  * img.src, encodeURIComponent via buildAvatar/formatters).
  * @param {HTMLElement} container
  * @param {object|null} rec video record
- * @param {Record<string,{title:string,avatarUrl:string}>} [channels]
+ * @param {(rec:object) => {title?:string,avatarUrl?:string}} [resolveChannel]
+ *        the calling page's channel resolver (see buildChannelBadge)
  */
-export function renderPlayerMeta(container, rec, channels = {}) {
+export function renderPlayerMeta(container, rec, resolveChannel) {
   if (!container) return;
   clear(container);
   if (!rec) return;
   container.append(
-    buildChannelBadge(rec, channels),
+    buildChannelBadge(rec, resolveChannel),
     el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
     el('time', {
       class: 'row__time-abs',
@@ -348,17 +357,18 @@ export function renderDescription(container, rec, { onSeek } = {}) {
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
  * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed) }
- * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
+ * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
+ *        calling page's channel resolver (see buildChannelBadge)
  * @param {string} [skipLabel='Skip'] visible label for the mark button
  *        ('Remove' on the stash page); also used in its aria-label and title.
  *        The btn--skip CLASS never changes — styles.css and setCardState key off
- *        it. A trailing positional param with a default (like `channels` /
- *        `more`) rather than an options object (over-general for one string) or
- *        a key on `handlers`, which is a pure bag of callbacks everywhere else —
- *        a display string smuggled in there would hide from the next reader.
+ *        it. A trailing positional param with a default (like `more`) rather
+ *        than an options object (over-general for one string) or a key on
+ *        `handlers`, which is a pure bag of callbacks everywhere else — a
+ *        display string smuggled in there would hide from the next reader.
  * @returns {HTMLLIElement}
  */
-export function buildQueueRow(rec, handlers, channels = {}, skipLabel = 'Skip') {
+export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip') {
   const watchUrl = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
 
   // A card is treated as non-embeddable ONLY when the details fetch has
@@ -468,7 +478,7 @@ export function buildQueueRow(rec, handlers, channels = {}, skipLabel = 'Skip') 
     text: rec.title, // safe
   });
 
-  const channelBadge = buildChannelBadge(rec, channels);
+  const channelBadge = buildChannelBadge(rec, resolveChannel);
 
   const timeAbs = el('time', {
     class: 'row__time-abs',
@@ -587,17 +597,19 @@ export function buildQueueRow(rec, handlers, channels = {}, skipLabel = 'Skip') 
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
  * @param {object} handlers { onSkip, onPlay, onCardSpeed }
- * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
+ * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
+ *        calling page's channel resolver, threaded straight to buildQueueRow
+ *        (see buildChannelBadge)
  * @param {object|null} [more] optional { total, onShowAll } "Show all" footer
  * @param {string} [skipLabel='Skip'] visible label for each row's mark button
  *        ('Remove' on the stash page), threaded straight to buildQueueRow; also
  *        used in its aria-label and title. The btn--skip CLASS never changes —
  *        styles.css and setCardState key off it.
  */
-export function renderQueue(listEl, queue, handlers, channels = {}, more = null, skipLabel = 'Skip') {
+export function renderQueue(listEl, queue, handlers, resolveChannel, more = null, skipLabel = 'Skip') {
   clear(listEl);
   for (const rec of queue) {
-    listEl.append(buildQueueRow(rec, handlers, channels, skipLabel));
+    listEl.append(buildQueueRow(rec, handlers, resolveChannel, skipLabel));
   }
   // Optional "Show all (N)" button at the bottom (pure display windowing). It is
   // NOT a .row, so keyboard j/k skip it. Text via textContent (XSS-safe).
