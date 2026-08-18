@@ -11,27 +11,41 @@
     />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
-    <!-- Standalone page: no auth, no API, no video-record writes. Imports only
-         config/store/queue/ui — NEVER app.js (it boots the whole app). -->
+    <!-- Standalone page: no auth, no API, no video-record writes. -->
     <script type="module" src="js/channels-page.js"></script>
   </head>
   <body>
+    <!-- Privacy "curtain": the same full-viewport overlay index.html carries.
+         Here it only lifts on wheel-up and toggles on Esc — see the
+         coverOnWheelDown note in channels-page.js. -->
+    <div id="curtain" class="curtain" aria-hidden="true"></div>
+
+    <!-- Shared page nav — identical on every page, differing only in which item
+         carries aria-current. The <h1> is the app name everywhere; page identity
+         comes from aria-current + <title> + the tagline. -->
     <header class="topbar">
-      <h1 class="topbar__title">Channels</h1>
+      <div class="topbar__row">
+        <h1 class="topbar__title">YouTube Queue</h1>
+        <nav class="topbar__nav" aria-label="Pages">
+          <ul class="topbar__nav-list" role="list">
+            <li class="topbar__nav-item"><a class="topbar__nav-link" href="index.html">Subscriptions</a></li>
+            <li class="topbar__nav-item"><a class="topbar__nav-link" href="stash.html">Stash</a></li>
+            <li class="topbar__nav-item"><span class="topbar__nav-link" aria-current="page">Channels</span></li>
+          </ul>
+        </nav>
+      </div>
       <p class="topbar__tagline">
         Ignore channels on future fetches, or preselect a speed for their videos.
       </p>
     </header>
 
     <main class="channels-main">
-      <p class="channels-back"><a href="index.html">&larr; Back to the queue</a></p>
-
       <ul id="channel-list" class="channels" role="list" aria-label="Subscribed channels"></ul>
 
       <div id="channels-empty" class="empty" hidden>
         <p class="empty__title">No channels yet</p>
         <p class="empty__sub">
-          Sign in and fetch on the <a href="index.html">main page</a> first —
+          Sign in and fetch on the <a href="index.html">Subscriptions page</a> first —
           the channels from your subscriptions will appear here.
         </p>
       </div>

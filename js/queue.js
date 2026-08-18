@@ -746,3 +746,185 @@ export function parseDescription(text) {
   if (cursor < text.length) segments.push({ type: 'text', text: text.slice(cursor) });
   return segments;
 }
+
+// ---------------------------------------------------------------------------
+// Stash (hand-added videos: paste a link, play it, remove it)
+// ---------------------------------------------------------------------------
+
+// A YouTube video id is exactly 11 chars of [A-Za-z0-9_-]. The trailing
+// lookahead makes a LONGER run of id chars a REJECTION rather than a silent
+// truncation to its first 11 characters.
+const VIDEO_ID_RE_SRC = '([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])';
+// Optional protocol: 'https:', 'http:', a bare '//' prefix, or nothing at all.
+const PROTOCOL_RE_SRC = '(?:(?:https?:)?//)?';
+const YT_HOST_RE_SRC = '(?:www\\.|m\\.|music\\.)?(?:youtube\\.com|youtube-nocookie\\.com)';
+const YT_SHORT_HOST_RE_SRC = '(?:www\\.)?youtu\\.be';
+
+// Every pattern is anchored at ^ so a lookalike host can never match: neither a
+// PREFIX one ('evil-youtube.com/watch?v=...' — the anchor rejects it) nor a
+// SUFFIX one ('youtube.com.evil.tld/watch?v=...' — the host is followed by '.'
+// where the pattern requires '/'). The 'i' flag matters only for the HOST; the
+// captured id is a slice of the input, so it always keeps its exact case.
+const VIDEO_URL_PATTERNS = [
+  // /watch?v=ID — 'v' need not be the first parameter, and anything may follow.
+  new RegExp(
+    '^' + PROTOCOL_RE_SRC + YT_HOST_RE_SRC + '/watch\\?(?:[^#]*&)?v=' + VIDEO_ID_RE_SRC,
+    'i'
+  ),
+  // /shorts/ID, /embed/ID, /live/ID, /v/ID
+  new RegExp(
+    '^' + PROTOCOL_RE_SRC + YT_HOST_RE_SRC + '/(?:shorts|embed|live|v)/' + VIDEO_ID_RE_SRC,
+    'i'
+  ),
+  // youtu.be/ID (a '?t=' / '?si=' suffix or a trailing '/' just ends the id).
+  new RegExp('^' + PROTOCOL_RE_SRC + YT_SHORT_HOST_RE_SRC + '/' + VIDEO_ID_RE_SRC, 'i'),
+  // A bare id pasted on its own.
+  new RegExp('^' + VIDEO_ID_RE_SRC + '$'),
+];
+
+/**
+ * Extract the 11-char video id from a pasted YouTube link (or from a bare id),
+ * else null.
+ *
+ * REGEX, not `new URL()`, deliberately: `new URL('youtu.be/ID')` THROWS on
+ * protocol-less input, which is an input we must accept; `URL` signals failure
+ * by throwing when the normal outcome here is simply `null`; a bare id is not a
+ * URL at all; and anchoring one alternation at ^ rules out lookalike hosts more
+ * directly than parsing and then checking a hostname allow-list.
+ *
+ * Surrounding whitespace is trimmed (pastes carry newlines). Accepts an optional
+ * protocol, the www./m./music. subdomains, youtube-nocookie.com, and a trailing
+ * slash after the id. Pure.
+ * @param {string} input a pasted URL or bare video id
+ * @returns {string|null} the 11-char id, or null when nothing matches
+ */
+export function parseVideoId(input) {
+  if (typeof input !== 'string') return null;
+  const text = input.trim();
+  if (text === '') return null;
+  for (const re of VIDEO_URL_PATTERNS) {
+    const m = re.exec(text);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
+ * The instant a stash record was added, in epoch millis, with a MISSING or
+ * UNPARSEABLE `addedAt` mapped to +Infinity so it sorts LAST. Accepts the ISO
+ * string the app writes, and tolerates a raw epoch-millis number.
+ * @param {object|null|undefined} rec
+ * @returns {number}
+ */
+function addedAtMs(rec) {
+  const v = rec ? rec.addedAt : undefined;
+  if (typeof v === 'number') {
+    return Number.isFinite(v) ? v : Number.POSITIVE_INFINITY;
+  }
+  const t = typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+}
+
+/**
+ * Return a NEW array of stash records in the stash's ONLY order: oldest
+ * `addedAt` first. NOT publishedAt — the stash is hand-curated, so the order the
+ * user added things in IS the user's order. Ties break by videoId, exactly like
+ * sortAscending, so the result is deterministic.
+ *
+ * A record with a missing or unparseable `addedAt` sorts LAST: every record the
+ * app writes is stamped, so an unstamped one is foreign / hand-edited data, and
+ * the tail is where it does the least damage (sorting it first would park a
+ * mystery row right next to play).
+ *
+ * NOT built on compareIso: that helper falls back to a LEXICAL compare for
+ * unparseable input, which would order a missing `addedAt` arbitrarily instead
+ * of last. Parsed instants are compared here, so '...T12:00:00+02:00' and
+ * '...T10:00:00Z' compare as the same instant rather than as two strings.
+ *
+ * This is deliberately the SINGLE sort site for the stash: when drag-to-reorder
+ * lands it adds an `order` field and changes exactly this one function. Pure;
+ * does not mutate.
+ * @param {Array<object>} records stash records
+ * @returns {Array<object>}
+ */
+export function sortStash(records) {
+  const list = Array.isArray(records) ? records : [];
+  return list.slice().sort((r1, r2) => {
+    const t1 = addedAtMs(r1);
+    const t2 = addedAtMs(r2);
+    // Compared, never subtracted: Infinity - Infinity is NaN.
+    if (t1 !== t2) return t1 < t2 ? -1 : 1;
+    // Deterministic tie-break.
+    const id1 = (r1 && r1.videoId) || '';
+    const id2 = (r2 && r2.videoId) || '';
+    if (id1 < id2) return -1;
+    if (id1 > id2) return 1;
+    return 0;
+  });
+}
+
+/**
+ * The deletion set for the stash's "Clean up": every record the user has marked
+ * "Remove" — i.e. every handled record, `state !== 'new'` (stored as
+ * STATE_SKIPPED). Returns RECORDS, the same shape videosToClean returns, not ids.
+ *
+ * CONTRAST with videosToClean(records, cutoff) — and it is the whole reason the
+ * stash needs neither a floor nor a cutoff: that one is POSITION-based
+ * (publishedAt <= cutoff), so it can only ever delete a contiguous PREFIX of the
+ * list; this one is STATE-based and takes no cutoff at all, so it deletes
+ * handled records from ANYWHERE in the list, gaps included. Pure; does not
+ * mutate.
+ * @param {Array<object>} records stash records
+ * @returns {Array<object>} records to delete
+ */
+export function stashToClean(records) {
+  const list = Array.isArray(records) ? records : [];
+  return list.filter((r) => r && r.state !== STATE_NEW);
+}
+
+/**
+ * Add one pasted video to the stash, as ONE pure step — the same idea as
+ * mergeRefresh, so the tests exercise the real composition instead of a mirror
+ * of it.
+ *
+ * A NEW videoId is APPENDED (the stash's order is arrival order), stamped
+ * `state: 'new'` and `addedAt`, and given its channel's preferred speed when —
+ * and only when — the incoming record carries none (undefined OR null): the
+ * fill-if-absent rule, identical to the subscriptions one.
+ *
+ * A DUPLICATE changes nothing: the input array comes back BY IDENTITY with
+ * `added: false` and the EXISTING record, so an already-stashed video keeps its
+ * place, its `addedAt` and its Remove mark rather than jumping to the end.
+ *
+ * The channel speed is read with the LEAF channelPreferredSpeed, never with
+ * applyChannelSpeeds: that one deliberately excludes IGNORED channels, and the
+ * stash ignores the Ignore flag on purpose — Ignore governs what gets FETCHED by
+ * subscription, and nothing here is fetched by subscription. (Hence calling the
+ * leaf, rather than adding a policy flag to applyChannelSpeeds, whose single
+ * policy is documented.)
+ *
+ * `addedAt` is INJECTED, never read from a clock: this module has none (cf.
+ * daysAgoIso). Mutates neither input. Pure.
+ *
+ * @param {Array<object>} records the current stash
+ * @param {object} incoming the record to add (videoId + metadata)
+ * @param {{addedAt?:string, prefs?:Record<string,{ignored?:boolean,speed?:number}>}} [options]
+ * @returns {{records:Array<object>, added:boolean, record:object}}
+ */
+export function addToStash(records, incoming, { addedAt, prefs } = {}) {
+  const list = Array.isArray(records) ? records : [];
+  const videoId = incoming ? incoming.videoId : undefined;
+  const existing = videoId ? list.find((r) => r && r.videoId === videoId) : undefined;
+  // Already stashed: hand back the very same array so the caller can skip its write.
+  if (existing) return { records, added: false, record: existing };
+
+  const record = { ...incoming, state: STATE_NEW, addedAt };
+  if (record.preferredSpeed == null) {
+    const speed = channelPreferredSpeed(prefs, record.channelId);
+    // No channel preference: leave NO preferredSpeed key at all, rather than an
+    // explicit undefined/null one.
+    if (speed === undefined) delete record.preferredSpeed;
+    else record.preferredSpeed = speed;
+  }
+  return { records: list.concat([record]), added: true, record };
+}

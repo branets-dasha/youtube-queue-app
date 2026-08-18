@@ -19,14 +19,20 @@ import {
   channelPreferredSpeed,
 } from './queue.js';
 import { el, buildAvatar, setCardSpeed, setVisible } from './ui.js';
+import { initCurtain } from './page-chrome.js';
 
 let prefs = {};
+
+// Privacy curtain controls, from page-chrome.js's initCurtain(); it owns the
+// covering flag, this page only wires Esc to it.
+let curtain = null;
 
 document.addEventListener('DOMContentLoaded', init);
 
 function init() {
-  // This page never boots app.js, so it runs the one-shot storage migrations
-  // itself — otherwise it would render prefs straight off disk in a stale shape.
+  // This page never boots subscriptions-page.js, so it runs the one-shot
+  // storage migrations itself — otherwise it would render prefs straight off
+  // disk in a stale shape.
   migrateLocalStorage();
 
   const listEl = document.getElementById('channel-list');
@@ -40,6 +46,32 @@ function init() {
   setVisible(emptyEl, sorted.length === 0);
   for (const ch of sorted) {
     listEl.append(buildChannelRow(ch, channels));
+  }
+
+  // coverOnWheelDown: false is DELIBERATE — do not "fix" this into consistency
+  // with index.html. This page's <body> has no `app-active` class, so it is not
+  // a 100dvh flex column: the whole DOCUMENT scrolls at every width. If a
+  // wheel-down covered here you could never scroll the channel list. Wheel-up
+  // still lifts and Esc still toggles — the same rule the ≤900px breakpoint
+  // already encodes on index.html, stated by layout instead of by width.
+  curtain = initCurtain({
+    node: document.getElementById('curtain'),
+    exemptSelector: '.channels-main',
+    coverOnWheelDown: false,
+  });
+  document.addEventListener('keydown', onKeydown);
+}
+
+/**
+ * The page's only shortcut. Esc is the PANIC key, so — matching
+ * subscriptions-page.js — it is handled before any typing/modifier guard;
+ * modifier combos are still left to the browser.
+ * @param {KeyboardEvent} e
+ */
+function onKeydown(e) {
+  if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    curtain.toggle();
   }
 }
 

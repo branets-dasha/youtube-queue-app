@@ -3,7 +3,8 @@
 // Thin wrapper around the YouTube IFrame Player API. It loads the API script
 // asynchronously, creates a single YT.Player in the right pane, and exposes a
 // small imperative API. It holds NO queue/app state — auto-mark, next-eligible
-// selection, titles, etc. live in app.js and are wired in via callbacks.
+// selection, titles, etc. live in the page modules that embed it and are wired
+// in via callbacks.
 
 const IFRAME_API_SRC = 'https://www.youtube.com/iframe_api';
 
@@ -174,8 +175,9 @@ export function isReady() {
 
 /**
  * The <iframe> element YT.Player created, or null if the player isn't up yet.
- * Used by app.js to detect (and undo) focus moving into the cross-origin frame,
- * which would otherwise swallow the app's document-level keyboard shortcuts.
+ * Used by page-chrome.js's bindIframeFocusGuard to detect (and undo) focus
+ * moving into the cross-origin frame, which would otherwise swallow the page's
+ * document-level keyboard shortcuts.
  * @returns {HTMLIFrameElement|null}
  */
 export function getIframe() {

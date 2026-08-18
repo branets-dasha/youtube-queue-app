@@ -12,7 +12,8 @@ export const API_BASE = 'https://www.googleapis.com/youtube/v3';
 // fresh interactive consent.
 export const OAUTH_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 
-// Google Identity Services client library (loaded from index.html).
+// Google Identity Services client library (loaded from index.html and
+// stash.html).
 export const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
 // localStorage keys. All app keys are namespaced with the `yqa_` prefix.
@@ -41,15 +42,28 @@ export const LS_DEFAULT_SPEED = 'yqa_default_speed';
 // Persisted "hide handled (skipped) videos" view toggle. Default off.
 export const LS_HIDE_MARKED = 'yqa_hide_marked';
 
-// Web Lock name (NOT a storage key) for the single-tab guard in app.js: the one
-// queue tab that holds it owns the video store, and a tab that cannot get it
-// stands down. channels.html never asks for it.
+// Web Lock names (NOT storage keys) for the single-tab guards. Each PAGE that
+// WRITES an object store takes its own lock: a second tab of that same page
+// cannot get it and stands down, while a tab of the OTHER page may stay open
+// alongside, because the two never write each other's store — index.html owns
+// `videos`, stash.html owns `stash`. channels.html writes no video records and
+// asks for neither.
 export const TAB_LOCK = 'yqa_tab';
+export const STASH_TAB_LOCK = 'yqa_stash_tab';
 
 // IndexedDB configuration.
 export const IDB_NAME = 'yqa';
-export const IDB_VERSION = 1;
+// Bumped 1 -> 2 to add the `stash` object store. A tab still running v1 code
+// holds the database open at v1 and BLOCKS this upgrade — and is itself stood
+// down by its `onversionchange` — so the changeover costs every user exactly one
+// "close the other tabs and reload" screen, once.
+export const IDB_VERSION = 2;
 export const IDB_STORE_VIDEOS = 'videos';
+// The manually-curated Stash queue. SAME keyPath and the same record shape as
+// `videos`, plus `addedAt` and `channelAvatarUrl`. A SEPARATE object store so the
+// two queues can never collide on a videoId and the two pages write disjoint
+// data.
+export const IDB_STORE_STASH = 'stash';
 export const IDB_KEYPATH = 'videoId';
 
 // Paging size used for both subscriptions and playlistItems requests.

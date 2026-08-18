@@ -30,6 +30,10 @@ import {
   setChannelPref,
   pruneChannels,
   mergeRefresh,
+  parseVideoId,
+  sortStash,
+  stashToClean,
+  addToStash,
 } from './queue.js';
 import { SHORTS_MAX_SECONDS } from './config.js';
 
@@ -44,6 +48,19 @@ const rec = (videoId, publishedAt, state) => ({
   videoId,
   publishedAt,
   state,
+  title: videoId,
+  channelId: 'c',
+  channelTitle: 'ch',
+  thumbnailUrl: '',
+});
+
+// A stash record: ordered by addedAt (NOT publishedAt), which is why every
+// fixture below shares one publishedAt — it must never influence the order.
+const stashRec = (videoId, addedAt, state) => ({
+  videoId,
+  addedAt,
+  state,
+  publishedAt: '2026-01-01T00:00:00Z',
   title: videoId,
   channelId: 'c',
   channelTitle: 'ch',
@@ -824,6 +841,347 @@ test('parseDescription mixes text, timestamp and url in one string', () => {
 test('parseDescription returns [] for empty / whitespace-only input', () => {
   assert.deepEqual(parseDescription(''), []);
   assert.deepEqual(parseDescription('   \n\t '), []);
+});
+
+// --- parseVideoId: pull an 11-char id out of a pasted link (regex, not URL) ---
+
+const ID = 'dQw4w9WgXcQ'; // a canonical 11-char id
+const ODD_ID = 'a_B-c1D2e3F'; // mixed case plus the two non-alphanumeric id chars
+
+test('parseVideoId reads a standard watch URL', () => {
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?v=${ID}`), ID);
+});
+
+test('parseVideoId accepts http://, protocol-less and //-prefixed forms', () => {
+  assert.equal(parseVideoId(`http://www.youtube.com/watch?v=${ID}`), ID);
+  assert.equal(parseVideoId(`www.youtube.com/watch?v=${ID}`), ID); // no protocol at all
+  assert.equal(parseVideoId(`youtube.com/watch?v=${ID}`), ID); // no protocol, no subdomain
+  assert.equal(parseVideoId(`//www.youtube.com/watch?v=${ID}`), ID); // protocol-relative
+});
+
+test('parseVideoId accepts the m. / music. subdomains and youtube-nocookie.com', () => {
+  assert.equal(parseVideoId(`https://m.youtube.com/watch?v=${ID}`), ID);
+  assert.equal(parseVideoId(`https://music.youtube.com/watch?v=${ID}`), ID);
+  assert.equal(parseVideoId(`https://www.youtube-nocookie.com/embed/${ID}`), ID);
+  assert.equal(parseVideoId(`https://youtube-nocookie.com/watch?v=${ID}`), ID);
+});
+
+test('parseVideoId finds v= wherever it sits among the query params', () => {
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?v=${ID}&list=PLxyz&index=2`), ID);
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?list=PLxyz&v=${ID}`), ID); // not first
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?a=1&b=2&v=${ID}&t=90s`), ID);
+});
+
+test('parseVideoId reads youtu.be links, with or without a ?t= / ?si= suffix', () => {
+  assert.equal(parseVideoId(`https://youtu.be/${ID}`), ID);
+  assert.equal(parseVideoId(`youtu.be/${ID}`), ID);
+  assert.equal(parseVideoId(`https://youtu.be/${ID}?t=42`), ID);
+  assert.equal(parseVideoId(`https://youtu.be/${ID}?si=AbCdEfGhIjKl`), ID);
+});
+
+test('parseVideoId reads /shorts/, /embed/, /live/ and /v/ paths', () => {
+  assert.equal(parseVideoId(`https://www.youtube.com/shorts/${ID}`), ID);
+  assert.equal(parseVideoId(`https://www.youtube.com/embed/${ID}`), ID);
+  assert.equal(parseVideoId(`https://www.youtube.com/live/${ID}`), ID);
+  assert.equal(parseVideoId(`https://www.youtube.com/v/${ID}`), ID);
+});
+
+test('parseVideoId accepts a trailing slash after the id', () => {
+  assert.equal(parseVideoId(`https://youtu.be/${ID}/`), ID);
+  assert.equal(parseVideoId(`https://www.youtube.com/shorts/${ID}/`), ID);
+});
+
+test('parseVideoId accepts a bare 11-char id', () => {
+  assert.equal(parseVideoId(ID), ID);
+  assert.equal(parseVideoId(ODD_ID), ODD_ID);
+});
+
+test('parseVideoId trims surrounding whitespace and newlines', () => {
+  // Pastes routinely carry a trailing newline.
+  assert.equal(parseVideoId(`\n  https://youtu.be/${ID}  \n`), ID);
+  assert.equal(parseVideoId(`\t${ID}\n`), ID);
+});
+
+test('parseVideoId preserves the id case and its _ / - characters', () => {
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?v=${ODD_ID}`), ODD_ID);
+  assert.equal(parseVideoId(`https://youtu.be/${ODD_ID}`), ODD_ID);
+});
+
+test('parseVideoId matches the host case-insensitively without touching the id case', () => {
+  assert.equal(parseVideoId(`HTTPS://WWW.YOUTUBE.COM/watch?v=${ODD_ID}`), ODD_ID);
+  assert.equal(parseVideoId(`HTTPS://YOUTU.BE/${ODD_ID}`), ODD_ID);
+});
+
+test('parseVideoId returns null for empty, whitespace or non-string input', () => {
+  assert.equal(parseVideoId(''), null);
+  assert.equal(parseVideoId('   \n\t '), null);
+  assert.equal(parseVideoId(null), null);
+  assert.equal(parseVideoId(undefined), null);
+  assert.equal(parseVideoId(12345678901), null); // a number, not a string
+  assert.equal(parseVideoId({ v: ID }), null);
+});
+
+test('parseVideoId returns null for a 10- or 12-char id (never truncates)', () => {
+  const short = ID.slice(0, 10); // 10 chars
+  const long = `${ID}Z`; // 12 chars
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?v=${short}`), null);
+  assert.equal(parseVideoId(`https://youtu.be/${short}`), null);
+  // The trailing lookahead makes an over-long run a rejection, not a silent
+  // truncation to the first 11 characters.
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?v=${long}`), null);
+  assert.equal(parseVideoId(long), null);
+  assert.equal(parseVideoId(short), null);
+});
+
+test('parseVideoId returns null for channel, playlist, results and bare-host URLs', () => {
+  assert.equal(parseVideoId('https://www.youtube.com/@somehandle'), null);
+  assert.equal(parseVideoId('https://www.youtube.com/playlist?list=PLxyz'), null);
+  assert.equal(parseVideoId('https://www.youtube.com/results?search_query=cats'), null);
+  assert.equal(parseVideoId('https://www.youtube.com/'), null);
+  assert.equal(parseVideoId('youtube.com'), null);
+});
+
+test('parseVideoId returns null for lookalike and non-YouTube hosts', () => {
+  // Every pattern is ^-anchored, so neither a prefix nor a suffix lookalike matches.
+  assert.equal(parseVideoId(`https://evil-youtube.com/watch?v=${ID}`), null);
+  assert.equal(parseVideoId(`https://youtube.com.evil.tld/watch?v=${ID}`), null);
+  assert.equal(parseVideoId(`https://myoutube.com/watch?v=${ID}`), null);
+  assert.equal(parseVideoId(`https://notyoutu.be/${ID}`), null);
+  assert.equal(parseVideoId(`https://vimeo.com/watch?v=${ID}`), null);
+  assert.equal(parseVideoId(`https://example.com/shorts/${ID}`), null);
+});
+
+test('parseVideoId returns null for ?vi= and for free text', () => {
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?vi=${ID}`), null); // not the v param
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?a=1&vi=${ID}`), null);
+  assert.equal(parseVideoId('just some text about a video'), null);
+  assert.equal(parseVideoId('watch this: it is great'), null);
+});
+
+// --- sortStash: the stash's ONLY order — oldest addedAt first, unstamped last ---
+
+const A1 = '2026-05-01T10:00:00.000Z';
+const A2 = '2026-05-02T10:00:00.000Z';
+const A3 = '2026-05-03T10:00:00.000Z';
+
+test('sortStash orders by addedAt ascending, ignoring publishedAt', () => {
+  // publishedAt runs the OTHER way: the stash is hand-curated, so arrival order
+  // is the user's order and publishedAt must not get a vote.
+  const recs = [
+    { ...stashRec('b', A2, 'new'), publishedAt: '2026-01-02T00:00:00Z' },
+    { ...stashRec('c', A3, 'new'), publishedAt: '2026-01-01T00:00:00Z' }, // oldest video, added last
+    { ...stashRec('a', A1, 'new'), publishedAt: '2026-01-03T00:00:00Z' }, // newest video, added first
+  ];
+  assert.deepEqual(sortStash(recs).map((r) => r.videoId), ['a', 'b', 'c']);
+});
+
+test('sortStash returns a new array and does not mutate the input', () => {
+  const recs = [stashRec('b', A2, 'new'), stashRec('a', A1, 'new')];
+  const out = sortStash(recs);
+  assert.notEqual(out, recs);
+  assert.deepEqual(recs.map((r) => r.videoId), ['b', 'a']); // input order untouched
+  assert.deepEqual(out.map((r) => r.videoId), ['a', 'b']);
+});
+
+test('sortStash breaks addedAt ties by videoId', () => {
+  const recs = [stashRec('z', A1, 'new'), stashRec('a', A1, 'new'), stashRec('m', A1, 'new')];
+  assert.deepEqual(sortStash(recs).map((r) => r.videoId), ['a', 'm', 'z']);
+});
+
+test('sortStash sorts a record with no addedAt LAST', () => {
+  // Every record the app writes is stamped, so an unstamped one is foreign data:
+  // the tail is where a mystery row does the least damage.
+  const recs = [
+    stashRec('none', undefined, 'new'),
+    stashRec('b', A2, 'new'),
+    stashRec('a', A1, 'new'),
+  ];
+  assert.deepEqual(sortStash(recs).map((r) => r.videoId), ['a', 'b', 'none']);
+});
+
+test('sortStash sorts an UNPARSEABLE addedAt last, not lexically', () => {
+  // '0000-...' would sort FIRST under a lexical compare (which is exactly what
+  // compareIso falls back to) — hence not delegating to it.
+  const recs = [
+    stashRec('junk', '0000-not-a-date', 'new'),
+    stashRec('b', A2, 'new'),
+    stashRec('a', A1, 'new'),
+  ];
+  assert.deepEqual(sortStash(recs).map((r) => r.videoId), ['a', 'b', 'junk']);
+  // Two unstamped records still tie-break by videoId rather than swapping about.
+  const both = [stashRec('y', null, 'new'), stashRec('x', 'nonsense', 'new')];
+  assert.deepEqual(sortStash(both).map((r) => r.videoId), ['x', 'y']);
+});
+
+test('sortStash compares INSTANTS, not strings (+02:00 vs Z)', () => {
+  // 12:00+02:00 is 10:00Z — earlier than 11:00Z — but sorts LATER as a string.
+  const recs = [
+    stashRec('zulu', '2026-03-01T11:00:00Z', 'new'),
+    stashRec('offset', '2026-03-01T12:00:00+02:00', 'new'),
+  ];
+  assert.deepEqual(sortStash(recs).map((r) => r.videoId), ['offset', 'zulu']);
+});
+
+test('sortStash returns [] for an empty or non-array input', () => {
+  assert.deepEqual(sortStash([]), []);
+  assert.deepEqual(sortStash(undefined), []);
+  assert.deepEqual(sortStash(null), []);
+});
+
+// --- stashToClean: STATE-based deletion set (contrast: videosToClean is positional) ---
+
+test('stashToClean returns every handled record, from ANYWHERE in the list', () => {
+  // The contrast with videosToClean: that one is publishedAt <= cutoff, so it can
+  // only ever delete a contiguous PREFIX. This one deletes out of the middle.
+  const recs = [
+    stashRec('a', A1, 'new'),
+    stashRec('b', A2, 'skipped'), // middle of the list
+    stashRec('c', A3, 'new'),
+    stashRec('d', A3, 'skipped'), // and the tail
+  ];
+  assert.deepEqual(stashToClean(recs).map((r) => r.videoId), ['b', 'd']);
+  assert.equal(stashToClean(recs)[0].title, 'b'); // RECORDS, not ids
+});
+
+test('stashToClean returns [] when every record is still new', () => {
+  const recs = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  assert.deepEqual(stashToClean(recs), []);
+});
+
+test('stashToClean returns [] for an empty or non-array input', () => {
+  assert.deepEqual(stashToClean([]), []);
+  assert.deepEqual(stashToClean(undefined), []);
+  assert.deepEqual(stashToClean(null), []);
+});
+
+test('stashToClean ignores publishedAt entirely — there is no cutoff', () => {
+  const recs = [
+    { ...stashRec('old', A1, 'new'), publishedAt: '2000-01-01T00:00:00Z' }, // ancient but unmarked
+    { ...stashRec('newest', A2, 'skipped'), publishedAt: '2099-01-01T00:00:00Z' }, // future but marked
+  ];
+  assert.deepEqual(stashToClean(recs).map((r) => r.videoId), ['newest']);
+});
+
+test('stashToClean treats ANY non-new state as handled (legacy values included)', () => {
+  const recs = [
+    stashRec('a', A1, 'new'),
+    stashRec('w', A2, 'watched'), // legacy value: handled all the same
+    stashRec('n', A3, 'not_interested'),
+  ];
+  assert.deepEqual(stashToClean(recs).map((r) => r.videoId), ['w', 'n']);
+});
+
+test('stashToClean does not mutate its input', () => {
+  const recs = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+  const out = stashToClean(recs);
+  assert.notEqual(out, recs);
+  assert.equal(recs.length, 2);
+  assert.deepEqual(recs.map((r) => r.state), ['new', 'skipped']);
+});
+
+// --- addToStash: the whole "add a pasted video" step, as one pure composition ---
+
+const paste = (videoId, channelId, extra) => ({
+  videoId,
+  channelId,
+  title: videoId,
+  channelTitle: 'ch',
+  publishedAt: '2026-01-01T00:00:00Z',
+  thumbnailUrl: '',
+  ...extra,
+});
+
+test('addToStash appends the record, stamped new + addedAt', () => {
+  const stash = [stashRec('a', A1, 'skipped')];
+  const out = addToStash(stash, paste('b', 'UCa'), { addedAt: A2, prefs: {} });
+  assert.equal(out.added, true);
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']); // APPENDED
+  assert.equal(out.record.state, 'new');
+  assert.equal(out.record.addedAt, A2);
+  assert.equal(out.record.title, 'b'); // metadata carried over
+  assert.equal(out.records[1], out.record); // the returned record is the stored one
+});
+
+test('addToStash fills preferredSpeed from the channel pref', () => {
+  const out = addToStash([], paste('b', 'UCa'), {
+    addedAt: A1,
+    prefs: { UCa: { speed: 1.5 } },
+  });
+  assert.equal(out.record.preferredSpeed, 1.5);
+});
+
+test('addToStash fills the speed even when the channel is IGNORED', () => {
+  // The stash deliberately ignores the Ignore flag: Ignore governs what gets
+  // FETCHED by subscription, and nothing here is fetched by subscription. Hence
+  // the leaf channelPreferredSpeed rather than applyChannelSpeeds, which excludes
+  // ignored channels by design.
+  const out = addToStash([], paste('b', 'UCi'), {
+    addedAt: A1,
+    prefs: { UCi: { ignored: true, speed: 2 } },
+  });
+  assert.equal(out.record.preferredSpeed, 2);
+});
+
+test('addToStash never overwrites an explicit incoming preferredSpeed', () => {
+  const prefs = { UCa: { speed: 2 } };
+  const kept = addToStash([], paste('b', 'UCa', { preferredSpeed: 1 }), { addedAt: A1, prefs });
+  assert.equal(kept.record.preferredSpeed, 1); // fill-if-ABSENT
+  // null counts as unset (legacy shape), exactly like the subscriptions rule.
+  const filled = addToStash([], paste('c', 'UCa', { preferredSpeed: null }), { addedAt: A1, prefs });
+  assert.equal(filled.record.preferredSpeed, 2);
+});
+
+test('addToStash omits preferredSpeed when the channel has no usable pref', () => {
+  for (const prefs of [{}, null, undefined, { UCa: { ignored: true } }, { UCa: { speed: 3 } }]) {
+    const out = addToStash([], paste('b', 'UCa'), { addedAt: A1, prefs });
+    assert.equal(out.record.preferredSpeed, undefined);
+    assert.equal('preferredSpeed' in out.record, false); // no key at all, not an undefined one
+  }
+  // Missing options object entirely: still stamps, still no speed.
+  assert.equal(addToStash([], paste('b', 'UCa')).record.state, 'new');
+});
+
+test('addToStash reports added:false and returns the array BY IDENTITY on a duplicate', () => {
+  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+  const out = addToStash(stash, paste('b', 'UCa'), { addedAt: A3, prefs: { UCa: { speed: 2 } } });
+  assert.equal(out.added, false);
+  assert.strictEqual(out.records, stash); // same object: the caller can skip its write
+  assert.equal(out.records.length, 2); // no duplicate row
+});
+
+test('addToStash returns the EXISTING record on a duplicate, place and marks untouched', () => {
+  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+  const out = addToStash(stash, paste('b', 'UCa', { title: 'renamed' }), { addedAt: A3 });
+  assert.strictEqual(out.record, stash[1]); // the stored record, not the pasted one
+  assert.equal(out.record.addedAt, A2); // keeps its original place in the order
+  assert.equal(out.record.state, 'skipped'); // keeps its Remove mark
+  assert.equal(out.record.title, 'b'); // and is not refreshed from the paste
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']); // did not jump to the end
+});
+
+test('addToStash + sortStash agree: the append order IS the rendered order', () => {
+  // The two halves of the real composition: addToStash appends, sortStash sorts
+  // by addedAt — so pastes come out in the order they were pasted, whatever
+  // their publishedAt says.
+  let stash = [];
+  for (const [videoId, at] of [['first', A1], ['second', A2], ['third', A3]]) {
+    stash = addToStash(stash, paste(videoId, 'UCa'), { addedAt: at }).records;
+  }
+  assert.deepEqual(sortStash(stash).map((r) => r.videoId), ['first', 'second', 'third']);
+  // Re-pasting an old link does NOT move it to the end.
+  stash = addToStash(stash, paste('first', 'UCa'), { addedAt: '2026-09-09T00:00:00Z' }).records;
+  assert.deepEqual(sortStash(stash).map((r) => r.videoId), ['first', 'second', 'third']);
+});
+
+test('addToStash mutates neither input', () => {
+  const stash = [stashRec('a', A1, 'new')];
+  const incoming = paste('b', 'UCa');
+  const out = addToStash(stash, incoming, { addedAt: A2, prefs: { UCa: { speed: 2 } } });
+  assert.equal(stash.length, 1); // the stash array is untouched
+  assert.notEqual(out.records, stash);
+  assert.equal(incoming.state, undefined); // the stamp lands on the copy only
+  assert.equal(incoming.addedAt, undefined);
+  assert.equal(incoming.preferredSpeed, undefined);
 });
 
 console.log(`\n${passed} passed`);

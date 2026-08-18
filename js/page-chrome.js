@@ -1,0 +1,362 @@
+// js/page-chrome.js
+//
+// Leaf page chrome shared by every entry point — the single-tab lock, the
+// fatal-storage halt screens, and the privacy curtain. No app state and no
+// queue logic: it imports only ui.js, toast.js and the two error classes from
+// store.js, and is never imported by queue.js/migrations.js.
+//
+// Everything here is per-DOCUMENT, not per-page: each export takes what varies
+// (the lock name, the curtain node, the iframe getter) as an argument, so a new
+// entry point gets the same chrome without this module learning about it.
+
+import { el, setVisible } from './ui.js';
+import { showToast } from './toast.js';
+import { DbBlockedError, DbUnavailableError } from './store.js';
+
+// ---------------------------------------------------------------------------
+// Single-tab lock
+//
+// Two tabs of the same page writing the same object store would clobber each
+// other (both hold the whole record set in memory and write it back). One named
+// Web Lock is the whole mechanism, and it is race-free by construction: the
+// browser grants it to exactly one document, so there is no handshake to get
+// wrong and no window in which two tabs opened at the same instant can both
+// proceed. A backgrounded or frozen tab keeps holding it — a lock is not a
+// message it could fail to answer.
+//
+// The grant is held for the document's LIFETIME by returning a promise that
+// never settles; the browser releases it when the document goes away (closed,
+// navigated away, discarded) — nothing to unwind by hand. That also means
+// request()'s own promise never settles, which is why the granted/not-granted
+// answer travels out through a SEPARATE promise resolved inside the callback.
+//
+// FAILS OPEN, NEVER CLOSED: no `navigator.locks`, or a request that throws or
+// rejects, counts as granted and the page boots exactly as it did before the
+// guard existed. Locking the owner out of their own queue would be far worse
+// than the two-tab clobber this prevents.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ask for the named single-tab Web Lock and report whether this document got
+ * it. Reentrant: the answer comes back as a promise rather than a module-level
+ * flag, so a page may hold more than one lock (or none).
+ *
+ * The caller fires this as early as possible and awaits it at its own
+ * checkpoint — before it reads a store, restores a setting or binds a handler —
+ * so a tab that did not get the lock halts having touched nothing.
+ *
+ * @param {string} name Web Lock name (from config.js — never a storage key).
+ * @returns {Promise<boolean>} true = this tab owns the store (or the guard did
+ *   not engage).
+ */
+export function requestTabLock(name) {
+  if (!navigator.locks || typeof navigator.locks.request !== 'function') {
+    return Promise.resolve(true); // fail open: guard does not engage
+  }
+  let answer;
+  const granted = new Promise((resolve) => {
+    answer = resolve;
+  });
+  try {
+    navigator.locks
+      .request(name, { ifAvailable: true }, (lock) => {
+        answer(Boolean(lock));
+        // Not granted: return at once, leaving the holding tab undisturbed.
+        // Granted: never settle, so this document holds the lock until it dies.
+        return lock ? new Promise(() => {}) : undefined;
+      })
+      .catch(() => answer(true)); // fail open
+  } catch {
+    answer(true); // fail open
+  }
+  return granted;
+}
+
+// ---------------------------------------------------------------------------
+// Fatal storage errors
+// ---------------------------------------------------------------------------
+
+// One fatal storage screen per page load — see FIRST CAUSE WINS below.
+let fatalStorageErrorShown = false;
+
+// Onboarding/app scaffolding hidden behind the overlay. Resolved by id at call
+// time rather than passed in, because this module holds no `dom` map;
+// setVisible() is null-tolerant, so an id a given page does not have is a
+// silent no-op.
+const SCAFFOLD_IDS = ['setup-panel', 'cutoff-panel', 'app-main'];
+
+/**
+ * Full-screen BLOCKING error for a FATAL storage condition: the video store is
+ * unusable, so the page halts rather than run on a queue it cannot read or
+ * save. Shared by the four callers below; only the copy differs. All are
+ * resolved by fixing the environment and reloading, hence the single Reload
+ * action. Built with el()/text nodes (no innerHTML for the dynamic reload
+ * wiring), matching the panel look.
+ *
+ * FIRST CAUSE WINS: later calls are ignored, because one fatal condition
+ * routinely produces another — a mid-session stand-down (onversionchange) makes
+ * every write still in flight reject, one screen per rejection, and an aborted
+ * blocked upgrade sets both sticky flags, so a second, vaguer diagnosis would
+ * paint over the first. Every screen ends in Reload, so the earliest, truest one
+ * is the one to keep.
+ * @param {{heading:string, paragraphs:Array<string>, toast:string}} copy
+ */
+export function showFatalStorageError({ heading, paragraphs, toast }) {
+  if (fatalStorageErrorShown) return;
+  fatalStorageErrorShown = true;
+  const overlay = document.getElementById('blocked-overlay');
+  if (!overlay) {
+    // Defensive: without the container, at least surface it as a toast.
+    showToast(toast, { type: 'error' });
+    return;
+  }
+  // Hide the onboarding/app scaffolding behind the overlay.
+  for (const id of SCAFFOLD_IDS) setVisible(document.getElementById(id), false);
+
+  while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+  const panel = el('div', { class: 'panel panel--blocked', role: 'alertdialog', 'aria-labelledby': 'blocked-heading' }, [
+    el('h2', { id: 'blocked-heading', text: heading }),
+    ...paragraphs.map((p) => el('p', { text: p })),
+    el('div', { class: 'panel__actions' }, [
+      el('button', {
+        class: 'btn btn--primary',
+        type: 'button',
+        onclick: () => location.reload(),
+      }, ['Reload']),
+    ]),
+  ]);
+  overlay.append(panel);
+  setVisible(overlay, true);
+}
+
+/**
+ * IndexedDB is blocked by another tab holding the database open at a different
+ * app/DB version (e.g. an old tab left open across a new deploy). The real data
+ * is in IndexedDB, just inaccessible, so startup halts until the user closes the
+ * other tab(s) and reloads.
+ */
+export function showBlockedError() {
+  showFatalStorageError({
+    heading: 'Already open in another tab',
+    paragraphs: [
+      'This app is already open in another browser tab running a different ' +
+        'version. Your videos are safe, but this tab can’t access them while the ' +
+        'other one is open.',
+      'Close the other tab(s) of this app, then reload this page.',
+    ],
+    toast:
+      'This app is open in another tab at a different version. Close the other tab(s) and reload.',
+  });
+}
+
+/**
+ * IndexedDB could not be opened at all, so there is nowhere to read or save the
+ * queue. The app stops here instead of presenting an empty queue whose writes
+ * would quietly fail.
+ */
+export function showDbUnavailableError() {
+  showFatalStorageError({
+    heading: 'Storage unavailable',
+    paragraphs: [
+      'This app needs IndexedDB to store your queue, and this browser couldn’t ' +
+        'open it. Without it the app stops here rather than show you an empty ' +
+        'queue and quietly lose whatever you do next.',
+      'The likely causes are site data (storage) being blocked for this origin ' +
+        'in your browser settings, a corrupted database, or a full disk.',
+      'Allow site data for this origin, free up disk space, then reload. If it ' +
+        'still fails, clearing this site’s storage rebuilds the database from ' +
+        'scratch — you lose the stored queue and your saved settings, nothing else.',
+    ],
+    toast:
+      'This app requires IndexedDB and it could not be opened. Allow site data for this origin, then reload.',
+  });
+}
+
+/**
+ * Another tab of this page holds its tab lock, so this one is superseded. The
+ * store has already been stood down, so nothing here can write; this is the
+ * visible half of that halt (see the Single-tab lock section).
+ */
+export function showSupersededError() {
+  showFatalStorageError({
+    heading: 'The queue is already open',
+    paragraphs: [
+      'This queue is open in another browser tab. Only one tab at a time may ' +
+        'write to your stored videos, so this one stopped before it could touch them.',
+      'Close the other tab, then reload this page.',
+    ],
+    toast: 'The queue is already open in another tab. Close it, then reload this page.',
+  });
+}
+
+/**
+ * The database opened, but reading it failed (a plain DOMException from the
+ * transaction or the getAll() request). The rows may well still be there, so the
+ * app must NOT continue on an empty queue and write over them. The underlying
+ * error is shown because it is the only diagnostic the user gets.
+ * @param {unknown} err the rejection from getAllVideos()
+ */
+export function showDbReadError(err) {
+  const detail = describeError(err);
+  showFatalStorageError({
+    heading: 'Could not read your queue',
+    paragraphs: [
+      'The database is there, but reading your stored videos failed. That ' +
+        'usually means a corrupted database or a disk that is failing.',
+      'The app is stopping here rather than show you an empty queue and write ' +
+        'over data that may still be in there.',
+      'Reloading is worth a try. If it keeps failing, clearing this site’s ' +
+        'storage rebuilds the database from scratch — you lose the stored queue ' +
+        'and your saved settings, nothing else.',
+      detail ? `Details: ${detail}` : null,
+    ].filter(Boolean),
+    toast:
+      'Could not read the stored queue — the database may be corrupted. Reload, or clear this site’s storage to start over.',
+  });
+}
+
+/**
+ * Best-effort, never-throwing 'Name: message' description of an unknown thrown
+ * value, for display via textContent. Anything exotic (a Proxy, a getter that
+ * throws, a Symbol) degrades to '' rather than breaking the error screen.
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function describeError(err) {
+  try {
+    if (err == null) return '';
+    const name = typeof err.name === 'string' ? err.name : '';
+    const message = typeof err.message === 'string' ? err.message : '';
+    const detail = [name, message].filter(Boolean).join(': ') || String(err);
+    return detail.slice(0, 300);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Swallow a best-effort (optional) store write's failure — EXCEPT the fatal DB
+ * conditions, which put up their halt screen so the user is actually told.
+ * `dbBlocked` can flip AFTER init via db.onversionchange (another tab starting a
+ * schema upgrade), and from then on every write no-ops; without this the card
+ * speed / watch position / like flag would silently stop persisting.
+ * Use as `putVideo(rec).catch(reportIfFatalDb)`.
+ * @param {unknown} err
+ */
+export function reportIfFatalDb(err) {
+  // DbUnavailableError is practically unreachable post-init (init awaits the
+  // memoized openDb() and halts), but it costs nothing to cover it here too.
+  if (err instanceof DbBlockedError) {
+    showBlockedError();
+    return;
+  }
+  if (err instanceof DbUnavailableError) {
+    showDbUnavailableError();
+    return;
+  }
+  // Anything else is a transient failure on an optional write: keep the call
+  // site's intent and stay quiet (a refresh is never failed over one).
+}
+
+// ---------------------------------------------------------------------------
+// Privacy curtain: a full-viewport overlay that hides the whole page. Covers the
+// page on a wheel-DOWN anywhere outside the exempt scroll area (or Esc), lifted
+// by a wheel-UP (or Esc). Visual only — the player is NOT paused.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bind the curtain's wheel behavior and hand back its controls. The covering
+ * flag lives in this closure — the calling page does not mirror it.
+ *
+ * Esc deliberately stays with the caller's own keydown table: this module owns
+ * no keyboard shortcuts, so a page wires Esc to the returned `toggle`.
+ *
+ * @param {object} opts
+ * @param {HTMLElement|null} opts.node the `#curtain` overlay (tolerates null).
+ * @param {string} [opts.exemptSelector] wheeling inside a match scrolls it
+ *   normally and never drives the curtain.
+ * @param {string} [opts.narrowQuery] media query for the stacked layout, where
+ *   the whole page scrolls, so a wheel-down must not cover it.
+ * @param {boolean} [opts.coverOnWheelDown] false for a page whose document
+ *   scrolls at EVERY width (rather than a 100dvh flex column): wheel-down never
+ *   covers there, while wheel-up still lifts. Same rule the narrow breakpoint
+ *   encodes, stated by layout instead of width.
+ * @returns {{isCovering: () => boolean, set: (covering:boolean) => void,
+ *   toggle: () => void}}
+ */
+export function initCurtain({
+  node,
+  exemptSelector = '.workspace',
+  narrowQuery = '(max-width: 900px)',
+  coverOnWheelDown = true,
+} = {}) {
+  let covering = false;
+
+  /** Reflect the covering flag onto the overlay element (class + aria). */
+  function set(next) {
+    covering = Boolean(next);
+    if (!node) return;
+    node.classList.toggle('is-covering', covering);
+    node.setAttribute('aria-hidden', String(!covering));
+  }
+
+  /** Wheel handler: scroll INSIDE the exempt area scrolls it; elsewhere it
+   *  drives the curtain — down covers, up lifts (binary by direction). While the
+   *  curtain is covering it is on top, so a wheel event's target is the curtain
+   *  (not the queue), and a scroll-up over it lifts it. In the stacked layout the
+   *  page scrolls as one column, so scroll-down does NOT cover the page (Esc
+   *  still does) — but a scroll-up may still lift an already-covered curtain. */
+  function onWheel(e) {
+    // Stacked layout: the whole page scrolls, so scroll-down must not cover the
+    // page (it would fight normal scrolling). But scroll-up may still LIFT an
+    // already-covered curtain on any width. Reuse the player-above-queue
+    // breakpoint.
+    const narrow = window.matchMedia(narrowQuery).matches;
+    const t = e.target;
+    // Let the exempt pane(s) scroll normally — wheeling over the queue list or
+    // the player's description never triggers the curtain. Only the
+    // header/toolbar/stats region ABOVE it covers the page.
+    if (t && typeof t.closest === 'function' && t.closest(exemptSelector)) return;
+    if (e.deltaY > 0) {
+      // scroll down -> cover (wide, cover-capable layouts only)
+      if (coverOnWheelDown && !narrow && !covering) set(true);
+    } else if (e.deltaY < 0) {
+      if (covering) set(false); // scroll up -> lift (any width)
+    }
+  }
+
+  window.addEventListener('wheel', onWheel, { passive: true });
+
+  return {
+    isCovering: () => covering,
+    set,
+    toggle: () => set(!covering),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-origin iframe focus guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Clicking the video moves keyboard focus INTO the cross-origin player iframe,
+ * which swallows keydown so the page's shortcuts (incl. the Esc curtain) stop
+ * firing. On window blur, if focus landed on that iframe, hand it back to the
+ * document so keydown keeps reaching us. Guarded so alt-tabbing away (page
+ * hidden) doesn't yank focus back.
+ *
+ * The getter is a parameter so this module imports no layer module.
+ * @param {() => HTMLIFrameElement|null} getIframe
+ */
+export function bindIframeFocusGuard(getIframe) {
+  window.addEventListener('blur', () => {
+    // Defer so document.activeElement settles to the newly-focused iframe.
+    setTimeout(() => {
+      if (document.hidden) return; // switched tab/app: leave focus alone
+      const iframe = getIframe();
+      if (iframe && document.activeElement === iframe) {
+        iframe.blur(); // returns focus to document.body; keydown reaches us again
+      }
+    }, 0);
+  });
+}

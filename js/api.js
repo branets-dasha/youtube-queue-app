@@ -4,9 +4,10 @@
 // https://www.googleapis.com/youtube/v3 with an Authorization: Bearer header
 // carrying the in-memory OAuth access token. No API key is used.
 //
-// Cost awareness: subscriptions.list, playlistItems.list and videos.list each
-// cost 1 quota unit per call (videos.list batches up to 50 ids/call, so fetching
-// durations stays cheap). search.list is NEVER used.
+// Cost awareness: subscriptions.list, playlistItems.list, videos.list and
+// channels.list each cost 1 quota unit per call (videos.list and channels.list
+// batch up to 50 ids/call, so fetching durations or avatars stays cheap).
+// search.list is NEVER used.
 
 import { API_BASE, PAGE_SIZE } from './config.js';
 import { ensureToken, getToken, requestToken } from './auth.js';
@@ -298,11 +299,13 @@ function channelAvatar(thumbnails) {
  * Batch-fetch video details via videos.list?part=contentDetails,status,snippet,
  * UP TO 50 ids per call (1 quota unit each — extra parts like `status` and
  * `snippet` cost 0 extra quota, so the description rides along free in this call).
- * Returns a Map videoId -> { durationSeconds, embeddable, description }. IDs the
- * API omits (deleted/private) are simply absent from the map; fields it omits are
- * undefined.
+ * Returns a Map videoId -> { durationSeconds, embeddable, description, title,
+ * channelId, channelTitle, publishedAt, thumbnailUrl }. IDs the API omits
+ * (deleted/private) are simply absent from the map; fields it omits are undefined.
+ * Widening is backward compatible — callers reading only the first three fields
+ * never see the rest.
  * @param {Array<string>} videoIds
- * @returns {Promise<Map<string, {durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string}>>}
+ * @returns {Promise<Map<string, {durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string, title:string, channelId:string, channelTitle:string, publishedAt:string, thumbnailUrl:string}>>}
  */
 export async function getVideoDetails(videoIds) {
   const out = new Map();
@@ -322,7 +325,93 @@ export async function getVideoDetails(videoIds) {
         durationSeconds: cd.duration ? parseIsoDuration(cd.duration) : undefined,
         embeddable: typeof st.embeddable === 'boolean' ? st.embeddable : undefined,
         description: snip.description || '',
+        // Identity fields at ZERO extra quota: part=snippet was ALWAYS requested
+        // above, so these were being fetched and thrown away. Note videos.list
+        // hands back channelId/channelTitle DIRECTLY — none of the
+        // snippet.resourceId indirection subscriptions.list needs.
+        title: snip.title || '',
+        channelId: snip.channelId || '',
+        channelTitle: snip.channelTitle || '',
+        publishedAt: snip.publishedAt || '',
+        thumbnailUrl: bestThumbnail(snip.thumbnails),
       });
+    }
+  }
+  return out;
+}
+
+/**
+ * Look up FULL video records by id — the same record shape the playlist path
+ * builds, assembled HERE so record assembly stays in api.js next to its sibling
+ * producer instead of migrating into a page module.
+ *
+ * Adds NO new request path: it dedupes (dropping falsy ids) and delegates to
+ * getVideoDetails, so it is the same videos.list request, the same parts, the
+ * same UP TO 50 ids per call and the same 1 quota unit per call.
+ *
+ * Ids the API omits — deleted, private, or a typo — are simply ABSENT from the
+ * result; an empty array therefore means "YouTube does not know this video".
+ * `state`, `addedAt` and `preferredSpeed` are left to the caller, exactly as
+ * getChannelVideosSince leaves `state` to the queue upsert.
+ *
+ * @param {Array<string>} videoIds
+ * @returns {Promise<Array<{videoId:string, title:string, channelId:string, channelTitle:string, publishedAt:string, thumbnailUrl:string, durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string}>>} records in the order given
+ */
+export async function getVideosByIds(videoIds) {
+  const ids = Array.from(new Set((videoIds || []).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const details = await getVideoDetails(ids);
+
+  const records = [];
+  for (const id of ids) {
+    const d = details.get(id);
+    if (!d) continue; // Unknown to YouTube: deleted, private, or a bad id.
+    records.push({
+      videoId: id,
+      // Same '(untitled)' fallback the playlist path uses.
+      title: d.title || '(untitled)',
+      channelId: d.channelId,
+      channelTitle: d.channelTitle,
+      publishedAt: d.publishedAt,
+      thumbnailUrl: d.thumbnailUrl,
+      durationSeconds: d.durationSeconds,
+      embeddable: d.embeddable,
+      description: d.description,
+    });
+  }
+  return records;
+}
+
+/**
+ * Batch-fetch channel avatars via channels.list?part=snippet, UP TO 50 ids per
+ * call (1 quota unit each), in the same loop style getVideoDetails uses.
+ * channels.list exposes the very same snippet.thumbnails shape
+ * subscriptions.list does, so channelAvatar() applies unchanged.
+ *
+ * The caller only invokes this for a channel that is NOT already in
+ * yqa_channels, so stashing a video from an already-subscribed channel costs
+ * nothing extra.
+ *
+ * Channels the API omits are simply absent from the Map — the caller falls back
+ * to a letter placeholder.
+ *
+ * @param {Array<string>} channelIds
+ * @returns {Promise<Map<string, string>>} channelId -> avatar URL
+ */
+export async function getChannelAvatars(channelIds) {
+  const out = new Map();
+  const ids = Array.from(new Set((channelIds || []).filter(Boolean)));
+  for (let i = 0; i < ids.length; i += 50) {
+    const batch = ids.slice(i, i + 50);
+    const data = await apiGet('channels', {
+      part: 'snippet',
+      id: batch.join(','),
+      maxResults: 50,
+    });
+    for (const item of data.items || []) {
+      if (!item.id) continue;
+      out.set(item.id, channelAvatar((item.snippet || {}).thumbnails));
     }
   }
   return out;

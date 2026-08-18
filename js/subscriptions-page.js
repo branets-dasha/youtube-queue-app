@@ -1,8 +1,7 @@
-// js/app.js
+// js/subscriptions-page.js
 //
 // Orchestration / wiring: auth -> fetch -> store -> queue -> ui, plus all
-// event binding and first-run onboarding. This is the only module that reaches
-// into every layer.
+// event binding and first-run onboarding. It reaches into every layer.
 
 import {
   STATE_NEW,
@@ -70,7 +69,6 @@ import {
   mergeRefresh,
 } from './queue.js';
 import {
-  el,
   showStatus,
   hideStatus,
   renderQueue,
@@ -94,6 +92,16 @@ import {
   getIframe as getPlayerIframe,
 } from './player.js';
 import { showToast } from './toast.js';
+import {
+  requestTabLock,
+  showBlockedError,
+  showDbUnavailableError,
+  showSupersededError,
+  showDbReadError,
+  reportIfFatalDb,
+  initCurtain,
+  bindIframeFocusGuard,
+} from './page-chrome.js';
 
 // ---------------------------------------------------------------------------
 // Application state (in-memory)
@@ -117,8 +125,11 @@ const state = {
   defaultSpeed: null, // default-speed setting for new videos (1 / 1.5 / 2 or null = unset)
   showAll: false, // render window: false = first QUEUE_DISPLAY_LIMIT cards (in-memory only)
   hideMarked: false, // view filter: hide skipped (handled) videos (persisted)
-  curtain: false, // privacy curtain overlay: true = covering the page
 };
+
+// Privacy curtain controls, from page-chrome.js's initCurtain(); it owns the
+// covering flag, so `state` does not mirror it. Set in bindEvents().
+let curtain = null;
 
 // DOM references, populated in init().
 const dom = {};
@@ -131,11 +142,13 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   // Single-tab guard, first thing: ask for the tab lock (see the section below).
-  requestTabLock();
+  const tabLockGranted = requestTabLock(TAB_LOCK);
 
-  // The overlay is all a superseded tab needs, and cacheDom() is its only
-  // prerequisite: showFatalStorageError reads the refs cached here and wires its
-  // Reload button inline, never through bindEvents().
+  // The overlay is all a superseded tab needs, and it costs nothing: page-chrome
+  // resolves #blocked-overlay (and the scaffolding it hides) by id and wires the
+  // Reload button inline, never through bindEvents(). Caching the refs here
+  // keeps the checkpoint below the only thing separating a live tab from a
+  // superseded one.
   cacheDom();
 
   // Single-tab CHECKPOINT, as early as that prerequisite allows. Nothing above
@@ -307,14 +320,16 @@ function bindEvents() {
   if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
 
   document.addEventListener('keydown', onGlobalKeydown);
-  window.addEventListener('wheel', onGlobalWheel, { passive: true });
+
+  // The curtain binds its own wheel handler and keeps its own covering flag; Esc
+  // stays here, in onGlobalKeydown, because page-chrome owns no shortcuts. The
+  // defaults ('.workspace', <=900px, cover on wheel-down) are this page's.
+  curtain = initCurtain({ node: dom.curtain });
 
   // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
   // which swallows keydown so the app's shortcuts (incl. the Esc curtain) stop
-  // firing. On window blur, if focus landed on the player iframe, hand it back to
-  // the document so keydown keeps reaching us. Guard against stealing focus when
-  // the user simply switched tab/app (page hidden / window not focused).
-  window.addEventListener('blur', onWindowBlur);
+  // firing — page-chrome hands it back on window blur.
+  bindIframeFocusGuard(getPlayerIframe);
 
   // Save the current watch position on hide/unload so a reload can resume.
   window.addEventListener('pagehide', flushProgress);
@@ -338,11 +353,10 @@ function bindEvents() {
 // never interrupted. channels.html deliberately stays outside this — it never
 // writes video records, so it may be open alongside the queue.
 //
-// One named Web Lock (TAB_LOCK) is the whole mechanism, and it is race-free by
-// construction: the browser grants it to exactly one document, so there is no
-// handshake to get wrong and no window in which two tabs opened at the same
-// instant can both proceed. A backgrounded or frozen tab keeps holding it — a
-// lock is not a message it could fail to answer.
+// The lock itself is page-chrome.js's requestTabLock(TAB_LOCK) — race-free by
+// construction, held for the document's lifetime, and FAILING OPEN (no
+// `navigator.locks`, or a request that throws, counts as granted). What belongs
+// to this page is WHERE the answer is awaited:
 //
 // init() fires the request at the very top and awaits the answer right after
 // cacheDom(), before it reads the store, restores any setting or binds a single
@@ -351,46 +365,9 @@ function bindEvents() {
 // having touched nothing. The store also stands down (every video API then
 // throws DbBlockedError) — belt to the checkpoint's braces.
 //
-// The grant is held for the document's LIFETIME by returning a promise that
-// never settles; the browser releases it when the document goes away (closed,
-// navigated away, discarded) — nothing to unwind by hand. That also means
-// request()'s own promise never settles, which is why the granted/not-granted
-// answer travels out through a SEPARATE promise resolved inside the callback.
-//
-// FAILS OPEN, NEVER CLOSED: no `navigator.locks`, or a request that throws or
-// rejects, counts as granted and the app boots exactly as it did before this
-// guard existed. Locking the owner out of their own queue would be far worse
-// than the two-tab clobber this prevents.
-//
 // The decision is made once, at startup: there is no path that supersedes a
 // running tab later, so no mid-session halt and nothing to do about the player.
 // ---------------------------------------------------------------------------
-
-// Promise<boolean>: true = this tab owns the queue (or the guard did not engage).
-let tabLockGranted = null;
-
-function requestTabLock() {
-  if (!navigator.locks || typeof navigator.locks.request !== 'function') {
-    tabLockGranted = Promise.resolve(true); // fail open: guard does not engage
-    return;
-  }
-  let answer;
-  tabLockGranted = new Promise((resolve) => {
-    answer = resolve;
-  });
-  try {
-    navigator.locks
-      .request(TAB_LOCK, { ifAvailable: true }, (lock) => {
-        answer(Boolean(lock));
-        // Not granted: return at once, leaving the holding tab undisturbed.
-        // Granted: never settle, so this document holds the lock until it dies.
-        return lock ? new Promise(() => {}) : undefined;
-      })
-      .catch(() => answer(true)); // fail open
-  } catch {
-    answer(true); // fail open
-  }
-}
 
 // ---------------------------------------------------------------------------
 // First-run routing
@@ -1583,63 +1560,12 @@ const CARD_SPEED_KEYS = new Map([
   ['2', 2],
 ]);
 
-// ---------------------------------------------------------------------------
-// Privacy curtain: a full-viewport overlay that hides the whole page. Covers the
-// page on a wheel-DOWN anywhere outside the queue's own scroll area (or Esc),
-// lifted by a wheel-UP (or Esc). Visual only — the player is NOT paused.
-// ---------------------------------------------------------------------------
-
-/** Reflect state.curtain onto the overlay element (class + aria). */
-function setCurtain(covering) {
-  state.curtain = covering;
-  if (!dom.curtain) return;
-  dom.curtain.classList.toggle('is-covering', covering);
-  dom.curtain.setAttribute('aria-hidden', String(!covering));
-}
-
-/** Wheel handler: scroll INSIDE the queue scrolls it; elsewhere it drives the
- *  curtain — down covers, up lifts (binary by direction). While the curtain is
- *  covering it is on top, so a wheel event's target is the curtain (not the queue),
- *  and a scroll-up over it lifts it. In the stacked (<=900px) layout the page
- *  scrolls as one column, so scroll-down does NOT cover the page (Esc still
- *  does) — but a scroll-up may still lift an already-covered curtain. */
-function onGlobalWheel(e) {
-  // Stacked layout: the whole page scrolls, so scroll-down must not cover the
-  // page (it would fight normal scrolling). But scroll-up may still LIFT an
-  // already-covered curtain on any width. Reuse the player-above-queue breakpoint.
-  const narrow = window.matchMedia('(max-width: 900px)').matches;
-  const t = e.target;
-  // Let EITHER workspace pane (queue or player) scroll normally — wheeling over
-  // the queue list or the player's description never triggers the curtain. Only
-  // the header/toolbar/stats region ABOVE .workspace covers the page.
-  if (t && typeof t.closest === 'function' && t.closest('.workspace')) return;
-  if (e.deltaY > 0) {
-    if (!narrow && !state.curtain) setCurtain(true); // scroll down -> cover (wide only)
-  } else if (e.deltaY < 0) {
-    if (state.curtain) setCurtain(false); // scroll up -> lift (any width)
-  }
-}
-
-/** On window blur, if focus moved into the cross-origin player iframe, return it
- *  to the document so the app keeps receiving keydown (Esc + shortcuts). Guarded
- *  so alt-tabbing away (page hidden) doesn't yank focus back. */
-function onWindowBlur() {
-  // Defer so document.activeElement settles to the newly-focused iframe.
-  setTimeout(() => {
-    if (document.hidden) return; // switched tab/app: leave focus alone
-    const iframe = getPlayerIframe();
-    if (iframe && document.activeElement === iframe) {
-      iframe.blur(); // returns focus to document.body; keydown reaches us again
-    }
-  }, 0);
-}
-
 function onGlobalKeydown(e) {
   // PANIC KEY: Esc toggles the curtain, handled BEFORE any guard so it works in
   // every layout and even during onboarding. Ignore modifier combos.
   if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
-    setCurtain(!state.curtain);
+    curtain.toggle();
     return;
   }
 
@@ -1732,180 +1658,11 @@ function onGlobalKeydown(e) {
 
 // ---------------------------------------------------------------------------
 // Error handling
+//
+// The full-screen halt screens themselves live in page-chrome.js (they are the
+// same on both queue pages); this is the page-specific router — auth failures
+// end the session and repaint this page's auth UI.
 // ---------------------------------------------------------------------------
-
-// One fatal storage screen per page load — see FIRST CAUSE WINS below.
-let fatalStorageErrorShown = false;
-
-/**
- * Full-screen BLOCKING error for a FATAL storage condition: the video store is
- * unusable, so the app halts rather than run on a queue it cannot read or save.
- * Shared by the four callers below; only the copy differs. All are resolved by
- * fixing the environment and reloading, hence the single Reload action. Built
- * with el()/text nodes (no innerHTML for the dynamic reload wiring), matching
- * the panel look.
- *
- * FIRST CAUSE WINS: later calls are ignored, because one fatal condition
- * routinely produces another — a mid-session stand-down (onversionchange) makes
- * every write still in flight reject, one screen per rejection, and an aborted
- * blocked upgrade sets both sticky flags, so a second, vaguer diagnosis would
- * paint over the first. Every screen ends in Reload, so the earliest, truest one
- * is the one to keep.
- * @param {{heading:string, paragraphs:Array<string>, toast:string}} copy
- */
-function showFatalStorageError({ heading, paragraphs, toast }) {
-  if (fatalStorageErrorShown) return;
-  fatalStorageErrorShown = true;
-  const overlay = document.getElementById('blocked-overlay');
-  if (!overlay) {
-    // Defensive: without the container, at least surface it as a toast.
-    showToast(toast, { type: 'error' });
-    return;
-  }
-  // Hide the onboarding/app scaffolding behind the overlay.
-  setVisible(dom.setupPanel, false);
-  setVisible(dom.cutoffPanel, false);
-  setVisible(dom.appMain, false);
-
-  while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
-  const panel = el('div', { class: 'panel panel--blocked', role: 'alertdialog', 'aria-labelledby': 'blocked-heading' }, [
-    el('h2', { id: 'blocked-heading', text: heading }),
-    ...paragraphs.map((p) => el('p', { text: p })),
-    el('div', { class: 'panel__actions' }, [
-      el('button', {
-        class: 'btn btn--primary',
-        type: 'button',
-        onclick: () => location.reload(),
-      }, ['Reload']),
-    ]),
-  ]);
-  overlay.append(panel);
-  setVisible(overlay, true);
-}
-
-/**
- * IndexedDB is blocked by another tab holding the database open at a different
- * app/DB version (e.g. an old tab left open across a new deploy). The real data
- * is in IndexedDB, just inaccessible, so startup halts until the user closes the
- * other tab(s) and reloads.
- */
-function showBlockedError() {
-  showFatalStorageError({
-    heading: 'Already open in another tab',
-    paragraphs: [
-      'This app is already open in another browser tab running a different ' +
-        'version. Your videos are safe, but this tab can’t access them while the ' +
-        'other one is open.',
-      'Close the other tab(s) of this app, then reload this page.',
-    ],
-    toast:
-      'This app is open in another tab at a different version. Close the other tab(s) and reload.',
-  });
-}
-
-/**
- * IndexedDB could not be opened at all, so there is nowhere to read or save the
- * queue. The app stops here instead of presenting an empty queue whose writes
- * would quietly fail.
- */
-function showDbUnavailableError() {
-  showFatalStorageError({
-    heading: 'Storage unavailable',
-    paragraphs: [
-      'This app needs IndexedDB to store your queue, and this browser couldn’t ' +
-        'open it. Without it the app stops here rather than show you an empty ' +
-        'queue and quietly lose whatever you do next.',
-      'The likely causes are site data (storage) being blocked for this origin ' +
-        'in your browser settings, a corrupted database, or a full disk.',
-      'Allow site data for this origin, free up disk space, then reload. If it ' +
-        'still fails, clearing this site’s storage rebuilds the database from ' +
-        'scratch — you lose the stored queue and your saved settings, nothing else.',
-    ],
-    toast:
-      'This app requires IndexedDB and it could not be opened. Allow site data for this origin, then reload.',
-  });
-}
-
-/**
- * Another tab of the queue holds the tab lock, so this one is superseded. The
- * store has already been stood down, so nothing here can write; this is the
- * visible half of that halt (see the Single-tab guard section).
- */
-function showSupersededError() {
-  showFatalStorageError({
-    heading: 'The queue is already open',
-    paragraphs: [
-      'This queue is open in another browser tab. Only one tab at a time may ' +
-        'write to your stored videos, so this one stopped before it could touch them.',
-      'Close the other tab, then reload this page.',
-    ],
-    toast: 'The queue is already open in another tab. Close it, then reload this page.',
-  });
-}
-
-/**
- * The database opened, but reading it failed (a plain DOMException from the
- * transaction or the getAll() request). The rows may well still be there, so the
- * app must NOT continue on an empty queue and write over them. The underlying
- * error is shown because it is the only diagnostic the user gets.
- * @param {unknown} err the rejection from getAllVideos()
- */
-function showDbReadError(err) {
-  const detail = describeError(err);
-  showFatalStorageError({
-    heading: 'Could not read your queue',
-    paragraphs: [
-      'The database is there, but reading your stored videos failed. That ' +
-        'usually means a corrupted database or a disk that is failing.',
-      'The app is stopping here rather than show you an empty queue and write ' +
-        'over data that may still be in there.',
-      'Reloading is worth a try. If it keeps failing, clearing this site’s ' +
-        'storage rebuilds the database from scratch — you lose the stored queue ' +
-        'and your saved settings, nothing else.',
-      detail ? `Details: ${detail}` : null,
-    ].filter(Boolean),
-    toast:
-      'Could not read the stored queue — the database may be corrupted. Reload, or clear this site’s storage to start over.',
-  });
-}
-
-/**
- * Best-effort, never-throwing 'Name: message' description of an unknown thrown
- * value, for display via textContent. Anything exotic (a Proxy, a getter that
- * throws, a Symbol) degrades to '' rather than breaking the error screen.
- * @param {unknown} err
- * @returns {string}
- */
-function describeError(err) {
-  try {
-    if (err == null) return '';
-    const name = typeof err.name === 'string' ? err.name : '';
-    const message = typeof err.message === 'string' ? err.message : '';
-    const detail = [name, message].filter(Boolean).join(': ') || String(err);
-    return detail.slice(0, 300);
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Swallow a best-effort (optional) store write's failure — EXCEPT the fatal DB
- * conditions, which are routed to handleError so the user is actually told.
- * `dbBlocked` can flip AFTER init via db.onversionchange (another tab starting a
- * schema upgrade), and from then on every write no-ops; without this the card
- * speed / watch position / like flag would silently stop persisting.
- * Use as `putVideo(rec).catch(reportIfFatalDb)`.
- * @param {unknown} err
- */
-function reportIfFatalDb(err) {
-  // DbUnavailableError is practically unreachable post-init (init awaits the
-  // memoized openDb() and halts), but it costs nothing to cover it here too.
-  if (err instanceof DbBlockedError || err instanceof DbUnavailableError) {
-    handleError(err);
-  }
-  // Anything else is a transient failure on an optional write: keep the call
-  // site's intent and stay quiet (a refresh is never failed over one).
-}
 
 function handleError(err) {
   if (err instanceof DbBlockedError) {

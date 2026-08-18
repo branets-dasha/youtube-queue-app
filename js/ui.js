@@ -140,9 +140,9 @@ export function hideStatus(container) {
  * rebuilding it: toggle the greyed "handled" styling and mirror the taken action
  * onto the action buttons via aria-pressed (CSS paints the active button's
  * background from it). Preserves the .row element (and thus its focus), its
- * data-video-id, and child order, so the app.js focus/keyboard contract is
- * untouched — and it adds/removes nothing that affects layout, so card height is
- * identical in every state.
+ * data-video-id, and child order, so the calling page's focus/keyboard
+ * contract is untouched — and it adds/removes nothing that affects layout, so
+ * card height is identical in every state.
  * @param {HTMLElement} card the <li class="row">
  * @param {string} state 'new' | 'skipped'
  */
@@ -188,13 +188,14 @@ export function avatarPlaceholder(title) {
 }
 
 /**
- * Build the channel avatar for a card, looked up by channelId in the channels
- * map (decoupled from the video record, so it self-heals for already-stored
- * videos once the map is populated). Falls back to a placeholder circle.
+ * Build the channel avatar for a card. Precedence: the avatar carried ON THE
+ * RECORD (`rec.channelAvatarUrl`), then the channels map looked up by channelId
+ * (decoupled from the video record, so it self-heals for already-stored videos
+ * once the map is populated), then a placeholder circle.
  * img.src ONLY; alt = channel title, or '' when `decorative` (the avatar sits
  * inside the channel link next to the name, so the name alone is the link's
  * accessible name and the image must not repeat it).
- * @param {object} rec video record
+ * @param {object} rec video record (may carry its own `channelAvatarUrl`)
  * @param {Record<string,{title:string,avatarUrl:string}>} channels
  * @param {boolean} [decorative] render with an empty alt
  * @returns {HTMLElement}
@@ -202,7 +203,12 @@ export function avatarPlaceholder(title) {
 export function buildAvatar(rec, channels, decorative = false) {
   const ch = channels && rec.channelId ? channels[rec.channelId] : null;
   const title = rec.channelTitle || (ch && ch.title) || '';
-  const avatarUrl = ch && ch.avatarUrl ? ch.avatarUrl : '';
+  // Record-carried avatar WINS over the map: stash records store their own
+  // avatar so the stash depends on no external map — pruneChannels can delete a
+  // yqa_channels entry that a stashed video still references, and that stashed
+  // card must keep its picture. Subscription records have no channelAvatarUrl,
+  // so this is inert there and the map lookup still self-heals them.
+  const avatarUrl = rec.channelAvatarUrl || (ch && ch.avatarUrl ? ch.avatarUrl : '');
   if (!avatarUrl) return avatarPlaceholder(title);
 
   const img = el('img', {
@@ -343,9 +349,16 @@ export function renderDescription(container, rec, { onSeek } = {}) {
  * @param {object} rec video record
  * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed) }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
+ * @param {string} [skipLabel='Skip'] visible label for the mark button
+ *        ('Remove' on the stash page); also used in its aria-label and title.
+ *        The btn--skip CLASS never changes — styles.css and setCardState key off
+ *        it. A trailing positional param with a default (like `channels` /
+ *        `more`) rather than an options object (over-general for one string) or
+ *        a key on `handlers`, which is a pure bag of callbacks everywhere else —
+ *        a display string smuggled in there would hide from the next reader.
  * @returns {HTMLLIElement}
  */
-export function buildQueueRow(rec, handlers, channels = {}) {
+export function buildQueueRow(rec, handlers, channels = {}, skipLabel = 'Skip') {
   const watchUrl = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
 
   // A card is treated as non-embeddable ONLY when the details fetch has
@@ -486,13 +499,18 @@ export function buildQueueRow(rec, handlers, channels = {}) {
     text: '▶ Play',
     onclick: () => handlers.onPlay && handlers.onPlay(rec.videoId),
   });
+  // All THREE label surfaces come from skipLabel, so the stash can say "Remove".
+  // The btn--skip CLASS is deliberately NOT derived from it and must stay put:
+  // styles.css keys the [aria-pressed='true'] slate fill off it and setCardState
+  // finds this button with card.querySelector('.btn--skip'). Renaming the class
+  // to match a relabelled button would silently break both.
   const skipBtn = el('button', {
     class: 'btn btn--skip',
     type: 'button',
-    'aria-label': `Skip "${rec.title}"`,
+    'aria-label': `${skipLabel} "${rec.title}"`,
     'aria-pressed': 'false',
-    title: 'Skip',
-    text: 'Skip',
+    title: skipLabel,
+    text: skipLabel,
     onclick: () => handlers.onSkip && handlers.onSkip(rec.videoId),
   });
 
@@ -570,11 +588,16 @@ export function buildQueueRow(rec, handlers, channels = {}) {
  * @param {Array<object>} queue records (already sorted oldest-first)
  * @param {object} handlers { onSkip, onPlay, onCardSpeed }
  * @param {Record<string,{title:string,avatarUrl:string}>} [channels] avatar map
+ * @param {object|null} [more] optional { total, onShowAll } "Show all" footer
+ * @param {string} [skipLabel='Skip'] visible label for each row's mark button
+ *        ('Remove' on the stash page), threaded straight to buildQueueRow; also
+ *        used in its aria-label and title. The btn--skip CLASS never changes —
+ *        styles.css and setCardState key off it.
  */
-export function renderQueue(listEl, queue, handlers, channels = {}, more = null) {
+export function renderQueue(listEl, queue, handlers, channels = {}, more = null, skipLabel = 'Skip') {
   clear(listEl);
   for (const rec of queue) {
-    listEl.append(buildQueueRow(rec, handlers, channels));
+    listEl.append(buildQueueRow(rec, handlers, channels, skipLabel));
   }
   // Optional "Show all (N)" button at the bottom (pure display windowing). It is
   // NOT a .row, so keyboard j/k skip it. Text via textContent (XSS-safe).

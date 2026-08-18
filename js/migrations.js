@@ -1,8 +1,8 @@
 // js/migrations.js
 //
 // EVERY data migration lives here, so retiring them later is deleting this file
-// plus its three call sites (store.js getAllVideos, app.js init,
-// channels-page.js init).
+// plus its four call sites (store.js readAll, subscriptions-page.js init,
+// stash-page.js bootApp, channels-page.js init).
 //
 // Convention: a function's JSDoc states only its GENERAL contract; each
 // individual migration is a date-marked `// YYYY-MM-DD — <name>: …` comment

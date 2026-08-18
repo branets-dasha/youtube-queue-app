@@ -115,6 +115,70 @@ code {
   color: var(--text-dim);
 }
 
+/* Title + page nav on ONE line. This lives on an inner row rather than on
+   .topbar itself so .topbar stays a plain centred block: it remains a
+   block-level flex ITEM of the body.app-active column (see the
+   `body.app-active .topbar` rule), `text-align: center` keeps centring the
+   tagline, and the tagline — a sibling of this row — can never be pulled onto
+   the title's line. flex-wrap is the entire "stack when narrow" story, so no
+   media query mentions the topbar. */
+.topbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 16px;
+}
+.topbar__nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+/* A hairline rule between items rather than a literal "|" glyph: a border has
+   no text for a screen reader to announce between the link names. */
+.topbar__nav-item + .topbar__nav-item {
+  border-left: 1px solid var(--border);
+}
+/* Deliberately NOT .btn/.btn--ghost. A .btn is `padding: 8px 14px` -> a ~37px
+   pill; three of those would add ~11px of chrome to EVERY page, including the
+   height-locked app layout where the topbar's height comes straight off the
+   video (.player is capped by calc((100dvh - 420px) * 16/9)). This box is ~27px
+   — shorter than the 1.6rem title's line box — so the nav costs ZERO height on
+   wide screens. The transparent bottom border reserves the current-page
+   underline's space, so marking a page never reflows the row. */
+.topbar__nav-link {
+  display: inline-block;
+  padding: 1px 12px;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+a.topbar__nav-link:hover {
+  color: var(--text);
+}
+.topbar__nav-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* [aria-current='page'] is the ONLY current-page marker — no parallel
+   .is-active class. .is-active in this codebase marks controls whose state
+   changes at RUNTIME and is JS-toggled (updateSpeedButtons, setCardSpeed,
+   updateLikeButton); a nav marker is static per document, so a second source of
+   truth could only drift with nothing to sync it. It borrows the same --accent
+   as the .is-active family, but as an underline rather than a fill: these are
+   labels, not buttons. */
+.topbar__nav-link[aria-current='page'] {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
 main {
   max-width: var(--maxw-wide);
   margin: 0 auto;
@@ -181,10 +245,10 @@ main {
 }
 
 /* ---- Blocking full-screen error (fatal storage condition) ---- */
-/* Fixed, full-viewport, opaque scrim that centers a panel. Shown by app.js when
-   startup must halt (DB blocked by another tab, IndexedDB unavailable, or the
-   stored queue unreadable). Sits above the app but below the privacy
-   curtain (2000). */
+/* Fixed, full-viewport, opaque scrim that centers a panel. Shown by
+   subscriptions-page.js when startup must halt (DB blocked by another tab,
+   IndexedDB unavailable, or the stored queue unreadable). Sits above the app
+   but below the privacy curtain (2000). */
 .blocked-overlay {
   position: fixed;
   inset: 0;
@@ -255,6 +319,11 @@ main {
 }
 .btn--skip:hover:not(:disabled) {
   background: var(--surface-2);
+}
+/* An author `display` beats the UA [hidden] rule, so every hideable button
+   needs this — sign-in/sign-out, "Start the stash", and any future one. */
+.btn[hidden] {
+  display: none;
 }
 
 /* ---- Toolbar ---- */
@@ -436,6 +505,12 @@ main {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+/* An author `display` beats the UA [hidden] rule, so anything hideable needs
+   its own [hidden] { display: none } — without this the empty state leaves a
+   padding box and an empty list in the accessibility tree. */
+.queue[hidden] {
+  display: none;
 }
 
 .row {
@@ -791,6 +866,13 @@ body.app-active #app-main.app {
   display: flex;
   flex-direction: column;
 }
+/* An author `display` beats the UA [hidden] rule — so the rule above would keep
+   #app-main on screen (focusable, in the a11y tree) behind the fatal-storage
+   overlay when showFatalStorageError() hides it. Specificity must beat the
+   0-1-3-1 above, hence the same selector plus [hidden]. */
+body.app-active #app-main.app[hidden] {
+  display: none;
+}
 
 .workspace {
   flex: 1 1 auto;
@@ -896,10 +978,6 @@ body.app-active #app-main.app {
 }
 .player__empty-text {
   margin: 0;
-}
-/* .btn is inline-flex, which likewise overrides the UA [hidden] rule. */
-.player__empty-btn[hidden] {
-  display: none;
 }
 .player__bar {
   display: flex;
@@ -1129,9 +1207,6 @@ body.app-active #app-main.app {
 .channels-main {
   max-width: var(--maxw);
 }
-.channels-back {
-  margin: 0 0 12px;
-}
 .channels {
   list-style: none;
   margin: 0;
@@ -1227,6 +1302,55 @@ body.app-active #app-main.app {
 .chan__controls .chan__ignore[aria-pressed='true']:hover:not(:disabled) {
   background: color-mix(in srgb, var(--skip) 88%, #000);
   color: var(--primary-text);
+}
+
+/* ---- Stash page (stash.html) ---- */
+
+/* The "add a video by link" block. It needs its OWN max-width: body.app-active
+   strips main's (`max-width: none`, so the workspace can span the viewport), and
+   without one the input would stretch the full width of an 1800px screen. Prose
+   width is the same measure the onboarding panels use. */
+.stash-add-block {
+  max-width: var(--maxw);
+  margin: 0 0 12px;
+}
+.stash-add__label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+/* flex-wrap is the whole narrow-width story: the Add button drops under the
+   input on its own, and the @media below then widens it to a real touch target. */
+.stash-add__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* Reuses .field__input for colours/radius/focus ring; ONLY the sizing is
+   overridden, since .field__input is `width: 100%` (right for a stacked panel
+   field, wrong for a flex row). min-width: 0 lets it actually shrink. */
+.stash-add__input {
+  flex: 1 1 320px;
+  width: auto;
+  min-width: 0;
+}
+.stash-add__btn {
+  flex: 0 0 auto;
+}
+/* The status line sits directly under the row; .status carries only a bottom
+   margin, so give it the gap above. */
+.stash-add-block > .status {
+  margin-top: 8px;
+}
+
+@media (max-width: 620px) {
+  /* Once the button has wrapped onto its own line, let it span the row — a
+     full-width tap target instead of a stranded pill. */
+  .stash-add__btn {
+    flex: 1 0 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

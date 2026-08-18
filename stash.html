@@ -4,35 +4,22 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>YouTube Queue</title>
+    <title>Stash — YouTube Queue</title>
     <meta
       name="description"
-      content="A burn-down queue for your YouTube subscriptions: fetches recent uploads from the channels you follow and plays them oldest first, entirely in your browser."
-    />
-    <meta property="og:title" content="YouTube Queue" />
-    <meta
-      property="og:description"
-      content="A burn-down queue for your YouTube subscriptions — fetches recent uploads and plays them oldest first, right in your browser."
-    />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://branets-dasha.github.io/youtube-queue-app/" />
-    <meta property="og:site_name" content="YouTube Queue" />
-    <meta property="og:image" content="https://branets-dasha.github.io/youtube-queue-app/og-image.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta
-      property="og:image:alt"
-      content="YouTube Queue logo and tagline: burn down your subscription backlog — oldest first, right in your browser."
+      content="A hand-picked companion queue for YouTube Queue: paste a link to stash a video for later, then play through the stash oldest-added first, entirely in your browser."
     />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
-    <!-- Google Identity Services (OAuth token model). Async; auth.js waits for it. -->
+    <!-- Google Identity Services (OAuth token model). Async; auth.js waits for
+         it. auth.js never injects this tag, so every page that authorizes —
+         this one included — carries its own copy. -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <!-- App logic as ES modules. -->
-    <script type="module" src="js/subscriptions-page.js"></script>
+    <script type="module" src="js/stash-page.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#queue-list">Skip to queue</a>
+    <a class="skip-link" href="#queue-list">Skip to stash</a>
 
     <!-- Top-right toast notifications (progress, success, errors, info). -->
     <div id="toast-container" class="toasts" aria-live="polite"></div>
@@ -42,34 +29,35 @@
          above everything (including toasts) and blocks interaction while up. -->
     <div id="curtain" class="curtain" aria-hidden="true"></div>
 
-    <!-- Full-screen BLOCKING error: shown by subscriptions-page.js for either
-         fatal storage condition — IndexedDB blocked by another tab open at a
+    <!-- Full-screen BLOCKING error: shown by stash-page.js for either fatal
+         storage condition — IndexedDB blocked by another tab open at a
          different app/DB version, or IndexedDB unavailable entirely. Populated
-         + revealed by showFatalStorageError(); halts app startup until the
+         + revealed by showFatalStorageError(); halts page startup until the
          user fixes it and reloads. -->
     <div id="blocked-overlay" class="blocked-overlay" hidden></div>
 
-    <!-- Shared page nav. The title + nav share one flex row (.topbar__row) so
-         the nav costs no extra header height on wide screens; the tagline stays
-         a SIBLING of that row so it can never land on the title's line. The
-         current page is a <span>, not an <a>: self-navigation would reload and
-         drop the in-memory access token, the playing video and session state. -->
+    <!-- Shared page nav — identical on every page, differing only in which item
+         carries aria-current. The <h1> is the app name everywhere; page identity
+         comes from aria-current + <title> + the tagline. -->
     <header class="topbar">
       <div class="topbar__row">
         <h1 class="topbar__title">YouTube Queue</h1>
         <nav class="topbar__nav" aria-label="Pages">
           <ul class="topbar__nav-list" role="list">
-            <li class="topbar__nav-item"><span class="topbar__nav-link" aria-current="page">Subscriptions</span></li>
-            <li class="topbar__nav-item"><a class="topbar__nav-link" href="stash.html">Stash</a></li>
+            <li class="topbar__nav-item"><a class="topbar__nav-link" href="index.html">Subscriptions</a></li>
+            <li class="topbar__nav-item"><span class="topbar__nav-link" aria-current="page">Stash</span></li>
             <li class="topbar__nav-item"><a class="topbar__nav-link" href="channels.html">Channels</a></li>
           </ul>
         </nav>
       </div>
-      <p class="topbar__tagline">Burn down your subscription feed, oldest first.</p>
+      <p class="topbar__tagline">A hand-picked queue — paste a link to stash a video for later.</p>
     </header>
 
     <main>
       <!-- ===== First-run: Client ID setup ===== -->
+      <!-- This page is self-sufficient: a brand-new browser can be set up here
+           without ever visiting the Subscriptions page. Same ids as index.html,
+           so the setup flow stays one implementation, not two. -->
       <section id="setup-panel" class="panel" hidden aria-labelledby="setup-heading">
         <h2 id="setup-heading">One-time setup: OAuth Client ID</h2>
         <p>
@@ -128,25 +116,6 @@
         </div>
       </section>
 
-      <!-- ===== First-run: start cutoff ===== -->
-      <section id="cutoff-panel" class="panel" hidden aria-labelledby="cutoff-heading">
-        <h2 id="cutoff-heading">Pick your starting point</h2>
-        <p>
-          Videos published <strong>at or before</strong> this moment are treated
-          as already handled and will not appear in your queue. A good default
-          is one week ago.
-        </p>
-        <label class="field">
-          <span class="field__label">Start cutoff</span>
-          <input id="cutoff-input" class="field__input" type="datetime-local" />
-        </label>
-        <div class="panel__actions">
-          <button id="save-cutoff-btn" class="btn btn--primary" type="button">
-            Save &amp; continue
-          </button>
-        </div>
-      </section>
-
       <!-- ===== Main app ===== -->
       <section id="app-main" class="app" hidden>
         <div class="toolbar">
@@ -161,31 +130,9 @@
               Sign out
             </button>
           </div>
+          <!-- No refresh and no cutoff here: the stash is filled by hand, one
+               link at a time, and has no FLOOR/CUTOFF window. -->
           <div class="toolbar__actions">
-            <button
-              id="refresh-new-btn"
-              class="btn"
-              type="button"
-              aria-label="Fetch only videos newer than what you already have"
-              disabled
-            >
-              Fetch new
-            </button>
-            <button
-              id="refresh-btn"
-              class="btn"
-              type="button"
-              aria-label="Fetch all videos down to the cutoff"
-              disabled
-            >
-              Refresh all
-            </button>
-            <button id="change-cutoff-btn" class="btn btn--ghost" type="button">
-              Change cutoff
-            </button>
-            <button id="change-client-btn" class="btn btn--ghost" type="button">
-              Change Client ID
-            </button>
             <button
               id="default-speed-btn"
               class="btn btn--ghost"
@@ -194,27 +141,36 @@
             >
               Default speed: off
             </button>
+            <button id="change-client-btn" class="btn btn--ghost" type="button">
+              Change Client ID
+            </button>
           </div>
         </div>
 
-        <dl class="stats" aria-label="Queue statistics">
-          <div class="stats__item">
-            <dt>Queued</dt>
-            <dd id="queued-count">0</dd>
-          </div>
-          <div class="stats__item">
-            <dt>Handled this session</dt>
-            <dd id="handled-count">0</dd>
-          </div>
-          <div class="stats__item">
-            <dt>Cutoff</dt>
-            <dd><time id="cutoff-display">not set</time></dd>
-          </div>
-        </dl>
+        <!-- The only way videos enter the stash. A real <form>, so Enter submits
+             for free and the button is a genuine submit control; the JS handler
+             calls preventDefault(). #stash-add-status ships in the markup with
+             role="status" so the live region exists BEFORE the first message is
+             written into it, and carries ONLY class="status" — showStatus() in
+             ui.js overwrites className wholesale, so any extra class would be
+             destroyed on first use. -->
+        <div class="stash-add-block">
+          <form id="stash-add-form" class="stash-add" autocomplete="off">
+            <label class="stash-add__label" for="stash-url-input">Add a video by YouTube link</label>
+            <div class="stash-add__row">
+              <input id="stash-url-input" class="field__input stash-add__input" type="text"
+                     inputmode="url" autocomplete="off" spellcheck="false"
+                     placeholder="youtu.be/dQw4w9WgXcQ, watch?v=dQw4w9WgXcQ, or dQw4w9WgXcQ"
+                     aria-describedby="stash-add-status" />
+              <button id="stash-add-btn" class="btn btn--primary stash-add__btn" type="submit">Add</button>
+            </div>
+          </form>
+          <div id="stash-add-status" class="status" role="status" aria-atomic="true" hidden></div>
+        </div>
 
         <p class="shortcuts" aria-hidden="false">
           <strong>Queue:</strong> <kbd>j</kbd>/<kbd>k</kbd> move &middot;
-          <kbd>x</kbd> skip &middot;
+          <kbd>x</kbd> remove &middot;
           <kbd>u</kbd> undo &middot; <kbd>Enter</kbd> play &middot;
           <kbd>1</kbd>&middot;<kbd>5</kbd>&middot;<kbd>2</kbd> speed &nbsp;&middot;&nbsp;
           <strong>Player:</strong> <kbd>Space</kbd> play/pause &middot;
@@ -226,36 +182,21 @@
         </p>
 
         <div class="workspace">
-          <!-- LEFT: the queue (its own scrollbar) -->
+          <!-- LEFT: the stash (its own scrollbar) -->
           <div class="workspace__queue">
-            <!-- Cleanup + hide-handled controls pinned at the TOP of the queue pane. -->
+            <!-- Clean-up control pinned at the TOP of the scrolling stash pane.
+                 Deliberately NO aria-label: the visible "(n)" count then stays
+                 part of the accessible name, so the button announces how much it
+                 is about to delete. -->
             <div class="queue-header">
               <button
                 id="cleanup-btn"
                 class="btn"
                 type="button"
-                aria-label="Trim front — remove handled videos up to the cutoff"
+                title="Delete every video marked Remove"
                 disabled
               >
-                Trim front (0)
-              </button>
-              <button
-                id="hide-marked-btn"
-                class="btn"
-                type="button"
-                aria-pressed="false"
-              >
-                Hide skipped
-              </button>
-              <button
-                id="scroll-skipped-btn"
-                class="btn btn--icon queue-header__jump"
-                type="button"
-                aria-label="Jump to last skipped video"
-                title="Jump to last skipped video"
-                disabled
-              >
-                ⭳
+                Clean up (0)
               </button>
               <button
                 id="scroll-playing-btn"
@@ -268,13 +209,12 @@
                 ⮦
               </button>
             </div>
-            <ul id="queue-list" class="queue" role="list" aria-label="Video queue"></ul>
+            <ul id="queue-list" class="queue" role="list" aria-label="Stashed videos"></ul>
 
             <div id="empty-state" class="empty" hidden>
-              <p class="empty__title">You're all caught up</p>
+              <p class="empty__title">Your stash is empty</p>
               <p class="empty__sub">
-                Nothing newer than your cutoff. Hit <strong>Refresh</strong> to
-                check for new uploads.
+                Paste a YouTube link above to add your first video.
               </p>
             </div>
           </div>
@@ -288,7 +228,7 @@
                   <p id="player-empty-text" class="player__empty-text">
                     Select a video to play
                   </p>
-                  <!-- Starts the queue at the first still-unwatched video. Hidden
+                  <!-- Starts the stash at its first still-unwatched video. Hidden
                        (not just disabled) whenever there is nothing playable, so
                        the caught-up state stays text-only and it never sits in
                        the tab order as a dead control. -->
@@ -296,11 +236,11 @@
                     id="start-queue-btn"
                     class="btn btn--primary player__empty-btn"
                     type="button"
-                    aria-label="Start the queue at the first unwatched video"
-                    title="Start the queue at the first unwatched video"
+                    aria-label="Start the stash at the first unwatched video"
+                    title="Start the stash at the first unwatched video"
                     hidden
                   >
-                    ▶ Start the queue
+                    ▶ Start the stash
                   </button>
                 </div>
               </div>
@@ -351,12 +291,15 @@
                       2x
                     </button>
                   </div>
+                  <!-- Keeps the ⏭ glyph: this button ADVANCES. A ✕ would imply an
+                       immediate delete, but marking only queues the video for the
+                       next Clean up (or reload). -->
                   <button
                     id="skip-btn"
                     class="btn btn--icon"
                     type="button"
-                    aria-label="Skip current video and play the next"
-                    title="Skip to next"
+                    aria-label="Mark the current video for removal and proceed to the next"
+                    title="Remove &amp; next"
                     disabled
                   >
                     ⏭
@@ -373,7 +316,7 @@
     <footer class="footer">
       <p>
         Runs entirely in your browser. Access token stays in memory; only your
-        Client ID and cutoff are saved locally.
+        Client ID and the videos you stash are saved locally.
       </p>
     </footer>
   </body>

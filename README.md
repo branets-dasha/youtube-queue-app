@@ -99,7 +99,7 @@ The app is deliberately quota-frugal. It uses the following methods:
     - `yqa_playback_speed` — the current player speed.
     - `yqa_default_speed` — the "Default speed" setting (absent when off).
     - `yqa_hide_marked` — the "Hide skipped" toggle.
-- **Persisted in IndexedDB:** your video records in database `yqa`, object store `videos`, keyed by `videoId` (IndexedDB is required — if it can't be opened the app stops with an error). Each record holds: `videoId`, `title`, `description`, `channelId`, `channelTitle`, `publishedAt`, `thumbnailUrl`, `state` (`new` / `skipped`), `durationSeconds`, `embeddable`, `preferredSpeed`, `positionSeconds` (resume), and `liked`.
+- **Persisted in IndexedDB:** your video records in database `yqa`, keyed by `videoId`, in two object stores — `videos` and `stash`. IndexedDB is required — if it can't be opened the app stops with an error.
 - The **like** state is stored **locally** and is never fetched back from YouTube, so a like/unlike you make directly on YouTube will **not** be reflected here.
 - Nothing is ever sent to any server other than Google's.
 
@@ -111,7 +111,7 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Likes made on YouTube are not reflected here.** The like state is tracked locally (never fetched), so liking/unliking directly on YouTube won't show up in the app. But liking/unliking in the app will be properly reflected on YouTube regardless of initial state.
 - **Resume** only covers **in-app** playback position (tracked by the embedded player); it does not sync with YouTube's own watch history.
 - **Shorts** are detected by a **heuristic** (duration ≤ 90s) — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the "Shorts" badge can be wrong for edge cases.
-- **One queue tab at a time.** A second queue tab stops with a "close the other tab and reload" message so the two can't write over each other; the Channels page can stay open alongside.
+- **One tab per page.** A second tab of the *same* page stops with a "close the other tab and reload" message so the two can't write over each other. Different pages are fine open at once — the queue and the stash write separate stores, and the Channels page writes no videos at all.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
 
@@ -146,7 +146,8 @@ For **local development**, register your localhost origin instead of the hosted 
 
 | File | Purpose |
 | --- | --- |
-| `index.html` | DOM skeleton + loads GIS, the IFrame API (via player.js), and js/app.js |
+| `index.html` | DOM skeleton + loads GIS, the IFrame API (via player.js), and js/subscriptions-page.js |
+| `stash.html` | DOM skeleton for the stash page; loads GIS, the IFrame API (via player.js), and js/stash-page.js |
 | `channels.html` | Standalone channel-list page (per-channel prefs); loads js/channels-page.js |
 | `styles.css` | Light/dark, responsive two-pane styling; player container query |
 | `README.md` | This file |
@@ -161,7 +162,9 @@ For **local development**, register your localhost origin instead of the hosted 
 | `js/player.js` | YouTube IFrame Player API wrapper (load/play, speed, seek, resume, fullscreen) |
 | `js/ui.js` | XSS-safe DOM building (cards, player meta) and state screens |
 | `js/toast.js` | Top-right toast notifications (progress / success / error / info) |
-| `js/app.js` | Wiring: auth → fetch → store → queue → ui/player, event binding, shortcuts |
+| `js/page-chrome.js` | Chrome shared by every page: tab lock, fatal-storage screens, curtain, iframe focus guard |
+| `js/subscriptions-page.js` | Wiring: auth → fetch → store → queue → ui/player, event binding, shortcuts |
+| `js/stash-page.js` | Stash page wiring: add by link, store → queue → ui/player, event binding, shortcuts |
 | `js/channels-page.js` | Channels page wiring: channel rows + ignore/speed prefs (no auth, no API) |
 
 ### Testing the pure logic in Node
