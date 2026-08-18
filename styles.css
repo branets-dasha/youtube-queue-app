@@ -125,7 +125,12 @@ code {
 .topbar__row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  /* baseline, NOT center: the 1.6rem title and the 0.95rem nav links are
+     different sizes, so centring the BOXES puts their text on two different
+     lines. The nested .topbar__nav-list needs nothing extra — a flex container
+     reports its first item's baseline, so the <nav> already exposes the link
+     text's baseline up to this row. */
+  align-items: baseline;
   justify-content: center;
   gap: 2px 16px;
 }
