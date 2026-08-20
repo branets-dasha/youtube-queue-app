@@ -23,6 +23,8 @@ import {
   putVideos,
   putVideo,
   deleteVideos,
+  getAllStashVideos,
+  putStashVideo,
   loadChannels,
   saveChannels,
   loadChannelPrefs,
@@ -66,6 +68,7 @@ import {
   isChannelIgnored,
   pruneChannels,
   mergeRefresh,
+  addToStash,
 } from './queue.js';
 import {
   showStatus,
@@ -860,6 +863,65 @@ function toggleSkip(videoId, opts = {}) {
 }
 
 /**
+ * "Add to stash" from a card's "⋯" menu: copy this video into the STASH object
+ * store, then mark the source card skipped so this queue moves past it.
+ *
+ * NO API call and no ensureAuthorized: the record we already hold is complete —
+ * that lookup is only what the stash page's paste-a-link flow has to do — and
+ * the avatar comes free from state.channels, the map THIS page owns. The copy
+ * carries its own channelAvatarUrl for the same reason a hand-added one does:
+ * the stash must not depend on a map a later prune could empty.
+ *
+ * ORDER matters, exactly as it does for Like: the durable stash write happens
+ * BEFORE the mark, so a failed write leaves the card untouched and there is
+ * nothing to revert.
+ *
+ * An ALREADY-STASHED video is not written again (addToStash hands the list back
+ * by identity, keeping that record's place, addedAt and Remove mark), but it IS
+ * still marked here — "it lives in the stash now" is true either way.
+ * @param {string} videoId
+ * @param {object} [opts] passed straight to setVideoState, exactly as toggleSkip
+ *        passes its own: the `t` key sends { advanceFocus: true }, the menu item
+ *        sends nothing (a mouse user's focus is in the menu, not on a card).
+ */
+async function addCardToStash(videoId, opts = {}) {
+  const rec = state.records.find((r) => r.videoId === videoId);
+  if (!rec) return;
+
+  try {
+    const incoming = { ...rec };
+    const known = state.channels[rec.channelId];
+    // Omit the key entirely when we have no avatar — never an explicit
+    // undefined/null, which stashChannelInfo would have to special-case.
+    if (known && known.avatarUrl) incoming.channelAvatarUrl = known.avatarUrl;
+
+    const stash = await getAllStashVideos();
+    // Channel prefs read FRESH at the call site, as everywhere else, so a speed
+    // set in a Channels tab applies without reloading this page.
+    const { added, record } = addToStash(stash, incoming, {
+      addedAt: new Date().toISOString(),
+      prefs: loadChannelPrefs(),
+    });
+    if (added) {
+      await putStashVideo(record);
+      showToast(`Added “${record.title}” to your stash.`, { type: 'success' });
+    } else {
+      showToast('That video is already in your stash.', { type: 'info' });
+    }
+  } catch (err) {
+    // Nothing has been marked yet, so there is nothing to revert: just route it
+    // through this page's one error router, which raises the halt screen for a
+    // fatal DB state and toasts everything else.
+    handleError(err);
+    return;
+  }
+
+  // Both paths land here: the video is in the stash, so this queue is done with
+  // it. setVideoState (never toggleSkip) — a mark, not a toggle.
+  await setVideoState(videoId, STATE_SKIPPED, opts);
+}
+
+/**
  * Keep the "handled this session" tally consistent across marks, toggles and
  * undos: +1 when a 'new' video becomes handled, -1 when a handled video reverts
  * to 'new', 0 when switching between two handled states.
@@ -1453,6 +1515,9 @@ function render() {
       onSkip: (id) => toggleSkip(id),
       onPlay: (id) => playVideo(id),
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
+      // Presence alone is what renders the card's "⋯" menu (see buildQueueRow);
+      // stash-page.js passes no onStash, so its cards keep the same three.
+      onStash: (id) => addCardToStash(id),
     },
     resolveChannel,
     more
@@ -1595,10 +1660,11 @@ function cyclePlaybackSpeed(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. QUEUE: j/k move, x skip, u undo, Enter play focused card,
-// 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→ seek, -/+ speed, n
-// next, l like, m mute, f fullscreen. Ignored while typing in an input/textarea,
-// during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays allowed for '+').
+// Keyboard shortcuts. QUEUE: j/k move, x skip, t add to stash, u undo, Enter
+// play focused card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→
+// seek, -/+ speed, n next, l like, m mute, f fullscreen. Ignored while typing in
+// an input/textarea, during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays
+// allowed for '+').
 // ---------------------------------------------------------------------------
 
 // Digit -> preferred speed for the FOCUSED card. 1 and 2 are literal; '5' is the
@@ -1610,6 +1676,24 @@ const CARD_SPEED_KEYS = new Map([
   ['5', 1.5],
   ['2', 2],
 ]);
+
+/**
+ * Index of the card that CONTAINS focus, or -1 when focus is outside this
+ * list altogether. Resolving by closest('.row') rather than by an exact match
+ * is what keeps the card shortcuts alive while focus sits on a control INSIDE
+ * a card — the "⋯" menu trigger, its open menu item, ▶ Play, Skip, a speed
+ * button — every one of which used to make them inert. Scoping is free: `rows`
+ * holds only this list's cards, so a .row from anywhere else answers -1.
+ *
+ * NOT for Enter/Space, which must match the .row exactly — see that branch.
+ * @param {HTMLElement[]} rows the queue list's .row elements, in order
+ * @param {Element|null} active document.activeElement
+ * @returns {number}
+ */
+function focusedCardIndex(rows, active) {
+  const card = active && active.closest ? active.closest('.row') : null;
+  return card ? rows.indexOf(card) : -1;
+}
 
 function onGlobalKeydown(e) {
   // PANIC KEY: Esc toggles the curtain, handled BEFORE any guard so it works in
@@ -1630,18 +1714,22 @@ function onGlobalKeydown(e) {
   const key = e.key.toLowerCase();
   const rows = Array.from(dom.queueList.querySelectorAll('.row'));
   const active = document.activeElement;
-  const idx = rows.indexOf(active);
+  const idx = focusedCardIndex(rows, active);
 
   if (key === 'j') {
-    // j = move BACK (previous/older card, upward in the oldest->newest list).
+    // j = move BACK (previous/older card, upward in the oldest->newest list);
+    // with nothing focused, enter at the first card. Landing ON the .row is
+    // also how j/k get focus OUT of an open "⋯" menu — it leaves the menu
+    // wrapper, whose focusout dismisses it — so both CLAMP at the ends of the
+    // list rather than doing nothing there, or a menu on the first (j) or last
+    // (k) card would have no j/k exit. Clamping is invisible otherwise: it
+    // re-focuses a card that already holds focus.
     e.preventDefault();
-    if (idx > 0) rows[idx - 1].focus();
-    else if (idx === -1 && rows.length) rows[0].focus();
+    if (rows.length) rows[idx > 0 ? idx - 1 : 0].focus();
   } else if (key === 'k') {
-    // k = move FORWARD (next/newer card, downward).
+    // k = move FORWARD (next/newer card, downward), clamped the same way.
     e.preventDefault();
-    if (idx < rows.length - 1) rows[idx + 1].focus();
-    else if (idx === -1 && rows.length) rows[0].focus();
+    if (rows.length) rows[idx >= 0 ? Math.min(idx + 1, rows.length - 1) : 0].focus();
   } else if (key === 'x') {
     // x = Skip: toggle the focused card between new and skipped.
     if (idx >= 0) {
@@ -1661,15 +1749,29 @@ function onGlobalKeydown(e) {
       const rec = state.records.find((r) => r.videoId === videoId);
       if (!rec || rec.embeddable !== false) onCardSpeed(videoId, CARD_SPEED_KEYS.get(key));
     }
+  } else if (key === 't') {
+    // t = add the FOCUSED card to the stash, through the same addCardToStash the
+    // "⋯" menu item calls — so a keyboard user never has to open that menu.
+    // Advances focus like x, so a run of t's walks the queue rather than firing
+    // twice on one card (the second write is a no-op — addToStash treats a
+    // duplicate as already there — but it would still re-mark the same card).
+    if (idx >= 0) {
+      e.preventDefault();
+      addCardToStash(rows[idx].dataset.videoId, { advanceFocus: true });
+    }
   } else if (key === 'u') {
     e.preventDefault();
     onUndo();
   } else if (key === 'enter') {
-    // Play the FOCUSED card. If a button/link is focused (idx === -1) do nothing
-    // here, so Enter activates that control normally.
-    if (idx >= 0) {
+    // Play the FOCUSED card — the ONE card shortcut that matches the .row
+    // EXACTLY instead of going through focusedCardIndex. Enter already activates
+    // a focused button or link natively, so acting on the card that CONTAINS
+    // that button would fire twice over. The inconsistency with x/t/1-5-2 is the
+    // point; do not tidy it away. (Space, below, is guarded the same way — by
+    // tag — for the same reason.)
+    if (rows[idx] === active) {
       e.preventDefault();
-      playVideo(rows[idx].dataset.videoId);
+      playVideo(active.dataset.videoId);
     }
   } else if (key === ' ') {
     // Space must NEVER scroll the page — but yield to a focused interactive

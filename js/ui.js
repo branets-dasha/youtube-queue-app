@@ -353,10 +353,181 @@ export function renderDescription(container, rec, { onSeek } = {}) {
   container.hidden = false;
 }
 
+// ---------------------------------------------------------------------------
+// Card "⋯" overflow menu
+// ---------------------------------------------------------------------------
+
+// The ONE open card menu, module-wide. Keeping the reference here is what makes
+// opening a second menu close the first, and what lets renderQueue() drop a
+// menu — together with its document listeners — when it rebuilds the list out
+// from under it.
+let activeCardMenu = null;
+
+/**
+ * Close the open card menu, if any. Safe to call at any time: that is how
+ * renderQueue clears a menu whose DOM it is about to throw away.
+ * @param {object} [opts]
+ * @param {boolean} [opts.restoreFocus=true] pass false when focus is ALREADY
+ *        leaving on its own (the wrapper's focusout path), so the close never
+ *        pulls it back from wherever the user is deliberately taking it.
+ */
+function closeCardMenu({ restoreFocus = true } = {}) {
+  const open = activeCardMenu;
+  if (!open) return;
+  activeCardMenu = null;
+  document.removeEventListener('keydown', open.onKeydown, true);
+  document.removeEventListener('pointerdown', open.onPointerDown);
+  // Ask BEFORE hiding: hiding an ancestor of the focused element drops focus to
+  // <body>, and we must never yank focus back from wherever the user put it.
+  const hadFocus = restoreFocus && open.panel.contains(document.activeElement);
+  open.panel.hidden = true;
+  open.trigger.setAttribute('aria-expanded', 'false');
+  // Back to the trigger, but ONLY from inside the panel — an Esc press, or the
+  // item being used. Opening leaves focus on the trigger, so every other close
+  // (focus already gone, or a pointerdown outside) has nothing to restore.
+  if (hadFocus) open.trigger.focus();
+}
+
+/**
+ * Open one card menu (closing any other) and install its two document-level
+ * dismissal listeners. FOCUS DOES NOT MOVE: this is a disclosure, not an ARIA
+ * menu, so the trigger keeps focus — pressing the same key again toggles it
+ * shut — and Tab steps from there into the panel, its next sibling. Dismissal
+ * on the way OUT is the wrapper's own focusout listener (see buildCardMenu);
+ * these two cover the cases focus never moves for: Esc, and a pointerdown on
+ * something unfocusable.
+ * @param {HTMLElement} trigger the "⋯" button
+ * @param {HTMLElement} panel the menu panel
+ */
+function openCardMenu(trigger, panel) {
+  closeCardMenu();
+
+  // Capture phase, so the staleness check below runs before the page's own
+  // keydown table reads the key. It SWALLOWS NOTHING: every key reaches that
+  // table, so the card shortcuts keep working with a menu open — they resolve
+  // the card by walking up from whatever holds focus, and j/k move focus onto
+  // the .row itself, which leaves this wrapper and lets its focusout dismiss
+  // the menu.
+  const onKeydown = (e) => {
+    // A card can be dropped WITHOUT renderQueue — with Hide-marked on, marking a
+    // video removes just its card (auto-advance does exactly that when the
+    // playing video ends) — taking this panel with it. Such a menu is stale: it
+    // is detached but still holds both document listeners, so retire it here,
+    // on the next key, and let that key through UNTOUCHED.
+    if (!panel.isConnected) {
+      closeCardMenu();
+      return;
+    }
+    if (e.key === 'Escape') {
+      // Esc is the app's PANIC key, unconditionally. Close this menu — a
+      // detached-but-live one would keep both document listeners behind the
+      // curtain — but do NOT stop or prevent anything: the same press must
+      // still reach the page's table and cover the page.
+      closeCardMenu();
+    }
+  };
+  const onPointerDown = (e) => {
+    if (panel.contains(e.target) || trigger.contains(e.target)) return;
+    closeCardMenu();
+  };
+
+  activeCardMenu = { trigger, panel, onKeydown, onPointerDown };
+  panel.hidden = false;
+  trigger.setAttribute('aria-expanded', 'true');
+  document.addEventListener('keydown', onKeydown, true);
+  document.addEventListener('pointerdown', onPointerDown);
+}
+
+/**
+ * Build a card's "⋯" overflow menu: the trigger button plus its (hidden) panel,
+ * wrapped in a .row__menu div. The wrapper earns its keep three times over — it
+ * is the panel's positioning context; it keeps the trigger from being a direct
+ * .btn child of .row__actions, whose "flex: 1 1 0" share would squeeze ▶ Play;
+ * and it is the subtree focusout watches, which is what dismisses the menu when
+ * focus leaves it in any direction.
+ *
+ * A DISCLOSURE, not the ARIA menu-button pattern — that pattern REQUIRES focus
+ * to move into the menu on open, and this one deliberately leaves focus on the
+ * trigger so the same key toggles it shut. Claiming role="menu"/"menuitem"
+ * while refusing the focus contract would describe the widget to a screen
+ * reader as something it is not, so the roles are gone, and aria-haspopup with
+ * them (it announces a menu/dialog/listbox, none of which this is). What is
+ * left — aria-expanded plus aria-controls — IS the whole disclosure contract.
+ *
+ * Nothing here carries btn--skip or btn--cardspeed (setCardState/setCardSpeed
+ * query those), and the wrapper is not a .row (j/k navigation walks those).
+ * @param {object} rec video record
+ * @param {object} handlers the row's handler bag; onStash is known present
+ * @returns {HTMLElement} the .row__menu wrapper
+ */
+function buildCardMenu(rec, handlers) {
+  // aria-controls needs a per-card id. A videoId is already URL-safe, but every
+  // id this module builds goes through encodeURIComponent — no exceptions.
+  const panelId = `row-menu-${encodeURIComponent(rec.videoId)}`;
+
+  const item = el('button', {
+    class: 'row__menu-item',
+    type: 'button',
+    text: 'Add to stash', // static string, never API data
+    onclick: () => {
+      // Close FIRST — and note it cannot double-close: closeCardMenu clears
+      // activeCardMenu before it hides the panel, so the focusout that hiding
+      // fires finds no menu of its own to dismiss.
+      closeCardMenu();
+      handlers.onStash(rec.videoId);
+    },
+  });
+
+  // A plain container needs no accessible name, so the aria-label that
+  // role="menu" once required is gone with it; the trigger keeps its own.
+  const panel = el('div', { class: 'row__menu-panel', id: panelId }, [item]);
+  panel.hidden = true;
+
+  const label = 'More actions';
+
+  const trigger = el('button', {
+    class: 'btn btn--menu',
+    type: 'button',
+    'aria-expanded': 'false',
+    'aria-controls': panelId,
+    'aria-label': label,
+    title: label,
+    text: '⋯', // U+22EF (midline ellipsis), static
+    onclick: () => {
+      // Focus never left, so a second Enter/Space on the still-focused trigger
+      // lands right back here and toggles the menu shut. No special-casing.
+      if (activeCardMenu && activeCardMenu.trigger === trigger) closeCardMenu();
+      else openCardMenu(trigger, panel);
+    },
+  });
+
+  const wrapper = el('div', { class: 'row__menu' }, [trigger, panel]);
+
+  // THE fix for a Tab that used to walk away leaving the menu open: focus
+  // leaving this subtree in any direction closes it — Tab off the item,
+  // Shift+Tab off the trigger, a click onto another control. A null
+  // relatedTarget (focus fell into the cross-origin player iframe, or nowhere)
+  // is not the usual "can't tell" problem here: all this widget needs to know is
+  // that focus is no longer inside it, and it is not — so closing is correct.
+  // The identity check keeps one card's stale listener from closing ANOTHER
+  // card's menu: clicking a second trigger swaps which menu is open (via
+  // pointerdown) before this focusout arrives.
+  wrapper.addEventListener('focusout', (e) => {
+    if (!activeCardMenu || activeCardMenu.panel !== panel) return;
+    if (e.relatedTarget && wrapper.contains(e.relatedTarget)) return;
+    closeCardMenu({ restoreFocus: false });
+  });
+
+  return wrapper;
+}
+
 /**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
- * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed) }
+ * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed),
+ *        onStash(id)? }. onStash is OPTIONAL, and its PRESENCE alone decides
+ *        whether the "⋯" overflow menu renders: stash-page.js passes no such
+ *        key, so its cards are exactly as they were.
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver (see buildChannelBadge)
  * @param {string} [skipLabel='Skip'] visible label for the mark button
@@ -567,10 +738,14 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     text: '↗ YouTube',
   });
 
+  // The "⋯" menu sits after Skip in BOTH footers — a non-embeddable video can
+  // still be stashed. It is null when the page passes no onStash; el() skips it.
+  const menu = typeof handlers.onStash === 'function' ? buildCardMenu(rec, handlers) : null;
+
   const actions = el(
     'div',
     { class: 'row__actions' },
-    noEmbed ? [youtubeBtn, skipBtn] : [playBtn, speedGroup, skipBtn]
+    noEmbed ? [youtubeBtn, skipBtn, menu] : [playBtn, speedGroup, skipBtn, menu]
   );
 
   const li = el(
@@ -596,7 +771,8 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
  * Render the queue list into `listEl`.
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
- * @param {object} handlers { onSkip, onPlay, onCardSpeed }
+ * @param {object} handlers { onSkip, onPlay, onCardSpeed, onStash? } — see
+ *        buildQueueRow; an optional onStash is what adds the "⋯" card menu
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver, threaded straight to buildQueueRow
  *        (see buildChannelBadge)
@@ -607,6 +783,9 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
  *        styles.css and setCardState key off it.
  */
 export function renderQueue(listEl, queue, handlers, resolveChannel, more = null, skipLabel = 'Skip') {
+  // Any open card menu belongs to a card we are about to discard: close it so
+  // its document listeners come off with it and the reference never dangles.
+  closeCardMenu();
   clear(listEl);
   for (const rec of queue) {
     listEl.append(buildQueueRow(rec, handlers, resolveChannel, skipLabel));

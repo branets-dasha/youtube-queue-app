@@ -1215,6 +1215,24 @@ const CARD_SPEED_KEYS = new Map([
   ['2', 2],
 ]);
 
+/**
+ * Index of the card that CONTAINS focus, or -1 when focus is outside this
+ * list altogether. Resolving by closest('.row') rather than by an exact match
+ * is what keeps the card shortcuts alive while focus sits on a control INSIDE
+ * a card — ▶ Play, Remove, a speed button — every one of which used to make
+ * them inert. Scoping is free: `rows` holds only this list's cards, so a .row
+ * from anywhere else answers -1. Mirrors subscriptions-page.js exactly.
+ *
+ * NOT for Enter/Space, which must match the .row exactly — see that branch.
+ * @param {HTMLElement[]} rows the queue list's .row elements, in order
+ * @param {Element|null} active document.activeElement
+ * @returns {number}
+ */
+function focusedCardIndex(rows, active) {
+  const card = active && active.closest ? active.closest('.row') : null;
+  return card ? rows.indexOf(card) : -1;
+}
+
 function onGlobalKeydown(e) {
   // PANIC KEY: Esc toggles the curtain, handled BEFORE any guard so it works
   // while typing in the add field and during onboarding. Ignore modifier combos.
@@ -1234,18 +1252,20 @@ function onGlobalKeydown(e) {
   const key = e.key.toLowerCase();
   const rows = Array.from(dom.queueList.querySelectorAll('.row'));
   const active = document.activeElement;
-  const idx = rows.indexOf(active);
+  const idx = focusedCardIndex(rows, active);
 
   if (key === 'j') {
-    // j = move BACK (previous/older card, upward in the oldest->newest list).
+    // j = move BACK (previous/older card, upward in the oldest->newest list);
+    // with nothing focused, enter at the first card. Both keys CLAMP at the
+    // ends of the list rather than doing nothing there, keeping this table
+    // identical to the subscriptions page's — where the clamp is also what
+    // gets focus out of a card menu this page does not have.
     e.preventDefault();
-    if (idx > 0) rows[idx - 1].focus();
-    else if (idx === -1 && rows.length) rows[0].focus();
+    if (rows.length) rows[idx > 0 ? idx - 1 : 0].focus();
   } else if (key === 'k') {
-    // k = move FORWARD (next card, downward).
+    // k = move FORWARD (next card, downward), clamped the same way.
     e.preventDefault();
-    if (idx < rows.length - 1) rows[idx + 1].focus();
-    else if (idx === -1 && rows.length) rows[0].focus();
+    if (rows.length) rows[idx >= 0 ? Math.min(idx + 1, rows.length - 1) : 0].focus();
   } else if (key === 'x') {
     // x = Remove: toggle the focused card between new and marked.
     if (idx >= 0) {
@@ -1267,11 +1287,15 @@ function onGlobalKeydown(e) {
     e.preventDefault();
     onUndo();
   } else if (key === 'enter') {
-    // Play the FOCUSED card. If a button/link is focused (idx === -1) do nothing
-    // here, so Enter activates that control normally.
-    if (idx >= 0) {
+    // Play the FOCUSED card — the ONE card shortcut that matches the .row
+    // EXACTLY instead of going through focusedCardIndex. Enter already activates
+    // a focused button or link natively, so acting on the card that CONTAINS
+    // that button would fire twice over. The inconsistency with x/1-5-2 is the
+    // point; do not tidy it away. (Space, below, is guarded the same way — by
+    // tag — for the same reason.)
+    if (rows[idx] === active) {
       e.preventDefault();
-      playVideo(rows[idx].dataset.videoId);
+      playVideo(active.dataset.videoId);
     }
   } else if (key === ' ') {
     // Space must NEVER scroll the page — but yield to a focused interactive
