@@ -932,9 +932,18 @@ function renderKeepingPlace() {
   if (pane) pane.scrollTop = scrollTop;
 }
 
-/** A card's focusable controls in DOM order — the index focus is restored by. */
+/**
+ * A card's focusable controls in DOM order — the index focus is restored by.
+ * Anything inside a hidden subtree is left out, because it cannot take focus:
+ * a card's "⋯" panel is hidden whenever no menu is open, and a re-render closes
+ * any that was, so restoring "the third button" onto an item in there would
+ * silently drop focus to <body>. Filtering on the way IN and the way OUT keeps
+ * the index meaning the same thing both times.
+ */
 function cardControls(card) {
-  return Array.from(card.querySelectorAll('a[href], button'));
+  return Array.from(card.querySelectorAll('a[href], button')).filter(
+    (control) => !control.closest('[hidden]')
+  );
 }
 
 // ---------------------------------------------------------------------------

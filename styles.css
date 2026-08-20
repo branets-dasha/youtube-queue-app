@@ -867,8 +867,14 @@ main {
   white-space: nowrap;
   cursor: pointer;
 }
-.row__menu-item:hover {
+.row__menu-item:hover:not(:disabled) {
   background: var(--surface-2);
+}
+/* An item is NOT a .btn (it has none of that class's box), so `.btn:disabled`
+   misses it — same dimming, spelled out here. */
+.row__menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .row__menu-item:focus-visible {
   outline: 2px solid var(--focus);

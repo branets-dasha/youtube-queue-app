@@ -382,7 +382,7 @@ function closeCardMenu({ restoreFocus = true } = {}) {
   const hadFocus = restoreFocus && open.panel.contains(document.activeElement);
   open.panel.hidden = true;
   open.trigger.setAttribute('aria-expanded', 'false');
-  // Back to the trigger, but ONLY from inside the panel — an Esc press, or the
+  // Back to the trigger, but ONLY from inside the panel — an Esc press, or an
   // item being used. Opening leaves focus on the trigger, so every other close
   // (focus already gone, or a pointerdown outside) has nothing to restore.
   if (hadFocus) open.trigger.focus();
@@ -456,31 +456,44 @@ function openCardMenu(trigger, panel) {
  *
  * Nothing here carries btn--skip or btn--cardspeed (setCardState/setCardSpeed
  * query those), and the wrapper is not a .row (j/k navigation walks those).
+ *
+ * THE ITEMS ARE THE PAGE'S, not this module's: it renders the descriptors it is
+ * handed and holds no policy about what a card can do.
  * @param {object} rec video record
- * @param {object} handlers the row's handler bag; onStash is known present
+ * @param {Array<{label:string,onSelect:Function,disabled?:boolean}>} items the
+ *        calling page's menu model for this record, known non-empty
  * @returns {HTMLElement} the .row__menu wrapper
  */
-function buildCardMenu(rec, handlers) {
+function buildCardMenu(rec, items) {
   // aria-controls needs a per-card id. A videoId is already URL-safe, but every
   // id this module builds goes through encodeURIComponent — no exceptions.
   const panelId = `row-menu-${encodeURIComponent(rec.videoId)}`;
 
-  const item = el('button', {
-    class: 'row__menu-item',
-    type: 'button',
-    text: 'Add to stash', // static string, never API data
-    onclick: () => {
-      // Close FIRST — and note it cannot double-close: closeCardMenu clears
-      // activeCardMenu before it hides the panel, so the focusout that hiding
-      // fires finds no menu of its own to dismiss.
-      closeCardMenu();
-      handlers.onStash(rec.videoId);
-    },
+  const itemNodes = items.map((item) => {
+    const node = el('button', {
+      class: 'row__menu-item',
+      type: 'button',
+      // Page-authored static strings, never API data — but text: is textContent
+      // either way, which is the rule this module keeps without exceptions.
+      text: item.label,
+      onclick: () => {
+        // Close FIRST — and note it cannot double-close: closeCardMenu clears
+        // activeCardMenu before it hides the panel, so the focusout that hiding
+        // fires finds no menu of its own to dismiss.
+        closeCardMenu();
+        item.onSelect();
+      },
+    });
+    // The PROPERTY, not the attribute: el() would setAttribute a `false` too,
+    // and `disabled="false"` still disables. An item is not a .btn, so
+    // styles.css gives .row__menu-item:disabled its own dimmed treatment.
+    if (item.disabled) node.disabled = true;
+    return node;
   });
 
   // A plain container needs no accessible name, so the aria-label that
   // role="menu" once required is gone with it; the trigger keeps its own.
-  const panel = el('div', { class: 'row__menu-panel', id: panelId }, [item]);
+  const panel = el('div', { class: 'row__menu-panel', id: panelId }, itemNodes);
   panel.hidden = true;
 
   const label = 'More actions';
@@ -525,9 +538,13 @@ function buildCardMenu(rec, handlers) {
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
  * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed),
- *        onStash(id)? }. onStash is OPTIONAL, and its PRESENCE alone decides
- *        whether the "⋯" overflow menu renders: stash-page.js passes no such
- *        key, so its cards are exactly as they were.
+ *        cardMenu(rec)? }. cardMenu is OPTIONAL and returns this card's menu
+ *        model — an array of { label, onSelect, disabled? } descriptors; its
+ *        presence AND a non-empty return are together what render the "⋯"
+ *        overflow menu, so a page can suppress it per record without a second
+ *        flag. stash-page.js passes no such key, so its cards render none. It
+ *        runs during row construction, once per card: keep it cheap and
+ *        side-effect-free.
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver (see buildChannelBadge)
  * @param {string} [skipLabel='Skip'] visible label for the mark button
@@ -739,8 +756,10 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   });
 
   // The "⋯" menu sits after Skip in BOTH footers — a non-embeddable video can
-  // still be stashed. It is null when the page passes no onStash; el() skips it.
-  const menu = typeof handlers.onStash === 'function' ? buildCardMenu(rec, handlers) : null;
+  // still be stashed. It is null when the page offers this card no commands at
+  // all (no cardMenu, or an empty return); el() skips a null child.
+  const items = typeof handlers.cardMenu === 'function' ? handlers.cardMenu(rec) || [] : [];
+  const menu = items.length ? buildCardMenu(rec, items) : null;
 
   const actions = el(
     'div',
@@ -771,8 +790,9 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
  * Render the queue list into `listEl`.
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
- * @param {object} handlers { onSkip, onPlay, onCardSpeed, onStash? } — see
- *        buildQueueRow; an optional onStash is what adds the "⋯" card menu
+ * @param {object} handlers { onSkip, onPlay, onCardSpeed, cardMenu? } — see
+ *        buildQueueRow; an optional cardMenu(rec) is what supplies the "⋯" card
+ *        menu's items, and a non-empty return is what renders it
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver, threaded straight to buildQueueRow
  *        (see buildChannelBadge)
