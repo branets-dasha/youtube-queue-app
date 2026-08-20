@@ -119,7 +119,6 @@ const state = {
   visible: [], // derived: computeVisible(records, FLOOR) — render list (any state)
   queue: [], // derived: computeQueue(records, FLOOR) — still-'new' subset, for the count
   handledThisSession: 0,
-  lastAction: null, // { videoId, prevState } for undo
   refreshing: false,
   liking: false, // a Like (possibly incl. its authorization) is in flight
   playing: null, // videoId currently loaded in the on-page player
@@ -795,12 +794,11 @@ async function setVideoState(videoId, nextState, opts = {}) {
   // or pruned, so the list stays perfectly stable across rapid Skip succession.
   rec.state = nextState;
   applyHandledDelta(prevState, nextState);
-  state.lastAction = { videoId, prevState };
 
   // When "hide handled" is ON and this video just became marked, REMOVE only its
   // card (lightweight — no full re-render, no scroll jump), advancing focus to the
   // next (or previous) card. Otherwise keep the grey-in-place behaviour: marked
-  // videos stay visible/greyed until CLEANUP; the `u` shortcut + toggle-off undo.
+  // videos stay visible/greyed until CLEANUP, and toggling off un-marks them.
   const removedCard = state.hideMarked && nextState !== STATE_NEW && !!card;
   if (removedCard) {
     let focusTarget = null;
@@ -839,9 +837,6 @@ async function setVideoState(videoId, nextState, opts = {}) {
       setCardState(card, prevState);
     }
     refreshMarkerAndStats();
-    if (state.lastAction && state.lastAction.videoId === videoId) {
-      state.lastAction = null;
-    }
     handleError(err);
   }
 }
@@ -940,9 +935,9 @@ async function addCardToStash(videoId, opts = {}) {
 }
 
 /**
- * Keep the "handled this session" tally consistent across marks, toggles and
- * undos: +1 when a 'new' video becomes handled, -1 when a handled video reverts
- * to 'new', 0 when switching between two handled states.
+ * Keep the "handled this session" tally consistent across marks and toggles:
+ * +1 when a 'new' video becomes handled, -1 when a handled video reverts to
+ * 'new', 0 when switching between two handled states.
  */
 function applyHandledDelta(fromState, toState) {
   if (fromState === STATE_NEW && toState !== STATE_NEW) {
@@ -992,45 +987,6 @@ async function onCleanup() {
     recompute();
     showToast('Cleaned up handled videos.', { type: 'success' });
   } catch (err) {
-    handleError(err);
-  }
-}
-
-async function onUndo() {
-  const action = state.lastAction;
-  if (!action) return;
-
-  const rec = state.records.find((r) => r.videoId === action.videoId);
-  if (!rec) {
-    // The video is no longer present (e.g. pruned by a reload). Nothing to undo.
-    state.lastAction = null;
-    return;
-  }
-
-  const curState = rec.state;
-  const card = findCard(action.videoId);
-
-  // Optimistically revert to the pre-mark state and un-grey the card in place.
-  rec.state = action.prevState;
-  applyHandledDelta(curState, action.prevState);
-  if (card) setCardState(card, action.prevState);
-  // Un-marking a video inside the handled prefix moves the cutoff BACK (to the
-  // floor if it was the oldest); that video stays visible in the queue.
-  refreshMarkerAndStats();
-  // Like the marking path, this optimistic update skips render(), so re-evaluate
-  // the playback controls directly: un-marking can make the queue playable again
-  // (the empty player's "Start the queue" button).
-  updatePlayingControls();
-  state.lastAction = null;
-
-  try {
-    await putVideo(rec);
-  } catch (err) {
-    // Roll back the optimistic revert on persistence failure.
-    rec.state = curState;
-    applyHandledDelta(action.prevState, curState);
-    if (card) setCardState(card, curState);
-    refreshMarkerAndStats();
     handleError(err);
   }
 }
@@ -1682,7 +1638,7 @@ function cyclePlaybackSpeed(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. QUEUE: j/k move, x skip, t add to stash, u undo, Enter
+// Keyboard shortcuts. QUEUE: j/k move, x skip, t add to stash, Enter
 // play focused card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→
 // seek, -/+ speed, n next, l like, m mute, f fullscreen. Ignored while typing in
 // an input/textarea, during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays
@@ -1782,9 +1738,6 @@ function onGlobalKeydown(e) {
       e.preventDefault();
       addCardToStash(rows[idx].dataset.videoId, { advanceFocus: true });
     }
-  } else if (key === 'u') {
-    e.preventDefault();
-    onUndo();
   } else if (key === 'enter') {
     // Play the FOCUSED card — the ONE card shortcut that matches the .row
     // EXACTLY instead of going through focusedCardIndex. Enter already activates

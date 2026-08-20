@@ -108,7 +108,6 @@ const state = {
   booted: false, // the store read + settings restore have run once this load
   adding: false, // an add is in flight (guards the form AND the token request)
   liking: false, // a like is in flight (guards the button AND the token request)
-  lastAction: null, // { videoId, prevState } for undo
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
   playerCaughtUp: false, // TEXT-selector only: playback stopped because the stash ran out
@@ -136,9 +135,9 @@ const dom = {};
 // content, which is what lets a remote un-mark land (re-adding a stashed video
 // revives it — see addToStash).
 //
-// Refcounted rather than a plain Set: two writes for one videoId can overlap (x
-// then u, a speed toggle during a mark), and the first to settle must not clear
-// the guard the second is still standing behind.
+// Refcounted rather than a plain Set: two writes for one videoId can overlap (a
+// mark then an un-mark, a speed toggle during a mark), and the first to settle
+// must not clear the guard the second is still standing behind.
 // ---------------------------------------------------------------------------
 
 const inFlightWrites = new Map(); // videoId -> how many writes are open for it
@@ -690,7 +689,7 @@ function describeAddFailure(err) {
 }
 
 // ---------------------------------------------------------------------------
-// Marking (Remove), undo, and the Clean up sweep
+// Marking (Remove) and the Clean up sweep
 // ---------------------------------------------------------------------------
 
 /**
@@ -709,7 +708,6 @@ async function setVideoState(videoId, nextState, opts = {}) {
   const card = findCard(videoId);
 
   rec.state = nextState;
-  state.lastAction = { videoId, prevState };
 
   if (card) {
     setCardState(card, nextState);
@@ -730,9 +728,6 @@ async function setVideoState(videoId, nextState, opts = {}) {
     if (card) setCardState(card, prevState);
     updatePlayingControls();
     updateCleanupUi();
-    if (state.lastAction && state.lastAction.videoId === videoId) {
-      state.lastAction = null;
-    }
     handleError(err);
   }
 }
@@ -750,37 +745,6 @@ function toggleRemove(videoId, opts = {}) {
   if (!rec) return;
   const next = rec.state !== STATE_NEW ? STATE_NEW : STATE_SKIPPED;
   return setVideoState(videoId, next, opts);
-}
-
-async function onUndo() {
-  const action = state.lastAction;
-  if (!action) return;
-
-  const rec = state.records.find((r) => r.videoId === action.videoId);
-  if (!rec) {
-    // Already swept (Clean up / reload). Nothing to undo.
-    state.lastAction = null;
-    return;
-  }
-
-  const curState = rec.state;
-  const card = findCard(action.videoId);
-
-  rec.state = action.prevState;
-  if (card) setCardState(card, action.prevState);
-  updatePlayingControls();
-  updateCleanupUi();
-  state.lastAction = null;
-
-  try {
-    await persistRecord(rec);
-  } catch (err) {
-    rec.state = curState;
-    if (card) setCardState(card, curState);
-    updatePlayingControls();
-    updateCleanupUi();
-    handleError(err);
-  }
 }
 
 /**
@@ -1399,7 +1363,7 @@ function updateDefaultSpeedButton() {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. STASH: j/k move, x remove, u undo, Enter play focused
+// Keyboard shortcuts. STASH: j/k move, x remove, Enter play focused
 // card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→ seek, -/+ speed,
 // n next, l like, m mute, f fullscreen. Ignored while typing in an input (the
 // add field lives on this page, so this matters more here), during onboarding,
@@ -1487,9 +1451,6 @@ function onGlobalKeydown(e) {
       const rec = state.records.find((r) => r.videoId === videoId);
       if (!rec || rec.embeddable !== false) onCardSpeed(videoId, CARD_SPEED_KEYS.get(key));
     }
-  } else if (key === 'u') {
-    e.preventDefault();
-    onUndo();
   } else if (key === 'enter') {
     // Play the FOCUSED card — the ONE card shortcut that matches the .row
     // EXACTLY instead of going through focusedCardIndex. Enter already activates
