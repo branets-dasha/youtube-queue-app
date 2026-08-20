@@ -354,7 +354,7 @@ export function renderDescription(container, rec, { onSeek } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Card "⋯" overflow menu
+// Card menu
 // ---------------------------------------------------------------------------
 
 // The ONE open card menu, module-wide. Keeping the reference here is what makes
@@ -396,7 +396,7 @@ function closeCardMenu({ restoreFocus = true } = {}) {
  * on the way OUT is the wrapper's own focusout listener (see buildCardMenu);
  * these two cover the cases focus never moves for: Esc, and a pointerdown on
  * something unfocusable.
- * @param {HTMLElement} trigger the "⋯" button
+ * @param {HTMLElement} trigger the card menu's trigger button
  * @param {HTMLElement} panel the menu panel
  */
 function openCardMenu(trigger, panel) {
@@ -439,7 +439,7 @@ function openCardMenu(trigger, panel) {
 }
 
 /**
- * Build a card's "⋯" overflow menu: the trigger button plus its (hidden) panel,
+ * Build a card's overflow menu: the trigger button plus its (hidden) panel,
  * wrapped in a .row__menu div. The wrapper earns its keep three times over — it
  * is the panel's positioning context; it keeps the trigger from being a direct
  * .btn child of .row__actions, whose "flex: 1 1 0" share would squeeze ▶ Play;
@@ -505,7 +505,6 @@ function buildCardMenu(rec, items) {
     'aria-controls': panelId,
     'aria-label': label,
     title: label,
-    text: '⋯', // U+22EF (midline ellipsis), static
     onclick: () => {
       // Focus never left, so a second Enter/Space on the still-focused trigger
       // lands right back here and toggles the menu shut. No special-casing.
@@ -540,9 +539,9 @@ function buildCardMenu(rec, items) {
  * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed),
  *        cardMenu(rec)? }. cardMenu is OPTIONAL and returns this card's menu
  *        model — an array of { label, onSelect, disabled? } descriptors; its
- *        presence AND a non-empty return are together what render the "⋯"
- *        overflow menu, so a page can suppress it per record without a second
- *        flag. stash-page.js passes no such key, so its cards render none. It
+ *        presence AND a non-empty return are together what render the card
+ *        menu, so a page can suppress it per record without a second flag.
+ *        stash-page.js passes no such key, so its cards render none. It
  *        runs during row construction, once per card: keep it cheap and
  *        side-effect-free.
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
@@ -755,7 +754,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     text: '↗ YouTube',
   });
 
-  // The "⋯" menu sits after Skip in BOTH footers — a non-embeddable video can
+  // The card menu sits after Skip in BOTH footers — a non-embeddable video can
   // still be stashed. It is null when the page offers this card no commands at
   // all (no cardMenu, or an empty return); el() skips a null child.
   const items = typeof handlers.cardMenu === 'function' ? handlers.cardMenu(rec) || [] : [];
@@ -791,7 +790,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
  * @param {HTMLElement} listEl the <ul>
  * @param {Array<object>} queue records (already sorted oldest-first)
  * @param {object} handlers { onSkip, onPlay, onCardSpeed, cardMenu? } — see
- *        buildQueueRow; an optional cardMenu(rec) is what supplies the "⋯" card
+ *        buildQueueRow; an optional cardMenu(rec) is what supplies the card
  *        menu's items, and a non-empty return is what renders it
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver, threaded straight to buildQueueRow

@@ -858,7 +858,7 @@ function toggleSkip(videoId, opts = {}) {
 }
 
 /**
- * "Add to stash" from a card's "⋯" menu: copy this video into the STASH object
+ * "Add to stash" from a card's menu: copy this video into the STASH object
  * store, then mark the source card skipped so this queue moves past it.
  *
  * NO API call and no ensureAuthorized: the record we already hold is complete —
@@ -1490,7 +1490,7 @@ function render() {
       onPlay: (id) => playVideo(id),
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
       // This page's menu model for a card — one command today. Returning a
-      // non-empty array is what renders the "⋯" menu at all (see
+      // non-empty array is what renders the card menu at all (see
       // buildQueueRow); stash-page.js passes no cardMenu, so its cards keep the
       // same three controls. It runs per card during render: cheap, no effects.
       cardMenu: (rec) => [
@@ -1659,7 +1659,7 @@ const CARD_SPEED_KEYS = new Map([
  * Index of the card that CONTAINS focus, or -1 when focus is outside this
  * list altogether. Resolving by closest('.row') rather than by an exact match
  * is what keeps the card shortcuts alive while focus sits on a control INSIDE
- * a card — the "⋯" menu trigger, its open menu item, ▶ Play, Skip, a speed
+ * a card — the card menu's trigger, its open item, ▶ Play, Skip, a speed
  * button — every one of which used to make them inert. Scoping is free: `rows`
  * holds only this list's cards, so a .row from anywhere else answers -1.
  *
@@ -1697,7 +1697,7 @@ function onGlobalKeydown(e) {
   if (key === 'j') {
     // j = move BACK (previous/older card, upward in the oldest->newest list);
     // with nothing focused, enter at the first card. Landing ON the .row is
-    // also how j/k get focus OUT of an open "⋯" menu — it leaves the menu
+    // also how j/k get focus OUT of an open card menu — it leaves the menu
     // wrapper, whose focusout dismisses it — so both CLAMP at the ends of the
     // list rather than doing nothing there, or a menu on the first (j) or last
     // (k) card would have no j/k exit. Clamping is invisible otherwise: it
@@ -1729,7 +1729,7 @@ function onGlobalKeydown(e) {
     }
   } else if (key === 't') {
     // t = add the FOCUSED card to the stash, through the same addCardToStash the
-    // "⋯" menu item calls — so a keyboard user never has to open that menu.
+    // card menu item calls — so a keyboard user never has to open that menu.
     // Advances focus like x, so a run of t's walks the queue rather than firing
     // twice on one card (the second add finds the video already stashed and,
     // with nothing new to say about it, writes nothing — but it would still

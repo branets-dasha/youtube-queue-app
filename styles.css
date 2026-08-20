@@ -740,7 +740,7 @@ main {
 .row__actions > .btn--skip {
   flex: 0 0 31.5%; /* ≈ the width Skip had when it split the footer with Play */
 }
-/* A footer that also carries the "⋯" menu has ~40px less to share (trigger +
+/* A footer that also carries the card menu has ~40px less to share (trigger +
    gap) inside a queue pane fixed at 400px, so it tightens its own gaps a little
    and Skip gives back the rest — rather than squeezing ▶ Play below its label
    width, which (min-width: auto) would overflow the card instead of shrinking.
@@ -797,7 +797,7 @@ main {
   color: var(--primary-text);
 }
 
-/* ---- Card "⋯" overflow menu ---- */
+/* ---- Card menu ---- */
 
 /* A WRAPPER, not a bare .btn child of the footer: `.row__actions > .btn` takes
    an equal flex share, which would squeeze ▶ Play. It is also the panel's
@@ -808,28 +808,24 @@ main {
   flex: 0 0 auto;
 }
 /* Compact square trigger, sized like the speed buttons so the footer keeps one
-   rhythm. Its ghost look comes from the `.row__actions .btn` rule above.
-
-   The font-family is NOT cosmetic: a <button> does not inherit font-family and
-   .btn sets none, so the ⋯ would render in the UA default (Arial) — which has no
-   U+22EF. Windows and macOS still reach a math font by blind per-character
-   fallback, but a Linux visitor whose fonts have none gets tofu. So name one
-   default-installed font per platform, each verified to contain U+22EF: Segoe UI
-   Symbol (Windows), Apple Symbols (macOS), Noto Sans Math then DejaVu Sans
-   (Linux). Noto leads DejaVu because DejaVu draws its ellipsis dots SQUARE (its
-   own U+2026 matches — Bitstream Vera house style), so Noto keeps the round dots
-   the other platforms show. `math` is the CSS Fonts 4 generic (Chrome 109+, FF
-   149+, Safari 26.2+) — a last targeted shot at whatever math font exists before
-   the blind fallback; where unsupported it parses as a family name matching
-   nothing and falls through to sans-serif, so it is free to keep. Do NOT add
-   "Noto Sans Symbols 2" (7 of 256 Mathematical Operators, not U+22EF) or
-   Liberation Sans — neither has the glyph, despite what the Noto docs imply. */
+   rhythm. Its ghost look comes from the `.row__actions .btn` rule above. No
+   font-family: U+00B7 is Latin-1 and present in every font a button can fall
+   back to, Arial included, so the trigger renders in the same default face as
+   ▶ Play and ↗ YouTube instead of being the one control that names its own. */
 .btn--menu {
   width: 32px;
   padding: 6px 0;
-  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Math", "DejaVu Sans", math, sans-serif;
   font-size: 1.05rem;
   line-height: 1;
+}
+/* The trigger’s glyph lives HERE, not in ui.js: it is pure decoration, and the
+   button carries no text content at all, so nothing leaks into the accessible
+   name that aria-label="More actions" computes. Written as CSS escapes rather
+   than literal bytes — this is the stylesheet’s only `content`, and an escape
+   cannot be mangled by a charset mismatch. \B7 is U+00B7 MIDDLE DOT, three of
+   them; the escape ends at the next \, so no separator is needed. */
+.btn--menu::before {
+  content: "\B7\B7\B7";
 }
 /* Opens UPWARD, right-aligned. The queue pane clips (overflow-y: auto) and this
    footer is the card's LAST element, so upward keeps the panel over the card's
