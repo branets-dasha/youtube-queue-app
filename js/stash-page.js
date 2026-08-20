@@ -13,6 +13,10 @@
 // Clean up button deletes every marked record from ANYWHERE in the list — the
 // state-based stashToClean, not the prefix-based videosToClean. The same sweep
 // runs on every reload, before the first paint.
+//
+// It is NOT the only writer of the `stash` store — index.html's "Add to stash"
+// writes it too, from a tab holding a different lock — so this page listens for
+// that tab's writes and reconciles (see "Cross-tab sync" below).
 
 import {
   STATE_NEW,
@@ -20,6 +24,7 @@ import {
   QUEUE_DISPLAY_LIMIT,
   DEFAULT_PLAYBACK_SPEED,
   STASH_TAB_LOCK,
+  STASH_SYNC_COALESCE_MS,
 } from './config.js';
 import { migrateLocalStorage } from './migrations.js';
 import {
@@ -28,6 +33,7 @@ import {
   getAllStashVideos,
   putStashVideo,
   deleteStashVideos,
+  onStashChanged,
   loadChannels,
   loadChannelPrefs,
   getPlaybackSpeed,
@@ -51,6 +57,7 @@ import {
   sortStash,
   stashToClean,
   addToStash,
+  reconcileStash,
   firstPlayable,
   nextPlayable,
   resumeStart,
@@ -116,6 +123,47 @@ let curtain = null;
 
 // DOM references, populated in init().
 const dom = {};
+
+// ---------------------------------------------------------------------------
+// In-flight stash writes
+//
+// Every write this page makes is OPTIMISTIC — the record and its card change in
+// memory first, and the putStashVideo is awaited afterwards — so between those
+// two moments DISK IS BEHIND MEMORY for that one videoId. That window is exactly
+// where a cross-tab signal must NOT adopt what it re-reads (it would un-mark the
+// card the user just clicked), and this set is exactly what reconcileStash takes
+// as its third argument. Everything NOT in here is free to take the other tab's
+// content, which is what lets a remote un-mark land (re-adding a stashed video
+// revives it — see addToStash).
+//
+// Refcounted rather than a plain Set: two writes for one videoId can overlap (x
+// then u, a speed toggle during a mark), and the first to settle must not clear
+// the guard the second is still standing behind.
+// ---------------------------------------------------------------------------
+
+const inFlightWrites = new Map(); // videoId -> how many writes are open for it
+
+/**
+ * THE stash write for this page — nothing else in this module calls
+ * putStashVideo, so the guard above cannot be forgotten at a new write site (the
+ * same argument that keeps the broadcast inside store.js's putOne). Returns the
+ * write's own promise, so every call site keeps its await / .catch() exactly as
+ * it was, and releases the guard when the write SETTLES: a failed write is
+ * followed by a revert to what disk already says, so there is nothing left to
+ * protect either way.
+ * @param {object} rec the record to persist (a whole-record upsert)
+ * @returns {Promise<void>}
+ */
+function persistRecord(rec) {
+  const videoId = rec && rec.videoId;
+  if (!videoId) return putStashVideo(rec); // nothing to key the guard on
+  inFlightWrites.set(videoId, (inFlightWrites.get(videoId) || 0) + 1);
+  return putStashVideo(rec).finally(() => {
+    const open = (inFlightWrites.get(videoId) || 0) - 1;
+    if (open > 0) inFlightWrites.set(videoId, open);
+    else inFlightWrites.delete(videoId);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -242,6 +290,10 @@ function cacheDom() {
   dom.cleanupBtn = byId('cleanup-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
 
+  // The queue PANE, not the list: the pane is the scroll container (selected by
+  // class, there's no id), so a re-render nobody asked for can put its scrollTop
+  // back — see renderKeepingPlace.
+  dom.queuePane = document.querySelector('.workspace__queue');
   dom.queueList = byId('queue-list');
   dom.emptyState = byId('empty-state');
   dom.curtain = byId('curtain');
@@ -289,6 +341,11 @@ function bindEvents() {
   if (dom.startQueueBtn) dom.startQueueBtn.addEventListener('click', onStartQueue);
   if (dom.skipBtn) dom.skipBtn.addEventListener('click', onSkipNext);
   if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
+
+  // Cross-tab sync: index.html's "Add to stash" writes this page's store from
+  // another tab. store.js announces every committed stash write; a tab never
+  // hears its OWN, so this only ever fires for someone else's.
+  onStashChanged(onOtherTabWroteStash);
 
   document.addEventListener('keydown', onGlobalKeydown);
 
@@ -437,6 +494,39 @@ function setAdding(adding) {
   if (dom.addBtn) dom.addBtn.disabled = adding;
 }
 
+/**
+ * Finish an add that turned out to be a DUPLICATE — the shared tail of both
+ * routes into it, the one that never reached the API and the one that did.
+ *
+ * A duplicate is no longer always a no-op (addToStash revives one that was
+ * marked Remove, and takes an explicit incoming speed), so the toast has to tell
+ * the two apart: "already in your stash" alone would be a lie by omission the
+ * moment a re-add un-marks something. It persists ONLY when something actually
+ * changed — that is what `changed` is for, and what the by-identity array on the
+ * other branch is for.
+ * @param {{records:Array<object>, changed:boolean, record:object}} result from addToStash
+ */
+async function applyDuplicate({ records, changed, record }) {
+  if (!changed) {
+    showToast('That video is already in your stash.', { type: 'info' });
+    scrollToCard(record.videoId);
+    return;
+  }
+  try {
+    await persistRecord(record);
+  } catch (err) {
+    // Memory still holds the OLD record (the swap below has not run), so there
+    // is nothing to revert — just route it, which raises the halt screen for a
+    // fatal storage state.
+    handleError(err);
+    return;
+  }
+  state.records = sortStash(records); // the updated COPY, at its same place
+  render();
+  showToast('That video is already in your stash — updated it.', { type: 'success' });
+  scrollToCard(record.videoId);
+}
+
 async function onAddSubmit(e) {
   e.preventDefault();
   // A second submit while one is in flight would hit auth.js's single callback
@@ -454,12 +544,15 @@ async function onAddSubmit(e) {
     return;
   }
 
-  // DUPLICATE: leave the existing record EXACTLY as it is — same position, same
-  // addedAt, same Remove mark — and just point at it. No write, no API call.
-  const existing = state.records.find((r) => r.videoId === videoId);
-  if (existing) {
-    showToast('That video is already in your stash.', { type: 'info' });
-    scrollToCard(videoId);
+  // DUPLICATE, and we know it WITHOUT the lookup or the token: the record is
+  // already here, keeping its position and its addedAt whatever we do next. What
+  // an add can still do to it is what addToStash does to any duplicate — revive
+  // it if it was marked Remove — so it goes through that one function instead of
+  // a second copy of the rule. The id is all we know about the paste at this
+  // point, and all the duplicate branch reads: a pasted link carries no
+  // preferredSpeed, so the stashed speed is kept either way.
+  if (state.records.some((r) => r.videoId === videoId)) {
+    await applyDuplicate(addToStash(state.records, { videoId }));
     return;
   }
 
@@ -493,18 +586,19 @@ async function onAddSubmit(e) {
     // deliberately NOT consulted — addToStash reads the leaf
     // channelPreferredSpeed, because Ignore governs what gets FETCHED by
     // subscription and nothing here is fetched by subscription.
-    const { records, added, record } = addToStash(state.records, incoming, {
+    const result = addToStash(state.records, incoming, {
       addedAt: new Date().toISOString(),
       prefs: loadChannelPrefs(),
     });
-    if (!added) {
-      // Raced with another add of the same id: still no mutation, by contract.
-      showToast('That video is already in your stash.', { type: 'info' });
-      scrollToCard(record.videoId);
+    if (!result.added) {
+      // It arrived while we were looking it up — the other tab stashed it, or a
+      // racing add of our own. Finish it as the duplicate it now is.
+      await applyDuplicate(result);
       return;
     }
+    const { records, record } = result;
 
-    await putStashVideo(record);
+    await persistRecord(record);
     state.records = sortStash(records);
     render();
     if (dom.urlInput) dom.urlInput.value = '';
@@ -630,7 +724,7 @@ async function setVideoState(videoId, nextState, opts = {}) {
   updateCleanupUi();
 
   try {
-    await putStashVideo(rec);
+    await persistRecord(rec);
   } catch (err) {
     rec.state = prevState;
     if (card) setCardState(card, prevState);
@@ -679,7 +773,7 @@ async function onUndo() {
   state.lastAction = null;
 
   try {
-    await putStashVideo(rec);
+    await persistRecord(rec);
   } catch (err) {
     rec.state = curState;
     if (card) setCardState(card, curState);
@@ -740,6 +834,107 @@ function updateCleanupUi() {
   const n = stashToClean(state.records).length;
   dom.cleanupBtn.textContent = `Clean up (${n})`;
   dom.cleanupBtn.disabled = n === 0;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-tab sync: the OTHER tab wrote the `stash` store
+//
+// index.html's "Add to stash" writes this store from a tab holding a different
+// lock — inserting a record, or UPDATING one already here (re-adding a stashed
+// video un-marks it) — so this page can be looking at a list that has already
+// moved on.
+// store.js posts a bare SIGNAL on every committed stash write and we re-READ the
+// store here: the message carries no records because IndexedDB is the single
+// source of truth, and a payload would go stale the moment a message was missed.
+//
+// One-way by design. subscriptions-page.js subscribes to NOTHING — it holds no
+// stash state to keep fresh (see the note at its addCardToStash).
+// ---------------------------------------------------------------------------
+
+// A signal is already waiting out its coalescing timer. A burst of adds in the
+// other tab therefore costs ONE re-read and ONE render, not one of each.
+let syncPending = false;
+
+/** Handler for the store's cross-tab signal (never fired by our own writes). */
+function onOtherTabWroteStash() {
+  // Before bootApp() there is no in-memory list to reconcile — the setup panel
+  // is up, or the store read has not run yet — and that load reads the current
+  // stash for itself.
+  if (!state.booted || syncPending) return;
+  syncPending = true;
+  setTimeout(() => {
+    syncPending = false;
+    syncFromStore();
+  }, STASH_SYNC_COALESCE_MS);
+}
+
+/** Re-read the stash and reconcile it into what this page is holding. */
+async function syncFromStore() {
+  let fresh;
+  try {
+    fresh = await getAllStashVideos();
+  } catch (err) {
+    // Nobody asked for this read, so a transient failure stays quiet (the next
+    // signal, or a reload, tries again). A FATAL db state is bigger than this
+    // sync and must surface.
+    reportIfFatalDb(err);
+    return;
+  }
+
+  // Content comes from the re-read for everything EXCEPT the videoIds we have a
+  // write in flight for — see reconcileStash. Those are the ones disk is behind
+  // memory on (marking here is optimistic), and adopting them would un-mark the
+  // card under the user; every other record has to be free to change, or an
+  // un-mark made in the other tab would never appear here.
+  const { records, changed } = reconcileStash(state.records, fresh, inFlightWrites);
+  if (!changed) return; // nothing visible moved: leave the list alone entirely
+
+  state.records = records; // render() sorts, as every other writer here does
+  renderKeepingPlace();
+}
+
+/**
+ * render(), with the queue pane's scroll position and the user's place in the
+ * list put back afterwards. renderQueue() empties the <ul> and rebuilds it, so
+ * an unprompted re-render would otherwise drop focus to <body> and — the list
+ * momentarily having no height — let the pane's scrollTop clamp to 0. Every
+ * OTHER render() call site follows the user's own gesture and then places focus
+ * or scroll deliberately (Clean up focuses the first card, an add scrolls to the
+ * new one), which is why plain render() has never needed this; a cross-tab
+ * signal is the first re-render nobody asked for.
+ *
+ * The focused control comes back by INDEX among its card's buttons/links rather
+ * than by identity (that node is gone) — exact, because a card that survives a
+ * reconcile is rebuilt from the very same record. Focus lands on the card itself
+ * when the card, not a control inside it, had it. The PLAYER is untouched: it
+ * lives in the other pane and render() only rebuilds this list.
+ */
+function renderKeepingPlace() {
+  const pane = dom.queuePane;
+  const scrollTop = pane ? pane.scrollTop : 0;
+
+  const active = document.activeElement;
+  const card = active && dom.queueList.contains(active) ? active.closest('.row') : null;
+  const focusedId = card ? card.dataset.videoId : null;
+  const controlIndex = card ? cardControls(card).indexOf(active) : -1;
+
+  render();
+
+  if (focusedId) {
+    const rebuilt = findCard(focusedId);
+    if (rebuilt) {
+      const control = controlIndex >= 0 ? cardControls(rebuilt)[controlIndex] : null;
+      // preventScroll: focusing scrolls the card into view by default, which
+      // would fight the scroll restore below.
+      (control || rebuilt).focus({ preventScroll: true });
+    }
+  }
+  if (pane) pane.scrollTop = scrollTop;
+}
+
+/** A card's focusable controls in DOM order — the index focus is restored by. */
+function cardControls(card) {
+  return Array.from(card.querySelectorAll('a[href], button'));
 }
 
 // ---------------------------------------------------------------------------
@@ -982,7 +1177,7 @@ function onCardSpeed(videoId, speed) {
   if (!rec) return;
   const wasActive = rec.preferredSpeed === speed;
   rec.preferredSpeed = wasActive ? undefined : speed; // click active -> toggle off
-  putStashVideo(rec).catch(reportIfFatalDb); // persist (whole-record write)
+  persistRecord(rec).catch(reportIfFatalDb); // persist (whole-record write)
   const card = findCard(videoId);
   if (card) setCardSpeed(card, rec.preferredSpeed);
   if (!wasActive && state.playing === videoId) onSpeed(speed);
@@ -1005,12 +1200,12 @@ function onPlayerProgress(videoId, seconds) {
   const pos = Math.floor(seconds || 0);
   if (rec.positionSeconds === pos) return;
   rec.positionSeconds = pos;
-  putStashVideo(rec).catch(reportIfFatalDb); // best-effort throttled persist
+  persistRecord(rec).catch(reportIfFatalDb); // best-effort throttled persist
 }
 
 /** Best-effort capture + persist of the current position on page hide/unload. */
 function flushProgress() {
-  capturePosition(); // -> onPlayerProgress -> putStashVideo
+  capturePosition(); // -> onPlayerProgress -> persistRecord
 }
 
 // --- Like button (player only) ---
@@ -1082,7 +1277,7 @@ async function onLike() {
 
     try {
       await rateVideo(videoId, nextRating); // ~50 quota units; writes to YouTube
-      putStashVideo(rec).catch(reportIfFatalDb); // persist the local liked flag
+      persistRecord(rec).catch(reportIfFatalDb); // persist the local liked flag
     } catch (err) {
       if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
         // Write scope not granted yet. forceNew, because the token we already
@@ -1094,7 +1289,7 @@ async function onLike() {
           showToast('Requesting YouTube access to like videos…', { type: 'info' });
           await ensureAuthorized(state.clientId, { forceNew: true });
           await rateVideo(videoId, nextRating);
-          putStashVideo(rec).catch(reportIfFatalDb); // persist on success
+          persistRecord(rec).catch(reportIfFatalDb); // persist on success
           return;
         } catch (e2) {
           revert();

@@ -22,6 +22,10 @@
 //     either page's single-tab guard: another tab owns that queue, so this page
 //     must not write, and the user fixes it the same way (close the other tab,
 //     reload).
+//   - Every committed write to the `stash` store announces itself on a
+//     BroadcastChannel, so a stash.html open in another tab can re-read and
+//     reconcile without a reload (see the cross-tab sync section below). The
+//     `videos` store has no such announcement, on purpose.
 //
 // All video APIs are async (Promise-returning).
 
@@ -39,6 +43,7 @@ import {
   IDB_STORE_VIDEOS,
   IDB_STORE_STASH,
   IDB_KEYPATH,
+  STASH_SYNC_CHANNEL,
 } from './config.js';
 import { migrateVideos } from './migrations.js';
 
@@ -370,6 +375,85 @@ export function standDownForOtherTab() {
   if (dbPromise) dbPromise.then((db) => db && db.close()).catch(() => {});
 }
 
+// ---------------------------------------------------------------------------
+// Cross-tab sync for the STASH store (BroadcastChannel)
+//
+// Only `stash` gets this, and the asymmetry is deliberate: `videos` has exactly
+// one writer and the `yqa_tab` lock forbids a second index.html, so a `videos`
+// broadcast could never have a listener. `stash` has two writers in two
+// differently-locked tabs (stash.html's add form, index.html's "Add to stash"),
+// so a stash.html can be looking at a list another tab has already changed. Do
+// not generalize this into a per-store mechanism.
+//
+// The message is a bare SIGNAL and carries no records: IndexedDB stays the
+// single source of truth, so the listener re-reads it. A payload would be a
+// second copy of that truth and would go stale the moment a message was missed.
+//
+// ONE channel object does both jobs — posting here and delivering to
+// onStashChanged() — and that is load-bearing, not incidental: a
+// BroadcastChannel never receives its OWN posts, so the writing document is
+// never woken by its own write. A separate receiving channel object in the same
+// document WOULD be, and every local mark would bounce straight back as a signal.
+//
+// Lazy and defensive throughout: no BroadcastChannel global (or a constructor
+// that throws) leaves the channel null forever and every write still works, just
+// without sync — and a failed post never fails a write that has already
+// committed.
+// ---------------------------------------------------------------------------
+
+let stashChannel = null;
+let stashChannelTried = false;
+
+/** The one lazily-created stash channel, or null where BroadcastChannel isn't. */
+function getStashChannel() {
+  if (stashChannelTried) return stashChannel;
+  stashChannelTried = true;
+  try {
+    if (typeof BroadcastChannel === 'function') {
+      stashChannel = new BroadcastChannel(STASH_SYNC_CHANNEL);
+    }
+  } catch {
+    stashChannel = null;
+  }
+  return stashChannel;
+}
+
+/**
+ * Announce a COMMITTED write to the `stash` store; a no-op for any other store.
+ * Called from inside the private write helpers rather than from putStashVideo /
+ * deleteStashVideos, for the same reason readAll() runs the migrations: a future
+ * stash write cannot forget it. (`putAll` is NOT a site — it is never given the
+ * stash store; see putStashVideo.) Always fired from `tx.oncomplete`, so a
+ * listener that re-reads on the signal can never see the pre-write state.
+ * @param {string} storeName
+ */
+function announceStashChange(storeName) {
+  if (storeName !== IDB_STORE_STASH) return;
+  const channel = getStashChannel();
+  if (!channel) return;
+  try {
+    channel.postMessage({ type: 'stash-changed' });
+  } catch {
+    /* best-effort: the write itself already succeeded */
+  }
+}
+
+/**
+ * Subscribe to stash writes made by OTHER tabs. The handler takes no arguments —
+ * the signal says only "the stash store changed"; the caller re-reads
+ * getAllStashVideos() and reconciles (see reconcileStash in queue.js). A tab
+ * never hears its own writes, so the handler always means someone else wrote.
+ * No-op where BroadcastChannel is missing: the page then just stays stale, as it
+ * did before this existed.
+ * @param {() => void} handler
+ */
+export function onStashChanged(handler) {
+  if (typeof handler !== 'function') return;
+  const channel = getStashChannel();
+  if (!channel) return;
+  channel.addEventListener('message', () => handler());
+}
+
 // -- Private object-store helpers --------------------------------------------
 //
 // One implementation per operation, parameterized by object store name, so the
@@ -426,7 +510,10 @@ async function putOne(storeName, record) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
     tx.objectStore(storeName).put(record);
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => {
+      announceStashChange(storeName);
+      resolve();
+    };
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
@@ -434,7 +521,9 @@ async function putOne(storeName, record) {
 
 /**
  * Bulk put: the WHOLE set goes in ONE transaction, so a bulk write is a single
- * all-or-nothing commit rather than N independent ones.
+ * all-or-nothing commit rather than N independent ones. Deliberately NOT a
+ * cross-tab-sync site: its only caller is putVideos, so it never touches the
+ * stash store (there is no bulk stash put — see putStashVideo).
  * @param {string} storeName
  * @param {Array<object>} records
  * @returns {Promise<void>}
@@ -466,7 +555,10 @@ async function deleteAll(storeName, ids) {
     const tx = db.transaction(storeName, 'readwrite');
     const store = tx.objectStore(storeName);
     for (const id of ids) store.delete(id);
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => {
+      announceStashChange(storeName);
+      resolve();
+    };
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
@@ -530,6 +622,11 @@ export async function getAllStashVideos() {
 
 /**
  * Insert or replace a single stash record (full overwrite by videoId).
+ *
+ * The ONLY stash write shape: there is deliberately no bulk stash put, because
+ * stash.html and index.html write this store from two differently-locked tabs
+ * and a whole-set putAll from either would overwrite what the other just wrote.
+ * On commit this announces itself to the other tab (see announceStashChange).
  * @param {object} record
  * @returns {Promise<void>}
  */
@@ -538,7 +635,9 @@ export async function putStashVideo(record) {
 }
 
 /**
- * Delete stash records by an array of videoIds.
+ * Delete stash records by an array of videoIds. Announces itself to the other
+ * tab on commit (see announceStashChange); deleting NOTHING writes nothing and
+ * so announces nothing.
  * @param {Array<string>} ids
  * @returns {Promise<void>}
  */

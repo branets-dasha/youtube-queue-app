@@ -943,18 +943,43 @@ export function stashToClean(records) {
 }
 
 /**
- * Add one pasted video to the stash, as ONE pure step — the same idea as
- * mergeRefresh, so the tests exercise the real composition instead of a mirror
- * of it.
+ * Add one video to the stash — a pasted link on stash.html, or a subscriptions
+ * card's "Add to stash" — as ONE pure step, the same idea as mergeRefresh, so
+ * the tests exercise the real composition instead of a mirror of it.
  *
  * A NEW videoId is APPENDED (the stash's order is arrival order), stamped
  * `state: 'new'` and `addedAt`, and given its channel's preferred speed when —
  * and only when — the incoming record carries none (undefined OR null): the
  * fill-if-absent rule, identical to the subscriptions one.
  *
- * A DUPLICATE changes nothing: the input array comes back BY IDENTITY with
- * `added: false` and the EXISTING record, so an already-stashed video keeps its
- * place, its `addedAt` and its Remove mark rather than jumping to the end.
+ * A DUPLICATE never moves: it keeps its PLACE and its `addedAt`, and its
+ * metadata is never refreshed from the incoming copy. But adding a video you
+ * already have is still a gesture that means something, so exactly two fields
+ * can change, and only ever in one direction:
+ *
+ *   - REVIVE — a duplicate marked "Remove" goes back to `state: 'new'`. Adding
+ *     it again is the plainest way there is of saying you want it back, and the
+ *     alternative is to silently do nothing to a record the next Clean up
+ *     deletes.
+ *   - RE-SPEED — an incoming `preferredSpeed` that is PRESENT (neither undefined
+ *     nor null: the same test the fill-if-absent path uses) OVERRIDES the
+ *     stashed one; an incoming record carrying none leaves the stashed speed
+ *     exactly as it is. That is one rule serving both entrances rather than two:
+ *     a card carries the speed you set on it, while the paste-a-link flow builds
+ *     its record from getVideosByIds, which has no speed to carry, so there it
+ *     always degrades to "keep what the stash has".
+ *
+ * A duplicate is deliberately NOT run through the channel-prefs fill — it went
+ * through that when it was first stashed, and a channel speed set since is not a
+ * statement about a video already sitting here. It takes an EXPLICIT incoming
+ * speed and nothing else.
+ *
+ * `changed` is the flag the caller persists on: true for an add, true for a
+ * duplicate one of those two rules touched, and false for a duplicate nothing
+ * happened to. In that last case ONLY, the input array comes back BY IDENTITY,
+ * so "there is nothing to write" is visible to the caller as an identity check.
+ * `added` still separates an arrival from an update, for the wording of the
+ * toast.
  *
  * The channel speed is read with the LEAF channelPreferredSpeed, never with
  * applyChannelSpeeds: that one deliberately excludes IGNORED channels, and the
@@ -964,19 +989,35 @@ export function stashToClean(records) {
  * policy is documented.)
  *
  * `addedAt` is INJECTED, never read from a clock: this module has none (cf.
- * daysAgoIso). Mutates neither input. Pure.
+ * daysAgoIso). Mutates neither input — an updated duplicate comes back as a COPY
+ * substituted at the same index of a new array, exactly as the add path returns
+ * a new array, so a caller that has already rendered the old object is never
+ * changed underneath. Pure.
  *
  * @param {Array<object>} records the current stash
  * @param {object} incoming the record to add (videoId + metadata)
  * @param {{addedAt?:string, prefs?:Record<string,{ignored?:boolean,speed?:number}>}} [options]
- * @returns {{records:Array<object>, added:boolean, record:object}}
+ * @returns {{records:Array<object>, added:boolean, changed:boolean, record:object}}
  */
 export function addToStash(records, incoming, { addedAt, prefs } = {}) {
   const list = Array.isArray(records) ? records : [];
   const videoId = incoming ? incoming.videoId : undefined;
-  const existing = videoId ? list.find((r) => r && r.videoId === videoId) : undefined;
-  // Already stashed: hand back the very same array so the caller can skip its write.
-  if (existing) return { records, added: false, record: existing };
+  const at = videoId ? list.findIndex((r) => r && r.videoId === videoId) : -1;
+  if (at !== -1) {
+    const existing = list[at];
+    const speed = incoming.preferredSpeed;
+    const revive = existing.state !== STATE_NEW;
+    const respeed = speed != null && speed !== existing.preferredSpeed;
+    // Nothing this add can still say about it: hand back the very same array so
+    // the caller can skip its write.
+    if (!revive && !respeed) return { records, added: false, changed: false, record: existing };
+    const record = { ...existing };
+    if (revive) record.state = STATE_NEW;
+    if (respeed) record.preferredSpeed = speed;
+    const updated = list.slice();
+    updated[at] = record;
+    return { records: updated, added: false, changed: true, record };
+  }
 
   const record = { ...incoming, state: STATE_NEW, addedAt };
   if (record.preferredSpeed == null) {
@@ -986,5 +1027,111 @@ export function addToStash(records, incoming, { addedAt, prefs } = {}) {
     if (speed === undefined) delete record.preferredSpeed;
     else record.preferredSpeed = speed;
   }
-  return { records: list.concat([record]), added: true, record };
+  return { records: list.concat([record]), added: true, changed: true, record };
+}
+
+/**
+ * Do these two copies of one stash record say the same thing? A SHALLOW compare
+ * of every own key on both sides — records are flat (strings, numbers, booleans)
+ * — and an absent key is not the same as a present undefined one, because
+ * addToStash goes to the trouble of omitting `preferredSpeed` rather than
+ * writing it undefined. A nested field would compare by reference and so read as
+ * different, which costs a needless re-render and never a wrong one.
+ * @param {object} a
+ * @param {object} b
+ * @returns {boolean}
+ */
+function sameStashContent(a, b) {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+/**
+ * Merge a FRESHLY-READ stash into the one this page holds in memory, after
+ * another tab announced a write (see store.js's cross-tab sync). MEMBERSHIP
+ * always follows `fresh`; CONTENT follows it too, for everything except the
+ * records this tab has a write in flight for:
+ *
+ *   - ADD    a videoId in `fresh` but not in `current` — the other tab's new
+ *            stash entry arriving.
+ *   - REMOVE a videoId absent from `fresh` — it was swept.
+ *   - For a videoId in BOTH, take `fresh`'s content — UNLESS that videoId is in
+ *     `inFlight`, in which case keep the local object untouched.
+ *
+ * That exception is the reason this is a merge and not a wholesale replace, and
+ * in-flight is exactly the scope it needs: the stash page marks OPTIMISTICALLY —
+ * it sets `rec.state` in memory and only THEN awaits the write — so for the
+ * length of that write DISK IS BEHIND MEMORY for that one videoId, and adopting
+ * it would resurrect the pre-mark state and un-mark the card under the user. The
+ * exception cannot be widened back to "every videoId we already hold": the other
+ * tab UPDATES existing stash records now (re-adding a video un-marks it — see
+ * addToStash), so a record we are NOT writing has to be free to change out from
+ * under us, or an un-mark done over there would never appear here.
+ *
+ * `changed` is what the caller re-renders on, so it covers both kinds of
+ * difference: the MEMBERSHIP moving (an add, a removal, a malformed entry
+ * dropped) OR a record we hold coming back from disk with DIFFERENT CONTENT.
+ * Membership alone was enough only while local content always won. A record we
+ * KEPT is never a change — it is in flight, or it is byte-identical to what disk
+ * says — and that is what still buys the common case its silence: a signal about
+ * something this page cannot see costs no re-render, and none of the scroll and
+ * focus disturbance that comes with one.
+ *
+ * Order is NOT imposed here — the caller sorts, exactly as it does after
+ * addToStash, so sortStash stays the stash's single sort site. Tolerant of
+ * malformed data like every helper here: a null / videoId-less entry on either
+ * side is dropped, and a duplicate id in `fresh` is taken once. Mutates neither
+ * input; the records in the result are the input objects by reference, never
+ * copies. Pure — `inFlight` is read, never written, and only through `.has`.
+ *
+ * @param {Array<object>} current the stash this page holds in memory
+ * @param {Array<object>} fresh the stash just re-read from the store
+ * @param {{has:(videoId:string)=>boolean}} [inFlight] the videoIds this tab has a
+ *        write in flight for (a Set, or the page's refcount Map): their local
+ *        objects are kept whatever `fresh` says
+ * @returns {{records:Array<object>, changed:boolean}}
+ */
+export function reconcileStash(current, fresh, inFlight) {
+  const mine = Array.isArray(current) ? current : [];
+  const theirs = Array.isArray(fresh) ? fresh : [];
+  const held = inFlight && typeof inFlight.has === 'function' ? inFlight : null;
+
+  const known = new Map();
+  for (const rec of mine) {
+    if (rec && rec.videoId) known.set(rec.videoId, rec);
+  }
+
+  const records = [];
+  const seen = new Set();
+  let changed = false;
+  for (const rec of theirs) {
+    const videoId = rec && rec.videoId;
+    if (!videoId || seen.has(videoId)) continue;
+    seen.add(videoId);
+    const local = known.get(videoId);
+    if (local === undefined) {
+      changed = true; // an arrival from the other tab
+      records.push(rec);
+    } else if ((held && held.has(videoId)) || sameStashContent(local, rec)) {
+      // Ours is mid-write (disk is behind memory), or disk has nothing new to
+      // say. Either way keep the object we already hold, by identity.
+      records.push(local);
+    } else {
+      changed = true; // the other tab updated a record we hold
+      records.push(rec);
+    }
+  }
+
+  // Whatever we held that `fresh` did not account for is gone: a record swept in
+  // the other tab, a duplicate, or a malformed entry with no videoId to match
+  // on. Counting is enough — every id in `fresh` that we already had is in
+  // `records`, so a shorter result can only mean something of ours dropped out.
+  if (records.length !== mine.length) changed = true;
+
+  return { records, changed };
 }

@@ -876,9 +876,14 @@ function toggleSkip(videoId, opts = {}) {
  * BEFORE the mark, so a failed write leaves the card untouched and there is
  * nothing to revert.
  *
- * An ALREADY-STASHED video is not written again (addToStash hands the list back
- * by identity, keeping that record's place, addedAt and Remove mark), but it IS
- * still marked here — "it lives in the stash now" is true either way.
+ * An ALREADY-STASHED video keeps its place and its addedAt over there whatever
+ * happens here, but "already stashed" is no longer the same as "nothing to do":
+ * addToStash un-marks a duplicate that was marked Remove, and takes this card's
+ * preferredSpeed if it has one (see its contract). So the write is skipped only
+ * when it reports nothing changed — and the toast says which of the two it was,
+ * because "already in your stash" alone would hide a re-add that revived it.
+ * Either way the source card IS still marked here: "it lives in the stash now"
+ * is true in all three cases.
  * @param {string} videoId
  * @param {object} [opts] passed straight to setVideoState, exactly as toggleSkip
  *        passes its own: the `t` key sends { advanceFocus: true }, the menu item
@@ -898,13 +903,26 @@ async function addCardToStash(videoId, opts = {}) {
     const stash = await getAllStashVideos();
     // Channel prefs read FRESH at the call site, as everywhere else, so a speed
     // set in a Channels tab applies without reloading this page.
-    const { added, record } = addToStash(stash, incoming, {
+    const { added, changed, record } = addToStash(stash, incoming, {
       addedAt: new Date().toISOString(),
       prefs: loadChannelPrefs(),
     });
-    if (added) {
+    if (changed) {
+      // An arrival, or a duplicate addToStash revived / re-speeded — either way
+      // there is something to persist. That write posts the stash's cross-tab
+      // signal from inside store.js, so an open Stash tab shows it without a
+      // reload, an UPDATE included: that tab takes fresh content for every
+      // record it is not itself mid-write on. This page subscribes to NOTHING in
+      // return, and should not start: it holds no stash state — the list it
+      // merges into is re-read fresh, above, on every single add — so a signal
+      // would have nothing here to update.
       await putStashVideo(record);
-      showToast(`Added “${record.title}” to your stash.`, { type: 'success' });
+      showToast(
+        added
+          ? `Added “${record.title}” to your stash.`
+          : 'That video is already in your stash — updated it.',
+        { type: 'success' }
+      );
     } else {
       showToast('That video is already in your stash.', { type: 'info' });
     }
@@ -1753,8 +1771,9 @@ function onGlobalKeydown(e) {
     // t = add the FOCUSED card to the stash, through the same addCardToStash the
     // "⋯" menu item calls — so a keyboard user never has to open that menu.
     // Advances focus like x, so a run of t's walks the queue rather than firing
-    // twice on one card (the second write is a no-op — addToStash treats a
-    // duplicate as already there — but it would still re-mark the same card).
+    // twice on one card (the second add finds the video already stashed and,
+    // with nothing new to say about it, writes nothing — but it would still
+    // re-mark the same card).
     if (idx >= 0) {
       e.preventDefault();
       addCardToStash(rows[idx].dataset.videoId, { advanceFocus: true });

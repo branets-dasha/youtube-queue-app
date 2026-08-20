@@ -36,6 +36,7 @@ import {
   sortStash,
   stashToClean,
   addToStash,
+  reconcileStash,
 } from './queue.js';
 import { SHORTS_MAX_SECONDS } from './config.js';
 
@@ -1282,22 +1283,93 @@ test('addToStash omits preferredSpeed when the channel has no usable pref', () =
   assert.equal(addToStash([], paste('b', 'UCa')).record.state, 'new');
 });
 
-test('addToStash reports added:false and returns the array BY IDENTITY on a duplicate', () => {
-  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+test('addToStash reports added:false, changed:false and the array BY IDENTITY on a no-op duplicate', () => {
+  // Already there, unmarked, and the incoming record has no speed to impose:
+  // there is nothing left for this add to do.
+  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
   const out = addToStash(stash, paste('b', 'UCa'), { addedAt: A3, prefs: { UCa: { speed: 2 } } });
   assert.equal(out.added, false);
+  assert.equal(out.changed, false);
   assert.strictEqual(out.records, stash); // same object: the caller can skip its write
   assert.equal(out.records.length, 2); // no duplicate row
+  assert.strictEqual(out.record, stash[1]); // the stored record, not the pasted one
+  // The channel pref above is deliberately NOT applied: a duplicate went through
+  // the fill when it was first stashed and takes an EXPLICIT incoming speed only.
+  assert.equal(out.record.preferredSpeed, undefined);
 });
 
-test('addToStash returns the EXISTING record on a duplicate, place and marks untouched', () => {
-  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+test('addToStash does not refresh a duplicate metadata from the incoming copy', () => {
+  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
   const out = addToStash(stash, paste('b', 'UCa', { title: 'renamed' }), { addedAt: A3 });
-  assert.strictEqual(out.record, stash[1]); // the stored record, not the pasted one
-  assert.equal(out.record.addedAt, A2); // keeps its original place in the order
-  assert.equal(out.record.state, 'skipped'); // keeps its Remove mark
-  assert.equal(out.record.title, 'b'); // and is not refreshed from the paste
+  assert.equal(out.record.title, 'b'); // not refreshed from the paste
+  assert.equal(out.record.addedAt, A2); // and not re-stamped
   assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']); // did not jump to the end
+});
+
+test('addToStash REVIVES a duplicate that was marked Remove, in place', () => {
+  const stash = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped'), stashRec('c', A3, 'new')];
+  const out = addToStash(stash, paste('b', 'UCa'), { addedAt: '2026-09-09T00:00:00Z' });
+  assert.equal(out.added, false); // an update, not an arrival
+  assert.equal(out.changed, true); // ... which the caller must persist
+  assert.equal(out.record.state, 'new'); // un-marked
+  assert.equal(out.record.addedAt, A2); // NOT re-stamped: same place in arrival order
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b', 'c']); // same index
+  assert.strictEqual(out.records[1], out.record);
+  assert.notStrictEqual(out.records, stash); // a NEW array, with a copy substituted
+  assert.equal(stash[1].state, 'skipped'); // the input record is left alone
+  assert.strictEqual(out.records[0], stash[0]); // untouched records come back by identity
+  assert.strictEqual(out.records[2], stash[2]);
+});
+
+test('addToStash lets an incoming preferredSpeed OVERRIDE the stashed one', () => {
+  const stash = [{ ...stashRec('b', A2, 'new'), preferredSpeed: 1 }];
+  const out = addToStash(stash, paste('b', 'UCa', { preferredSpeed: 2 }), { addedAt: A3 });
+  assert.equal(out.changed, true);
+  assert.equal(out.record.preferredSpeed, 2);
+  assert.equal(out.record.state, 'new'); // was not marked: nothing to revive
+  assert.equal(stash[0].preferredSpeed, 1); // the input record is left alone
+});
+
+test('addToStash keeps the stashed speed when the incoming record has none', () => {
+  // The paste-a-link flow builds its record from getVideosByIds, which carries no
+  // speed at all — so there this rule always degrades to "keep what we have".
+  const stash = [{ ...stashRec('b', A2, 'new'), preferredSpeed: 1.5 }];
+  for (const incoming of [paste('b', 'UCa'), paste('b', 'UCa', { preferredSpeed: null })]) {
+    const out = addToStash(stash, incoming, { addedAt: A3, prefs: { UCa: { speed: 2 } } });
+    assert.equal(out.changed, false); // nothing to write
+    assert.strictEqual(out.records, stash); // ... and the array back by identity
+    assert.equal(out.record.preferredSpeed, 1.5);
+  }
+  // The same incoming speed the record already has is not a change either.
+  const same = addToStash(stash, paste('b', 'UCa', { preferredSpeed: 1.5 }), { addedAt: A3 });
+  assert.equal(same.changed, false);
+  assert.strictEqual(same.records, stash);
+});
+
+test('addToStash applies BOTH duplicate rules at once', () => {
+  const stash = [stashRec('a', A1, 'new'), { ...stashRec('b', A2, 'skipped'), preferredSpeed: 1 }];
+  const out = addToStash(stash, paste('b', 'UCa', { preferredSpeed: 2 }), { addedAt: A3 });
+  assert.equal(out.added, false);
+  assert.equal(out.changed, true);
+  assert.equal(out.record.state, 'new'); // revived
+  assert.equal(out.record.preferredSpeed, 2); // and re-speeded
+  assert.equal(out.record.addedAt, A2); // still in its place
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']);
+});
+
+test('addToStash revives ANY handled state, not just skipped', () => {
+  // "handled" means state !== 'new' everywhere, legacy values included.
+  for (const legacy of ['skipped', 'watched', 'not_interested']) {
+    const out = addToStash([stashRec('b', A2, legacy)], paste('b', 'UCa'), { addedAt: A3 });
+    assert.equal(out.changed, true);
+    assert.equal(out.record.state, 'new');
+  }
+});
+
+test('addToStash reports changed:true on an ADD, so one flag drives the write', () => {
+  const out = addToStash([], paste('b', 'UCa'), { addedAt: A1 });
+  assert.equal(out.added, true);
+  assert.equal(out.changed, true);
 });
 
 test('addToStash + sortStash agree: the append order IS the rendered order', () => {
@@ -1323,6 +1395,152 @@ test('addToStash mutates neither input', () => {
   assert.equal(incoming.state, undefined); // the stamp lands on the copy only
   assert.equal(incoming.addedAt, undefined);
   assert.equal(incoming.preferredSpeed, undefined);
+});
+
+// --- reconcileStash: cross-tab merge — membership from `fresh`, CONTENT local ---
+
+test('reconcileStash ADDS a record the other tab inserted', () => {
+  const current = [stashRec('a', A1, 'new')];
+  const fresh = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  const out = reconcileStash(current, fresh);
+  assert.equal(out.changed, true);
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']);
+  assert.strictEqual(out.records[0], current[0]); // the one we already had, by identity
+  assert.strictEqual(out.records[1], fresh[1]); // the arrival, by identity
+});
+
+test('reconcileStash REMOVES a record the other tab swept', () => {
+  const current = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  const fresh = [stashRec('b', A2, 'new')];
+  const out = reconcileStash(current, fresh);
+  assert.equal(out.changed, true);
+  assert.deepEqual(out.records.map((r) => r.videoId), ['b']);
+  assert.strictEqual(out.records[0], current[1]);
+});
+
+test('reconcileStash handles an ADD and a REMOVE in the same signal', () => {
+  const current = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  const fresh = [stashRec('b', A2, 'new'), stashRec('c', A3, 'new')];
+  const out = reconcileStash(current, fresh);
+  assert.equal(out.changed, true); // equal LENGTHS, but the membership moved
+  assert.deepEqual(out.records.map((r) => r.videoId), ['b', 'c']);
+  assert.strictEqual(out.records[0], current[1]);
+});
+
+test('reconcileStash NEVER takes `fresh` for a record we have a write IN FLIGHT for', () => {
+  // THE rule this function exists for: the stash page marks OPTIMISTICALLY —
+  // rec.state is set in memory before the write is awaited — so a signal landing
+  // inside that window must not resurrect the pre-mark state from disk.
+  const marked = stashRec('a', A1, 'skipped'); // marked here, not yet persisted
+  const onDisk = stashRec('a', A1, 'new'); // what IndexedDB still says
+  onDisk.title = 'stale title';
+  onDisk.preferredSpeed = 2;
+  const out = reconcileStash([marked], [onDisk], new Set(['a']));
+  assert.equal(out.changed, false); // we kept ours: nothing new to draw
+  assert.strictEqual(out.records[0], marked); // same object, not a merge of the two
+  assert.equal(out.records[0].state, 'skipped'); // the mark survives
+  assert.equal(out.records[0].title, 'a');
+  assert.equal(out.records[0].preferredSpeed, undefined);
+});
+
+test('reconcileStash TAKES fresh content for a record we are NOT writing', () => {
+  // The other tab updates existing records now (re-adding a stashed video
+  // un-marks it), so anything not in flight has to be free to change here.
+  const local = stashRec('a', A1, 'skipped'); // marked, and already persisted
+  const onDisk = stashRec('a', A1, 'new'); // the other tab revived it
+  const out = reconcileStash([local], [onDisk], new Set(['b'])); // 'b' in flight, not 'a'
+  assert.equal(out.changed, true); // ... and a remote un-mark MUST re-render
+  assert.strictEqual(out.records[0], onDisk);
+  assert.equal(out.records[0].state, 'new');
+  // No in-flight argument at all behaves the same way — nothing is protected.
+  assert.equal(reconcileStash([local], [onDisk]).changed, true);
+  assert.equal(reconcileStash([local], [onDisk], null).records[0].state, 'new');
+});
+
+test('reconcileStash counts a CONTENT difference as changed, field by field', () => {
+  const base = stashRec('a', A1, 'new');
+  const differs = [
+    { ...base, preferredSpeed: 2 }, // a remote re-speed
+    { ...base, positionSeconds: 30 }, // any other field, too
+    { ...base, title: 'renamed' },
+  ];
+  for (const onDisk of differs) {
+    const out = reconcileStash([base], [onDisk]);
+    assert.equal(out.changed, true);
+    assert.strictEqual(out.records[0], onDisk);
+  }
+  // A key PRESENT-but-undefined is not the same as an absent one: addToStash
+  // omits preferredSpeed rather than writing it undefined, so the two shapes
+  // genuinely differ.
+  assert.equal(reconcileStash([base], [{ ...base, preferredSpeed: undefined }]).changed, true);
+  // An identical copy — a different object with the same fields — is not.
+  assert.equal(reconcileStash([base], [{ ...base }]).changed, false);
+  assert.strictEqual(reconcileStash([base], [{ ...base }]).records[0], base); // ours kept
+});
+
+test('reconcileStash empties the list when `fresh` is empty', () => {
+  const current = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+  const out = reconcileStash(current, []);
+  assert.equal(out.changed, true);
+  assert.deepEqual(out.records, []);
+  assert.equal(current.length, 2); // input untouched
+});
+
+test('reconcileStash is a NO-OP when both sides match', () => {
+  const current = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+  const fresh = [stashRec('a', A1, 'new'), stashRec('b', A2, 'skipped')];
+  const out = reconcileStash(current, fresh);
+  assert.equal(out.changed, false); // the caller skips its re-render on this
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']);
+  assert.strictEqual(out.records[0], current[0]);
+  assert.strictEqual(out.records[1], current[1]);
+});
+
+test('reconcileStash does not treat a different ORDER as a change', () => {
+  // Order is the caller's business (sortStash), so a re-read that comes back in
+  // another order must not cost a render.
+  const current = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  const fresh = [stashRec('b', A2, 'new'), stashRec('a', A1, 'new')];
+  assert.equal(reconcileStash(current, fresh).changed, false);
+});
+
+test('reconcileStash leaves ordering to the caller, exactly like addToStash', () => {
+  // The arrival is appended where `fresh` had it; sortStash still decides the
+  // rendered order, so it stays the stash's single sort site.
+  const current = [stashRec('b', A2, 'new')];
+  const fresh = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  const out = reconcileStash(current, fresh);
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a', 'b']);
+  assert.deepEqual(sortStash(out.records).map((r) => r.videoId), ['a', 'b']);
+});
+
+test('reconcileStash tolerates malformed entries and non-arrays', () => {
+  const good = stashRec('a', A1, 'new');
+  // Junk on the FRESH side is dropped; junk on OURS is dropped and counts as a
+  // change, because the rendered list loses it.
+  const out = reconcileStash([good, null, {}], [good, null, { title: 'no id' }]);
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a']);
+  assert.equal(out.changed, true);
+  // A duplicate id in `fresh` is taken once.
+  const dupes = reconcileStash([], [stashRec('a', A1, 'new'), stashRec('a', A2, 'new')]);
+  assert.deepEqual(dupes.records.map((r) => r.videoId), ['a']);
+  assert.equal(dupes.records[0].addedAt, A1); // the first one wins
+  // Neither side has to be an array.
+  assert.deepEqual(reconcileStash(null, undefined), { records: [], changed: false });
+  assert.equal(reconcileStash(undefined, [good]).changed, true);
+  assert.deepEqual(reconcileStash([good], null).records, []);
+});
+
+test('reconcileStash mutates neither input', () => {
+  const current = [stashRec('a', A1, 'skipped')];
+  const fresh = [stashRec('a', A1, 'new'), stashRec('b', A2, 'new')];
+  const out = reconcileStash(current, fresh);
+  assert.equal(current.length, 1);
+  assert.equal(current[0].state, 'skipped');
+  assert.equal(fresh.length, 2);
+  assert.equal(fresh[0].state, 'new'); // adopted by reference, never rewritten
+  assert.notStrictEqual(out.records, current);
+  assert.notStrictEqual(out.records, fresh);
 });
 
 console.log(`\n${passed} passed`);

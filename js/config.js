@@ -51,6 +51,21 @@ export const LS_HIDE_MARKED = 'yqa_hide_marked';
 export const TAB_LOCK = 'yqa_tab';
 export const STASH_TAB_LOCK = 'yqa_stash_tab';
 
+// BroadcastChannel name (NOT a storage key, and not a lock name either) for the
+// STASH's cross-tab sync: store.js posts a bare signal here after every
+// committed write to the `stash` store, and an open stash.html re-reads and
+// reconciles. Only the stash has one. `videos` has a single writer that the
+// `yqa_tab` lock keeps single, so a `videos` broadcast could never have a
+// listener; `stash` has two writers in two differently-locked tabs
+// (stash.html's add form and index.html's "Add to stash"), so it can. The
+// asymmetry is the point — do not generalize this into a per-store mechanism.
+export const STASH_SYNC_CHANNEL = 'yqa_stash_sync';
+
+// How long a received stash signal waits before the listening tab re-reads the
+// store, so a BURST of writes in the other tab costs one read and one render
+// instead of one of each per message. Short enough to read as instant.
+export const STASH_SYNC_COALESCE_MS = 120;
+
 // IndexedDB configuration.
 export const IDB_NAME = 'yqa';
 // Bumped 1 -> 2 to add the `stash` object store. A tab still running v1 code
