@@ -1039,6 +1039,39 @@ body.app-active #app-main.app[hidden] {
 .workspace__player {
   min-height: 0;
   overflow-y: auto; /* if player + info exceed the pane, scroll here — never clip */
+  /* Rounded like everything else here, and it exists FOR the ring below: an
+     outline traces its element's border-radius, so a square pane can only ever
+     grow a square ring — which is what made the first version look foreign
+     wrapped around a 10px-rounded video frame. Free when unfocused, because the
+     pane paints no background and no border of its own. The one side effect is
+     that a scroll container's rounded corner clips its own scrollbar: measured
+     at 4px shaved off the gutter's top row, square again 3 rows down. */
+  border-radius: var(--radius);
+}
+/* The pane is focusable programmatically only (tabindex="-1" in the HTML), so
+   this ring appears for exactly one gesture: the '/' pane toggle. Restrained on
+   purpose — it says "the arrows scroll HERE now", it is not a control.
+   The offset is POSITIVE, putting the ring wholly OUTSIDE the pane's border box,
+   and that is the entire point: an element paints its outline BEFORE its
+   descendants, so the inset -2px ring this started as was painted over by
+   .player__frame — full-bleed, `background: #000`, flush to the pane's top and
+   left — which left barely a quarter of the left segment and a tenth of the top
+   one on screen, and on the right it ran through the outer 2px of the scrollbar.
+   Outside the border box, nothing the pane contains can reach it — scrollbar
+   included, since a scrollbar is painted inside that same box.
+   It fits on every edge: 20px of .workspace grid gap to the left, 12px of main's
+   padding to the right and below, and the 100dvh column always keeps that bottom
+   padding, so the pane is never flush with the viewport. The ring needs 4px
+   (2 offset + 2 width) and is clipped by nothing at any width, the stacked
+   ≤900px layout included.
+   Rejected: a permanently reserved `border: 2px solid transparent` — equally
+   uncoverable, but it insets the video by 2px forever and needs `outline: none`,
+   which this stylesheet has nowhere; and `padding: 2px` behind an inset outline —
+   same permanent 2px, and the scrollbar still shares those pixels. An outline
+   costs no layout at all, which is why this one wins. */
+.workspace__player:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .player {

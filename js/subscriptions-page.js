@@ -103,6 +103,7 @@ import {
   reportIfFatalDb,
   describeAuthFailure,
   initCurtain,
+  initQueueFocus,
   bindIframeFocusGuard,
 } from './page-chrome.js';
 
@@ -133,6 +134,11 @@ const state = {
 // Privacy curtain controls, from page-chrome.js's initCurtain(); it owns the
 // covering flag, so `state` does not mirror it. Set in bindEvents().
 let curtain = null;
+
+// Two-pane focus navigation, from page-chrome.js's initQueueFocus(); it owns
+// the remembered card, so `state` does not mirror that either. The keys that
+// drive it live in onGlobalKeydown below, as page-chrome binds none.
+let queueFocus = null;
 
 // DOM references, populated in init().
 const dom = {};
@@ -274,6 +280,11 @@ function cacheDom() {
   dom.handledCount = byId('handled-count');
   dom.cutoffDisplay = byId('cutoff-display');
 
+  // The queue PANE, not the list: it is the scroll container (selected by
+  // class, there's no id) AND the region arrow-key card navigation is confined
+  // to in the STACKED layout — wider than the list, taking in the sticky header
+  // buttons.
+  dom.queuePane = document.querySelector('.workspace__queue');
   dom.queueList = byId('queue-list');
   dom.emptyState = byId('empty-state');
   dom.curtain = byId('curtain');
@@ -328,6 +339,15 @@ function bindEvents() {
   // stays here, in onGlobalKeydown, because page-chrome owns no shortcuts. The
   // defaults ('.workspace', <=900px, cover on wheel-down) are this page's.
   curtain = initCurtain({ node: dom.curtain });
+
+  // Arrow-key card navigation and the '/' pane toggle: page-chrome owns the
+  // remembered card and the focus moves, this page's keydown table owns the
+  // keys. Same call on the stash page, so the two tables cannot drift on it.
+  queueFocus = initQueueFocus({
+    queueList: dom.queueList,
+    queuePane: dom.queuePane,
+    playerPane: dom.playerPane,
+  });
 
   // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
   // which swallows keydown so the app's shortcuts (incl. the Esc curtain) stop
@@ -1638,11 +1658,12 @@ function cyclePlaybackSpeed(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. QUEUE: j/k move, x skip, t add to stash, Enter
+// Keyboard shortcuts. QUEUE: ↑/↓ move, x skip, t add to stash, Enter
 // play focused card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→
-// seek, -/+ speed, n next, l like, m mute, f fullscreen. Ignored while typing in
-// an input/textarea, during onboarding, and for Ctrl/Cmd/Alt combos (Shift stays
-// allowed for '+').
+// seek, -/+ speed, n next, l like, m mute, f fullscreen. BOTH: '/' throws focus
+// between the two panes. Ignored while typing in an input/textarea, during
+// onboarding, and for Ctrl/Cmd/Alt combos (Shift stays allowed for '+', and for
+// '/' on the layouts that shift it).
 // ---------------------------------------------------------------------------
 
 // Digit -> preferred speed for the FOCUSED card. 1 and 2 are literal; '5' is the
@@ -1694,20 +1715,23 @@ function onGlobalKeydown(e) {
   const active = document.activeElement;
   const idx = focusedCardIndex(rows, active);
 
-  if (key === 'j') {
-    // j = move BACK (previous/older card, upward in the oldest->newest list);
-    // with nothing focused, enter at the first card. Landing ON the .row is
-    // also how j/k get focus OUT of an open card menu — it leaves the menu
-    // wrapper, whose focusout dismisses it — so both CLAMP at the ends of the
-    // list rather than doing nothing there, or a menu on the first (j) or last
-    // (k) card would have no j/k exit. Clamping is invisible otherwise: it
-    // re-focuses a card that already holds focus.
+  if (key === 'arrowup' || key === 'arrowdown') {
+    // ↑ = previous/older card (upward in the oldest->newest list), ↓ = next.
+    // The whole rule lives in page-chrome's moveCard — where the keys apply
+    // (a layout question, not a focus one), the remembered card they enter at,
+    // and the clamp at both ends — and it reports whether it TOOK the key.
+    // preventDefault ONLY on true, so everything it declines keeps its native
+    // scrolling: the player pane, the stacked layout's document, and a clamp at
+    // either end of the list (which still places focus on the .row, so the card
+    // menu keeps its arrow exit, but lets the pane scroll on).
+    if (queueFocus && queueFocus.moveCard(key === 'arrowup' ? -1 : 1)) e.preventDefault();
+  } else if (key === '/') {
+    // '/' throws focus between the panes: out of the player back to the
+    // remembered card, from anywhere else into the player. ALWAYS prevented —
+    // Firefox opens Quick Find on '/' otherwise — and read off e.key, so a
+    // layout that puts '/' behind Shift still reaches us (Shift is allowed).
     e.preventDefault();
-    if (rows.length) rows[idx > 0 ? idx - 1 : 0].focus();
-  } else if (key === 'k') {
-    // k = move FORWARD (next/newer card, downward), clamped the same way.
-    e.preventDefault();
-    if (rows.length) rows[idx >= 0 ? Math.min(idx + 1, rows.length - 1) : 0].focus();
+    if (queueFocus) queueFocus.togglePane();
   } else if (key === 'x') {
     // x = Skip: toggle the focused card between new and skipped.
     if (idx >= 0) {

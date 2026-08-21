@@ -1,13 +1,17 @@
 // js/page-chrome.js
 //
 // Leaf page chrome shared by every entry point — the single-tab lock, the
-// fatal-storage halt screens, and the privacy curtain. No app state and no
+// fatal-storage halt screens, the privacy curtain, and the two-pane focus
+// navigation both player pages drive from their arrow keys. No app state and no
 // queue logic: it imports only ui.js, toast.js and the two error classes from
 // store.js, and is never imported by queue.js/migrations.js.
 //
 // Everything here is per-DOCUMENT, not per-page: each export takes what varies
-// (the lock name, the curtain node, the iframe getter) as an argument, so a new
-// entry point gets the same chrome without this module learning about it.
+// (the lock name, the curtain node, the iframe getter, the two panes) as an
+// argument, so a new entry point gets the same chrome without this module
+// learning about it. Nothing here BINDS a key: the focus navigation, like the
+// curtain's Esc, is exposed as plain functions that each page's own keydown
+// table calls.
 
 import { el, setVisible } from './ui.js';
 import { showToast } from './toast.js';
@@ -385,4 +389,174 @@ export function bindIframeFocusGuard(getIframe) {
       }
     }, 0);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Two-pane focus navigation
+//
+// Both player pages are the same two-pane workspace — a scrolling queue on the
+// left, a scrolling player on the right — and both need the same three moves:
+// walk the cards with ArrowUp/ArrowDown, get back INTO the list after focus has
+// wandered off it, and throw focus from one pane to the other. The mechanics
+// live here for one reason: the two pages' keydown tables have drifted apart
+// before, and this is the part of them that has no page-specific behavior at
+// all. Everything that varies — which nodes the panes are, which media query
+// says "stacked" — is a parameter, and each page still writes its OWN table
+// entries calling in, because this module owns no keyboard shortcut (see the
+// curtain's Esc, which is bound the same way).
+//
+// THE REMEMBERED CARD is the whole idea. Focus leaves the card list constantly
+// — onto the toolbar, onto a header button, and onto <body>, where
+// bindIframeFocusGuard (above) puts it every time the user clicks the video and
+// where a re-render that drops the focused card leaves it. An arrow press then
+// has nowhere to resume from unless we kept a note of where the user was — so
+// we keep the last-focused card's VIDEOID, not its element, because
+// renderQueue() empties the <ul> and rebuilds it, and an element reference
+// would be a detached node the very next render. The id is resolved against the
+// CURRENT list at use time and falls back to the first card when that video is
+// gone (cleaned up, filtered out, or scrolled out of the render window), which
+// is also the natural answer for a first press with nothing remembered at all.
+//
+// This module never touches the DOM outside the two nodes it is handed.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire up the queue/player focus moves for a two-pane page and hand back the
+ * two gestures its keydown table needs. Installs exactly one listener — a
+ * `focusin` on the queue list, which is how the remembered card is kept up to
+ * date — and binds no keys of its own.
+ *
+ * @param {object} opts
+ * @param {HTMLElement|null} opts.queueList the `<ul>` of `.row` cards. Its
+ *   contents are re-created wholesale by renderQueue, so nothing is cached.
+ * @param {HTMLElement|null} opts.queuePane the scrolling `.workspace__queue`
+ *   around it. Only the STACKED layout consults it — there it is the region
+ *   arrow navigation is confined to, which is still wider than the list: it
+ *   takes in the sticky header buttons, from which a press enters the list
+ *   rather than doing nothing. The two-pane layout asks about the player pane
+ *   instead; see moveCard.
+ * @param {HTMLElement|null} opts.playerPane the `.workspace__player` aside. It
+ *   carries `tabindex="-1"` in the HTML so it can be focused programmatically
+ *   without becoming a tab stop; once focused it scrolls natively, which is the
+ *   only way to read a long description without tabbing through every control
+ *   of every card.
+ * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
+ *   the document scrolls rather than the panes. Same question initCurtain asks,
+ *   asked the same way, for the same reason — see moveCard.
+ * @returns {{moveCard: (dir:number) => boolean, togglePane: () => void}}
+ */
+export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
+  // The videoId of the last card that CONTAINED focus — an id, never a node,
+  // so it survives every re-render. Null until the user has been in the list.
+  let rememberedId = null;
+
+  if (queueList) {
+    // focusin (not focus) because it BUBBLES: the note must be taken whether
+    // focus landed on the card itself or on ▶ Play, Skip, a speed button or a
+    // card-menu item inside it — the same closest('.row') rule the card
+    // shortcuts resolve by. Focus on something in the list that is NOT a card
+    // (the "Show all (N)" footer button) leaves the previous note standing,
+    // which is what lets an arrow press from there resume where the user was.
+    queueList.addEventListener('focusin', (e) => {
+      const card = e.target && e.target.closest ? e.target.closest('.row') : null;
+      const id = card && card.dataset ? card.dataset.videoId : null;
+      if (id) rememberedId = id;
+    });
+  }
+
+  /** This list's cards, in DOM order. Re-queried every time: the <ul> is rebuilt. */
+  function cards() {
+    return queueList ? Array.from(queueList.querySelectorAll('.row')) : [];
+  }
+
+  /**
+   * The card to resume at: the remembered videoId if it is still rendered, else
+   * the first card, else null (an empty list). Matched by walking `rows` and
+   * comparing dataset.videoId rather than by a [data-video-id="…"] selector —
+   * the same way findCard() does on both pages — so an id needs no escaping to
+   * be safe in a selector.
+   */
+  function rememberedCard(rows) {
+    if (rememberedId) {
+      for (const row of rows) {
+        if (row.dataset.videoId === rememberedId) return row;
+      }
+    }
+    return rows[0] || null;
+  }
+
+  /**
+   * Move focus one card in `dir` (-1 = previous/up, +1 = next/down), and report
+   * whether the key was HANDLED — the caller preventDefaults on true and only
+   * on true, so everything this declines keeps its native scrolling.
+   *
+   * WHERE IT APPLIES IS A QUESTION ABOUT LAYOUT, not about what happens to hold
+   * focus. In the two-pane layout `body.app-active` is a 100dvh flex column
+   * whose panes scroll INTERNALLY: the document does not scroll at all, so
+   * outside the player pane there is no native scroll for an arrow to belong
+   * to, and it belongs to the queue — from the topbar, the toolbar, the stats
+   * and from <body>, which is where focus keeps landing (bindIframeFocusGuard
+   * puts it there on every click of the video). In the stacked (<=900px) layout
+   * the queue pane is `overflow: visible` and the DOCUMENT scrolls, so there
+   * very much is one, and only focus genuinely INSIDE the queue pane is taken.
+   * Asked by media query rather than by measuring, following initCurtain, so
+   * the breakpoint is written the same way in both places.
+   *
+   * CLAMPS at both ends rather than wrapping — and the clamp still places focus
+   * on the .row while reporting NOT-handled. Both halves matter. Landing on the
+   * .row is how the arrows get focus OUT of an open card menu: it leaves the
+   * .row__menu wrapper, whose focusout dismisses it, so a menu on the first or
+   * last card would have no arrow exit if the key did nothing at all there.
+   * Reporting not-handled is what gives the pane its native scroll back at the
+   * ends of the list, so ArrowDown on the last card still scrolls to the bottom
+   * of a tall card and on to the "Show all (N)" footer. The focus() is a no-op
+   * in the ordinary case (the card already had focus) and only really moves
+   * anything when focus was on a control inside that card.
+   * @param {number} dir
+   * @returns {boolean} true only when focus moved to a DIFFERENT card
+   */
+  function moveCard(dir) {
+    const active = document.activeElement;
+    if (playerPane && active && playerPane.contains(active)) return false;
+    // Stacked: the document scrolls, so take the key only inside the queue pane.
+    if (window.matchMedia(narrowQuery).matches) {
+      if (!(queuePane && active && queuePane.contains(active))) return false;
+    }
+    const rows = cards();
+    if (!rows.length) return false;
+    const card = active && active.closest ? active.closest('.row') : null;
+    const i = card ? rows.indexOf(card) : -1;
+    if (i === -1) {
+      // Entering the list: from the sticky header, from "Show all (N)", from the
+      // toolbar, or from nowhere at all. Always the remembered card, never index
+      // 0 blindly.
+      rememberedCard(rows).focus();
+      return true;
+    }
+    const next = Math.min(rows.length - 1, Math.max(0, i + dir));
+    rows[next].focus();
+    return next !== i; // clamped: focus placed, key NOT taken — see above
+  }
+
+  /**
+   * Throw focus between the two panes ('/'): out of the player and back to the
+   * remembered card, or from anywhere else INTO the player. Works at every
+   * width — the player pane is the one thing on the page that is otherwise
+   * unreachable without tabbing through every control of every card, and that
+   * is true stacked as well as side by side.
+   *
+   * With no cards at all, leaving the player does NOTHING and focus stays put:
+   * there is no honest target, and blurring to <body> would be a silent loss.
+   */
+  function togglePane() {
+    const active = document.activeElement;
+    if (playerPane && active && playerPane.contains(active)) {
+      const target = rememberedCard(cards());
+      if (target) target.focus();
+      return;
+    }
+    if (playerPane) playerPane.focus();
+  }
+
+  return { moveCard, togglePane };
 }

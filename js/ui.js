@@ -405,9 +405,9 @@ function openCardMenu(trigger, panel) {
   // Capture phase, so the staleness check below runs before the page's own
   // keydown table reads the key. It SWALLOWS NOTHING: every key reaches that
   // table, so the card shortcuts keep working with a menu open — they resolve
-  // the card by walking up from whatever holds focus, and j/k move focus onto
-  // the .row itself, which leaves this wrapper and lets its focusout dismiss
-  // the menu.
+  // the card by walking up from whatever holds focus, and ArrowUp/ArrowDown
+  // move focus onto the .row itself, which leaves this wrapper and lets its
+  // focusout dismiss the menu.
   const onKeydown = (e) => {
     // A card can be dropped WITHOUT renderQueue — with Hide-marked on, marking a
     // video removes just its card (auto-advance does exactly that when the
@@ -455,7 +455,7 @@ function openCardMenu(trigger, panel) {
  * left — aria-expanded plus aria-controls — IS the whole disclosure contract.
  *
  * Nothing here carries btn--skip or btn--cardspeed (setCardState/setCardSpeed
- * query those), and the wrapper is not a .row (j/k navigation walks those).
+ * query those), and the wrapper is not a .row (arrow-key navigation walks those).
  *
  * THE ITEMS ARE THE PAGE'S, not this module's: it renders the descriptors it is
  * handed and holds no policy about what a card can do.
@@ -810,7 +810,8 @@ export function renderQueue(listEl, queue, handlers, resolveChannel, more = null
     listEl.append(buildQueueRow(rec, handlers, resolveChannel, skipLabel));
   }
   // Optional "Show all (N)" button at the bottom (pure display windowing). It is
-  // NOT a .row, so keyboard j/k skip it. Text via textContent (XSS-safe).
+  // NOT a .row, so ArrowUp/ArrowDown skip over it — a press from it re-enters
+  // the list at the remembered card. Text via textContent (XSS-safe).
   if (more && typeof more.onShowAll === 'function') {
     const btn = el('button', {
       class: 'btn queue-more__btn',
