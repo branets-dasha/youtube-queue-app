@@ -528,6 +528,19 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  /* Clearance for the OPAQUE sticky .queue-header, which top:0 would otherwise
+     park a keyboard-focused card (ring and all) underneath: focus() scrolls the
+     card's scroll-margin BOX into view, so this pushes it out from under the
+     header. scroll-margin on the CARD rather than scroll-padding on the pane
+     because the scrollport changes with the layout — .workspace__queue above
+     900px, the document below it (see the media query) — and only the target
+     travels with it.
+     Measured .queue-header heights: 52px on one line; 92.8px wrapped to two, and
+     95px at the very narrowest. The two-pane queue is a FIXED 400px, so 52px is
+     exact there and this stays tight; the stacked layout gets the generous value
+     in the max-width:900px block, where the wrap point moves with the digits in
+     "Trim front (N)" and no breakpoint could be exact. */
+  scroll-margin-top: 60px;
   /* No overflow:hidden here — corner-clipping lives on the thumbnail wrapper, so
      the card's own border / shadow / rings render fully uncut. */
   transition: box-shadow 0.12s ease, border-color 0.12s ease;
@@ -654,6 +667,16 @@ main {
 }
 .row__title:hover {
   color: var(--accent);
+}
+/* Same focus ring as every other control in a card (.btn, .row__channel-link):
+   a 2px --focus outline at a 1px offset, instead of the UA default, which is a
+   different colour and hugs the text. The small radius softens the ring where a
+   long title wraps — like the channel link's pill radius, it shapes the outline
+   only (the link has no background or border of its own). */
+.row__title:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 .row__sub {
   margin-top: 4px;
@@ -1200,16 +1223,31 @@ body.app-active #app-main.app[hidden] {
   padding: 4px 0 8px;
 }
 
-/* Now-playing card: a clean SOLID accent ring hugging the card (box-shadow, no
-   gap, follows the radius — no layout shift) plus a subtle accent tint. Distinct
-   from the gapped focus ring, but part of the same accent system. */
+/* Now-playing card: a FILL, and nothing else. A ring means keyboard focus and
+   only focus — so playing must not be an outline of any kind, or the two
+   compete for the same reading. The old solid accent ring did exactly that (it
+   looked like a second focused card) AND lost outright to .row:focus-visible,
+   0,2,0 beating 0,1,0, so focusing the playing card ERASED its marker. A left
+   edge bar was tried instead and rejected: it covered the thumbnail, and beside
+   the focus ring it stacked up into a thick blue left edge.
+   Because a fill and a ring are different PROPERTIES as well as different
+   readings, there is now nothing to out-specify: a focused playing card shows
+   its ring from .row:focus-visible and its tint from here, cleanly and at the
+   same time. Deliberately the ONLY declaration — no border-color: the ordinary
+   --border keeps the card's perimeter neutral, which is the whole point, and it
+   leaves .row:hover's lift and tinted border to behave on this card exactly as
+   on every other.
+   16% is a compromise between the two themes, which carry the same mix very
+   differently: --surface is white in light, so the mix moves a long way (a clear
+   pale blue), while in dark a light --accent into a near-black --surface barely
+   shifts. Picked off a side-by-side sheet of 8/12/16/20% — 16 is the first value
+   that reads at a glance in DARK, and light is still calm there (20% starts to
+   look like a selected table row). One number for both, because this file's dark
+   story is redefining TOKENS at :root and nothing else; a per-theme override of
+   this rule would be the only one in the stylesheet. It is also the one number
+   to turn if the tint ever needs to shout louder or quieter. */
 .row--playing {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent), var(--shadow);
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
-}
-.row--playing:hover {
-  box-shadow: 0 0 0 2px var(--accent), var(--shadow-hover);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 
 /* Stack below this width: player above the queue; release the full-height lock
@@ -1233,6 +1271,16 @@ body.app-active #app-main.app[hidden] {
   .workspace__queue {
     overflow: visible;
     padding-right: 0;
+  }
+  /* The pane no longer scrolls — the DOCUMENT does — but .queue-header is still
+     sticky, now against the viewport, so a focused card still needs to clear it.
+     Here the header spans the viewport instead of a fixed 400px pane, so it can
+     wrap to two lines (92.8px, 95px at the narrowest) — and whether it wraps at
+     ~400px depends on how many digits "Trim front (N)" is showing, so no
+     breakpoint could be exact. Deliberately generous: clear the tallest header
+     always, rather than tuck a card under it sometimes. */
+  .row {
+    scroll-margin-top: 104px;
   }
   .workspace__player {
     order: -1; /* player above the queue */
