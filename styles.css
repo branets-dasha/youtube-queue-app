@@ -551,11 +551,32 @@ main {
   box-shadow: var(--shadow-hover);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
-/* Keyboard focus / selection: an even focus-coloured ring with a small gap, via
+/* Focus / selection: an even focus-coloured ring with a small gap, via
    box-shadow so it follows the card radius uniformly on all sides and never
-   shifts layout. Distinct from the now-playing solid ring; the transparent
-   outline keeps it visible in forced-colors mode. */
-.row:focus-visible {
+   shifts layout. Distinct from the now-playing fill; the transparent outline
+   keeps it visible in forced-colors mode.
+   PLAIN :focus, and the ONLY rule in this file that is — every other focus ring
+   here is :focus-visible, so do not "correct" this one back to match them. The
+   difference is what the element IS. A button or a link is a control you
+   ACTIVATE: the click that focused it already did the thing, so a ring left
+   behind afterwards is noise, and :focus-visible exists precisely to suppress
+   it. A .row is not activated by being focused — it is the CURSOR POSITION for
+   ArrowUp/ArrowDown (see initQueueFocus in page-chrome.js, plus x / t / 1 5 2,
+   all of which act on whichever card contains focus). Clicking a card's body
+   MOVES that cursor, so the queue is left in a state the next keypress depends
+   on; drawing nothing would hide where the arrows will resume, which is the one
+   thing the user needs to see. Where the cursor sits must be visible however
+   focus got there.
+   :focus matches only when the .row ITSELF is the active element, never a
+   descendant (that would be :focus-within) — so clicking Play, Skip, a speed
+   button or the card menu focuses that control and leaves the card unringed,
+   exactly as before.
+   Cascade note: this shares specificity 0,2,0 with .row:hover above, and both
+   set box-shadow. It wins on SOURCE ORDER alone, by sitting after it — which
+   matters because clicking a card necessarily hovers it, so a ring that lost to
+   hover would be invisible for the very gesture this rule is here for, and only
+   appear once the pointer moved away. Keep these two in this order. */
+.row:focus {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus), var(--shadow);
@@ -1256,17 +1277,17 @@ body.app-active #app-main.app[hidden] {
   padding: 4px 0 8px;
 }
 
-/* Now-playing card: a FILL, and nothing else. A ring means keyboard focus and
-   only focus — so playing must not be an outline of any kind, or the two
-   compete for the same reading. The old solid accent ring did exactly that (it
-   looked like a second focused card) AND lost outright to .row:focus-visible,
-   0,2,0 beating 0,1,0, so focusing the playing card ERASED its marker. A left
-   edge bar was tried instead and rejected: it covered the thumbnail, and beside
-   the focus ring it stacked up into a thick blue left edge.
+/* Now-playing card: a FILL, and nothing else. A ring means focus and only focus
+   — so playing must not be an outline of any kind, or the two compete for the
+   same reading. The old solid accent ring did exactly that (it looked like a
+   second focused card) AND lost outright to the card's focus rule, 0,2,0
+   beating 0,1,0, so focusing the playing card ERASED its marker. A left edge
+   bar was tried instead and rejected: it covered the thumbnail, and beside the
+   focus ring it stacked up into a thick blue left edge.
    Because a fill and a ring are different PROPERTIES as well as different
    readings, there is now nothing to out-specify: a focused playing card shows
-   its ring from .row:focus-visible and its tint from here, cleanly and at the
-   same time. Deliberately the ONLY declaration — no border-color: the ordinary
+   its ring from .row:focus and its tint from here, cleanly and at the same
+   time. Deliberately the ONLY declaration — no border-color: the ordinary
    --border keeps the card's perimeter neutral, which is the whole point, and it
    leaves .row:hover's lift and tinted border to behave on this card exactly as
    on every other.
