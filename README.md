@@ -113,6 +113,7 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Shorts** are detected by a **heuristic** (duration ≤ 90s) — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the "Shorts" badge can be wrong for edge cases.
 - **One tab per page.** A second tab of the *same* page stops with a "close the other tab and reload" message so the two can't write over each other. Different pages are fine open at once — the queue and the stash write separate stores, and the Channels page writes no videos at all.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
+- **YouTube's own player controls can't be reached by keyboard.** Tab deliberately skips the video frame: focus inside a cross-origin frame swallows every keypress, so the app's shortcuts — Esc included — would stop working the moment it landed there. Play/pause, seek, speed, mute and fullscreen all have their own shortcuts; **captions and quality do not**, and need the mouse.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.
 
 ## Part 2 — For developers: running it yourself

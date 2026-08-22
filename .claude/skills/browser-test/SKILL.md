@@ -82,6 +82,30 @@ Everything off-origin is stubbed: Google Identity Services and the YouTube IFram
 API are empty scripts — so `window.YT` never appears and **no player is ever
 created**, deliberately — and thumbnails/avatars are flat local PNGs.
 
+`fixtures/fake-player.mjs` is the **opt-in exception** to that last part, for the
+one question no-player cannot answer: whether keyboard focus can get *past* the
+player frame.
+
+```js
+import { installFakePlayer, where, pressTrail, pressTrailNodes } from '../fixtures/fake-player.mjs';
+
+await installFakePlayer(page);   // BEFORE app.open()
+await where(page);               // document.activeElement, described
+await pressTrail(page, 'Tab', 6);      // where focus landed after each press
+await pressTrailNodes(page, 'Tab', 6); // same, plus samePrev — compared by NODE
+```
+
+It installs a `window.YT.Player` that mirrors the one structural fact `player.js`
+depends on — the constructor **replaces the mount `<div>` with an `<iframe>`
+carrying the same id, synchronously**, and `loadVideoById` never touches the
+element — and points that iframe at **`http://127.0.0.1:PORT`** while the app is
+served on `http://localhost:PORT`. Same static server, **different origin**. That
+matters more than it looks: focus entering a *same-origin* iframe does not blur
+the top-level window, so a local stub would quietly "pass" a test of a bug it
+cannot even reproduce. `pressTrailNodes` exists because a description is not an
+identity — the topbar renders two `a.topbar__nav-link`s back to back, so "no
+repeats" has to be asked of the node.
+
 `fixtures/records.mjs` is the record factory (`makeRecord(i, overrides)`,
 `makeStashRecord(i, overrides)`, `videoIdFor(i)`, re-exported from
 `fixtures/app.mjs` so a spec has one import). **The record shape is copied from
@@ -109,10 +133,24 @@ with `js/api.js` when that changes. Records are index-derived and ordered:
   query, real focus order, a windowed list and native scrolling — so none of them
   is reachable from the `node:assert` suites, and every one was got wrong at
   least once by reading the code alone.
+- `tests/player-tab-order.spec.mjs` — **the player frame is out of the tab
+  order** (`detachIframeFromTabOrder()` in `js/player.js`), run over BOTH player
+  pages. The bug it locks down: `.workspace__player` is `tabindex="-1"`, so Tab
+  from the pane fell into the cross-origin frame, `bindIframeFocusGuard` bounced
+  focus to `<body>`, but Chrome's sequential-focus starting point stayed on the
+  iframe — the next Tab re-entered and bounced again, forever. It covers the
+  attribute being set at construction and surviving a video change, the verified
+  Tab order through the island (channel link → Like → 1x/1.5x/2x → Skip →
+  description timestamp → description URL), consecutive Tabs progressing rather
+  than looping, Shift+Tab reversing, "Start the queue" being reachable with
+  **nothing playing**, that a **click** on the video still bounces to `<body>`
+  (the guard is untouched and must stay), and that `/` plus the arrow walk are
+  unaffected. Needs `fixtures/fake-player.mjs` — see above for why a same-origin
+  stub cannot test any of it.
 - `tests/card-visual.spec.mjs` — the visual baseline: a card plain / focused /
   now-playing / playing+focused / handled, and the player pane's focus ring.
 
-Both run at 1280×800, i.e. the **side-by-side** layout. The stacked (≤900px)
+All three run at 1280×800, i.e. the **side-by-side** layout. The stacked (≤900px)
 layout has genuinely different arrow-key rules and would be a second project,
 not a variation smuggled into these files.
 
@@ -168,6 +206,16 @@ not a variation smuggled into these files.
 - **`document.body.focus()` does not blur anything** — `<body>` carries no
   `tabindex`, so it is a no-op. Use `document.activeElement.blur()` to reproduce
   where `bindIframeFocusGuard` puts focus after a click on the video.
+- **A Tab trail parks on `<body>` exactly once, at the document boundary.** A
+  headless page has no browser chrome to Tab into, so after the last focusable
+  Chrome gives one press to `<body>` and the next lands on the document's first
+  (`a.skip-link`). That single `BODY` is a wrap, not a trap — the way to tell
+  them apart is what FOLLOWS it, which is what
+  `player-tab-order.spec.mjs` asserts. Do not "assert no BODY ever".
+- **The focus guard is asynchronous.** `bindIframeFocusGuard` runs off `window`
+  blur through a `setTimeout(0)`, so the bounce to `<body>` lands a task after
+  the click resolves. `expect.poll` it, or give each key press a small settle
+  wait (`pressTrail` does).
 - **Chrome ANIMATES a keyboard scroll.** Smooth scrolling is on by default, so
   the scroll a key triggers is not applied by the time the press resolves:
   measured in this rig, one native PageDown walked `.workspace__queue` from 0 to

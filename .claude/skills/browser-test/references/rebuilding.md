@@ -330,12 +330,61 @@ it — so there is nothing to do here beyond that assertion. If a future
 Playwright/Chrome combination regresses, the fix belongs **here, in the fixture**,
 not in a spec.
 
-## 6. The specs, and the first run
+## 6. `.browser-tests/fixtures/fake-player.mjs`
 
-Recreate `tests/focus-nav.spec.mjs` and `tests/card-visual.spec.mjs` from "The
-specs" and "Screenshots" in SKILL.md, which describe what each one covers and the
-rules a visual spec must follow (clipped page shots via `shotWithMargin()`, the
-`row--playing` class rather than a real embed).
+An **opt-in** override of app.mjs's "no player is ever created" rule, needed by
+exactly one spec (`tests/player-tab-order.spec.mjs`) and imported by nothing
+else. It exports `FAKE_PLAYER_SRC`, `installFakePlayer(page)`, `where(page)`,
+`pressTrail(page, key, n)` and `pressTrailNodes(page, key, n)`.
+
+`installFakePlayer` does three things, in this order, all before `app.open()`:
+
+- **Routes the framed document.** ``page.route(`${FAKE_PLAYER_SRC}*`)`` -> `200
+  text/html`, a body that fills the viewport edge to edge — `margin:0` and
+  `height:100vh` on the body, holding a `100%` × `100%` button — so a mouse
+  click anywhere over the player area lands *inside* the frame.
+- **`addInitScript` installing `window.__where()`** — `document.activeElement`
+  rendered as `tag#id.classes (card <videoId>)`. Guarded with
+  `if (window.top !== window) return;` so it never runs inside the fake frame.
+- **`addInitScript` installing `window.YT`** — a `FakePlayer` constructor plus
+  `PlayerState`. Same top-window guard.
+
+``FAKE_PLAYER_SRC = `http://127.0.0.1:${PORT}/__fake_player__` `` (importing
+`PORT` from the config) is the load-bearing part. The app is served on
+`http://localhost:<PORT>`, so this is the **same static server at a different
+origin** — and cross-origin is the whole point: focus entering a *same-origin*
+iframe does not blur the top-level window, so a local stub could not reproduce
+the bug the spec exists for. No second server, no network.
+
+`FakePlayer(mountId, opts)` must mirror the two structural facts `js/player.js`
+depends on:
+
+- the constructor **synchronously replaces** `document.getElementById(mountId)`
+  with an `<iframe>` carrying the same id, `src = FAKE_PLAYER_SRC` and
+  `width:100%;height:100%;border:0;display:block`, keeping the element on `this`;
+- `loadVideoById` **does not touch the element** (the real API postMessages into
+  the existing frame) — which is why `tabindex` survives a video change.
+
+`onReady` is fired from a `setTimeout(…, 0)`, as the real API defers it until the
+frame loads. The prototype also needs no-op / trivial stubs for everything
+`player.js` may call: `getIframe`, `setPlaybackRate`, `getPlaybackRate`,
+`getCurrentTime`, `seekTo`, `getPlayerState`, `playVideo`, `pauseVideo`,
+`isMuted`, `mute`, `unMute`, `destroy`.
+
+`pressTrail` presses a key `n` times and returns where focus landed after each,
+with a ~50ms settle per press because **the focus guard is async** (it runs off
+`window` blur through a `setTimeout(0)`). `pressTrailNodes` returns
+`{ at, samePrev }` per press, comparing the actual **node** against the previous
+one via a `window.__prevActive` stash — necessary because a description is not an
+identity (the topbar renders two `a.topbar__nav-link`s back to back).
+
+## 7. The specs, and the first run
+
+Recreate `tests/focus-nav.spec.mjs`, `tests/player-tab-order.spec.mjs` and
+`tests/card-visual.spec.mjs` from "The specs" and "Screenshots" in SKILL.md,
+which describe what each one covers and the rules a visual spec must follow
+(clipped page shots via `shotWithMargin()`, the `row--playing` class rather than
+a real embed).
 
 Snapshots need no seeding of their own: `.browser-tests/` is gitignored, so a
 rebuilt rig starts with no baselines, the first run reports *failed* with "A
