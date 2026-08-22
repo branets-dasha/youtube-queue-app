@@ -60,6 +60,25 @@ function clear(node) {
 // Time formatting
 // ---------------------------------------------------------------------------
 
+// ONE formatter for the whole app, built once at module load. The options below
+// are fixed — formatAbsolute takes no options and every caller wants the same
+// shape — so there is nothing per-call to vary and nothing to key a cache on.
+// This is the hot path: it is called once per rendered card, and
+// Date#toLocaleString builds a fresh Intl.DateTimeFormat on EVERY call, which
+// measured ~100ms per 2000 cards against ~3ms through this one. The locale is
+// left undefined (the runtime's default) exactly as toLocaleString had it, so
+// the rendered string is unchanged. The one thing that moved: the locale and
+// time zone are resolved ONCE per page load rather than per call, so changing
+// either mid-session now needs a reload to take effect. (DST is unaffected —
+// a fixed zone still formats each instant at its own offset.)
+const ABSOLUTE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 /**
  * Absolute, locale-aware timestamp string.
  * @param {string} iso
@@ -68,13 +87,7 @@ function clear(node) {
 export function formatAbsolute(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso || '';
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return ABSOLUTE_FORMAT.format(d);
 }
 
 /**
@@ -211,10 +224,19 @@ export function buildAvatar(info, decorative = false) {
   const avatarUrl = (info && info.avatarUrl) || '';
   if (!avatarUrl) return avatarPlaceholder(title);
 
+  // loading/decoding are set UNCONDITIONALLY, for every call site — the cards
+  // (thousands of them), the now-playing meta row, and channels.html — with no
+  // opt-in parameter, because neither hint has a per-site answer. `lazy` only
+  // ever defers a request the viewport does not need yet, and the two
+  // small-N sites are in or beside the viewport, so it fetches them at once
+  // anyway; `async` says "never block presentation on this decode", which is
+  // right for one image exactly as it is for two thousand. A flag would have to
+  // pick a value that is already correct everywhere.
   const img = el('img', {
     class: 'row__avatar',
     alt: decorative ? '' : title, // channel title (or nothing when inside the link)
     loading: 'lazy',
+    decoding: 'async',
     width: '36',
     height: '36',
   });
@@ -569,6 +591,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     class: 'row__thumb',
     alt: '',
     loading: 'lazy',
+    decoding: 'async',
     width: '480',
     height: '270',
   });
@@ -578,6 +601,14 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   // stub WITHOUT firing onerror, so we detect that in onload (naturalWidth < 320)
   // and swap to mqdefault (320x180, 16:9, essentially always present). onerror
   // covers hard failures. img.src ONLY — no innerHTML, no background-image.
+  //
+  // That probe is ENTIRELY event-driven and must stay that way: naturalWidth is
+  // read inside onload and NOWHERE else — never synchronously here, where a
+  // lazy image has not loaded and would measure 0 and swap every card to mq for
+  // nothing. Because it is, loading="lazy" merely DEFERS the whole dance: the
+  // deferred fetch fires onload when the card nears the viewport, and the swap
+  // (itself a fresh img.src, which lazy no longer gates once the element is in
+  // range) happens right then.
   const vid = rec.videoId ? encodeURIComponent(rec.videoId) : '';
   const maxresSrc = vid ? `https://i.ytimg.com/vi/${vid}/maxresdefault.jpg` : '';
   const mqSrc = vid ? `https://i.ytimg.com/vi/${vid}/mqdefault.jpg` : '';
@@ -795,7 +826,9 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver, threaded straight to buildQueueRow
  *        (see buildChannelBadge)
- * @param {object|null} [more] optional { total, onShowAll } "Show all" footer
+ * @param {object|null} [more] optional { total, onShowAll } "Show all" footer.
+ *        onShowAll is called ASYNCHRONOUSLY, one painted frame after the click,
+ *        with the button showing "Loading…" in the meantime — see below.
  * @param {string} [skipLabel='Skip'] visible label for each row's mark button
  *        ('Remove' on the stash page), threaded straight to buildQueueRow; also
  *        used in its aria-label and title. The btn--skip CLASS never changes —
@@ -810,14 +843,52 @@ export function renderQueue(listEl, queue, handlers, resolveChannel, more = null
     listEl.append(buildQueueRow(rec, handlers, resolveChannel, skipLabel));
   }
   // Optional "Show all (N)" button at the bottom (pure display windowing). It is
-  // NOT a .row, so ArrowUp/ArrowDown skip over it — a press from it re-enters
-  // the list at the remembered card. Text via textContent (XSS-safe).
+  // NOT a .row — so none of the card shortcuts (x, t, 1/5/2) act on it and it is
+  // never what the arrows ENTER the list at — but it IS the last item of the
+  // ArrowUp/ArrowDown walk, which page-chrome's moveCard finds by this class.
+  // Text via textContent (XSS-safe).
   if (more && typeof more.onShowAll === 'function') {
+    const idleLabel = `Show all (${more.total})`;
+    // Re-entry guard, per BUTTON: closure state, so it is born false with each
+    // rendered button and dies with it — nothing to reset, and a re-render
+    // during the wait cannot leave a stale flag behind. Deliberately NOT the
+    // `disabled` property: disabling the focused control drops focus to <body>,
+    // and this button is one a keyboard user arrows onto and presses Enter on.
+    let busy = false;
     const btn = el('button', {
       class: 'btn queue-more__btn',
       type: 'button',
-      text: `Show all (${more.total})`,
-      onclick: more.onShowAll,
+      text: idleLabel,
+      onclick: () => {
+        if (busy) return; // a second activation inside the wait does nothing
+        busy = true;
+        btn.textContent = 'Loading…';
+        // THE LABEL MUST BE PAINTED BEFORE THE EXPANSION STARTS. Style, layout
+        // and paint happen only once the current task ends, so setting the text
+        // and expanding in the same task shows nothing at all — the browser
+        // goes straight from the click to the frozen re-render (thousands of
+        // rows, on a real queue). requestAnimationFrame alone is no better: its
+        // callbacks run BEFORE that frame is painted. So the work goes in a
+        // setTimeout scheduled from INSIDE one — the frame carrying the label
+        // is painted when the rAF callbacks return, and this task is the first
+        // thing to run afterwards.
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            try {
+              more.onShowAll();
+            } catch (err) {
+              // The expansion is what removes this button, so if it threw the
+              // button is still on screen: put its real label back and clear
+              // the guard, or it sits there saying "Loading…" for good. The
+              // throw itself is passed on untouched — an onShowAll that failed
+              // reported to window.onerror exactly as it did before deferral.
+              busy = false;
+              btn.textContent = idleLabel;
+              throw err;
+            }
+          }, 0);
+        });
+      },
     });
     listEl.append(el('li', { class: 'queue-more', role: 'presentation' }, [btn]));
   }

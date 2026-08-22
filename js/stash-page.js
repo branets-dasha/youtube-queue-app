@@ -1351,10 +1351,23 @@ function render() {
   updateCleanupUi();
 }
 
-/** "Show all (N)": reveal every card for THIS session (in-memory, not persisted). */
+/**
+ * "Show all (N)": reveal every card for THIS session (in-memory, not persisted).
+ *
+ * FOCUS MUST BE PLACED BY HAND, because activating this button destroys it:
+ * render() -> renderQueue() -> clear() takes the whole `li.queue-more` away, and
+ * with `more` now null nothing replaces it, so focus would fall to <body> — a
+ * dead end for a keyboard user who has just arrowed down onto it. The honest
+ * landing is the FIRST NEWLY-REVEALED card, which is simply the card at the
+ * pre-expansion count. Identical to the subscriptions page, deliberately.
+ */
 function onShowAll() {
+  // Counted BEFORE the re-render: afterwards the list is the expanded one and
+  // the boundary is gone.
+  const revealedAt = queueFocus ? queueFocus.cardCount() : 0;
   state.showAll = true;
   render();
+  if (queueFocus) queueFocus.focusCardAt(revealedAt);
 }
 
 /**
@@ -1443,9 +1456,11 @@ function onGlobalKeydown(e) {
 
   if (key === 'arrowup' || key === 'arrowdown') {
     // ↑ = previous card (upward in the oldest->newest list), ↓ = next. The
-    // whole rule lives in page-chrome's moveCard — where the keys apply (a
-    // layout question, not a focus one), the remembered card they enter at, and
-    // the clamp at both ends — and it reports whether it TOOK the key.
+    // whole rule lives in page-chrome's moveCard — what they walk (the cards,
+    // then the "Show all (N)" footer button when one is rendered), where the
+    // keys apply (a layout question, not a focus one), the remembered card they
+    // ENTER the list at, and the clamp at both ends — and it reports whether it
+    // TOOK the key.
     // preventDefault ONLY on true, so everything it declines keeps its native
     // scrolling: the player pane, the stacked layout's document, and a clamp at
     // either end of the list. Identical to the subscriptions page, clamp

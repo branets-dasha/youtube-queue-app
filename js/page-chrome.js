@@ -396,7 +396,7 @@ export function bindIframeFocusGuard(getIframe) {
 //
 // Both player pages are the same two-pane workspace — a scrolling queue on the
 // left, a scrolling player on the right — and both need the same three moves:
-// walk the cards with ArrowUp/ArrowDown, get back INTO the list after focus has
+// walk the queue with ArrowUp/ArrowDown, get back INTO the list after focus has
 // wandered off it, and throw focus from one pane to the other. The mechanics
 // live here for one reason: the two pages' keydown tables have drifted apart
 // before, and this is the part of them that has no page-specific behavior at
@@ -404,6 +404,14 @@ export function bindIframeFocusGuard(getIframe) {
 // says "stacked" — is a parameter, and each page still writes its OWN table
 // entries calling in, because this module owns no keyboard shortcut (see the
 // curtain's Esc, which is bound the same way).
+//
+// WHAT THE ARROWS WALK is [card1 … cardN, "Show all (N)"?] — the cards, then
+// the windowing footer button when one is rendered. The button is a walk ITEM,
+// not a card: it is reachable only by arrowing DOWN off the last card (or by
+// Tab), ArrowUp from it goes back to that last card, and ArrowDown on it clamps
+// like any other end of the walk. It is deliberately never a card, because the
+// two things a card is — the target the list is ENTERED at, and what x / t /
+// 1,5,2 act on — are both meaningless for it.
 //
 // THE REMEMBERED CARD is the whole idea. Focus leaves the card list constantly
 // — onto the toolbar, onto a header button, and onto <body>, where
@@ -416,6 +424,8 @@ export function bindIframeFocusGuard(getIframe) {
 // CURRENT list at use time and falls back to the first card when that video is
 // gone (cleaned up, filtered out, or scrolled out of the render window), which
 // is also the natural answer for a first press with nothing remembered at all.
+// It is CARDS ONLY: the note is what a press from OUTSIDE the list enters at,
+// and "Show all" is never an honest place to be dropped into the queue.
 //
 // This module never touches the DOM outside the two nodes it is handed.
 // ---------------------------------------------------------------------------
@@ -443,7 +453,8 @@ export function bindIframeFocusGuard(getIframe) {
  * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
  *   the document scrolls rather than the panes. Same question initCurtain asks,
  *   asked the same way, for the same reason — see moveCard.
- * @returns {{moveCard: (dir:number) => boolean, togglePane: () => void}}
+ * @returns {{moveCard: (dir:number) => boolean, togglePane: () => void,
+ *   cardCount: () => number, focusCardAt: (index:number) => Element|null}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
   // The videoId of the last card that CONTAINED focus — an id, never a node,
@@ -455,8 +466,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     // focus landed on the card itself or on ▶ Play, Skip, a speed button or a
     // card-menu item inside it — the same closest('.row') rule the card
     // shortcuts resolve by. Focus on something in the list that is NOT a card
-    // (the "Show all (N)" footer button) leaves the previous note standing,
-    // which is what lets an arrow press from there resume where the user was.
+    // (the "Show all (N)" footer button) leaves the previous note standing:
+    // the note exists to answer "where does a press from OUTSIDE the list go",
+    // and the answer must be a card. Arrowing back UP off "Show all" does not
+    // consult it at all — it steps to the last card by POSITION, because that
+    // is where you must have come down from.
     queueList.addEventListener('focusin', (e) => {
       const card = e.target && e.target.closest ? e.target.closest('.row') : null;
       const id = card && card.dataset ? card.dataset.videoId : null;
@@ -467,6 +481,17 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   /** This list's cards, in DOM order. Re-queried every time: the <ul> is rebuilt. */
   function cards() {
     return queueList ? Array.from(queueList.querySelectorAll('.row')) : [];
+  }
+
+  /**
+   * The "Show all (N)" footer button, when the list is windowed and one is
+   * rendered — the walk's last item, after every card. Re-queried like cards()
+   * for the same reason (renderQueue rebuilds the <ul>, and whether the button
+   * is there at all changes with the window). Null the rest of the time, which
+   * is what makes "clamp on the last card" the untouched old behaviour.
+   */
+  function moreButton() {
+    return queueList ? queueList.querySelector('.queue-more__btn') : null;
   }
 
   /**
@@ -486,9 +511,18 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   }
 
   /**
-   * Move focus one card in `dir` (-1 = previous/up, +1 = next/down), and report
-   * whether the key was HANDLED — the caller preventDefaults on true and only
-   * on true, so everything this declines keeps its native scrolling.
+   * Move focus one step along the walk in `dir` (-1 = previous/up, +1 =
+   * next/down), and report whether the key was HANDLED — the caller
+   * preventDefaults on true and only on true, so everything this declines keeps
+   * its native scrolling.
+   *
+   * THE WALK IS [card1 … cardN, "Show all (N)"?]. The footer button is the one
+   * non-card item, appended when the list is windowed: ArrowDown off the last
+   * card lands on it (that being the whole point — it was previously reachable
+   * only by Tab, at the bottom of a list the arrows had just walked), ArrowUp
+   * from it steps back to that last card, and ArrowDown on it clamps, since
+   * there is nothing below it. With no button rendered the last card clamps
+   * exactly as it always did.
    *
    * WHERE IT APPLIES IS A QUESTION ABOUT LAYOUT, not about what happens to hold
    * focus. In the two-pane layout `body.app-active` is a 100dvh flex column
@@ -503,17 +537,17 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * the breakpoint is written the same way in both places.
    *
    * CLAMPS at both ends rather than wrapping — and the clamp still places focus
-   * on the .row while reporting NOT-handled. Both halves matter. Landing on the
+   * on the item while reporting NOT-handled. Both halves matter. Landing on the
    * .row is how the arrows get focus OUT of an open card menu: it leaves the
    * .row__menu wrapper, whose focusout dismisses it, so a menu on the first or
-   * last card would have no arrow exit if the key did nothing at all there.
+   * last item would have no arrow exit if the key did nothing at all there.
    * Reporting not-handled is what gives the pane its native scroll back at the
-   * ends of the list, so ArrowDown on the last card still scrolls to the bottom
-   * of a tall card and on to the "Show all (N)" footer. The focus() is a no-op
-   * in the ordinary case (the card already had focus) and only really moves
-   * anything when focus was on a control inside that card.
+   * ends of the walk, so ArrowDown on the LAST item still scrolls to the bottom
+   * of a tall card and on to the end of the pane. The focus() is a no-op in the
+   * ordinary case (the item already had focus) and only really moves anything
+   * when focus was on a control inside that card.
    * @param {number} dir
-   * @returns {boolean} true only when focus moved to a DIFFERENT card
+   * @returns {boolean} true only when focus moved to a DIFFERENT walk item
    */
   function moveCard(dir) {
     const active = document.activeElement;
@@ -523,19 +557,54 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       if (!(queuePane && active && queuePane.contains(active))) return false;
     }
     const rows = cards();
+    // No cards = no walk. The footer button cannot outlive them (it only renders
+    // when there are MORE records than fit), so there is nothing to fall back to.
     if (!rows.length) return false;
+    const more = moreButton();
+    const items = more ? [...rows, more] : rows;
     const card = active && active.closest ? active.closest('.row') : null;
-    const i = card ? rows.indexOf(card) : -1;
+    let i = card ? rows.indexOf(card) : -1;
+    // Not in a card, but on (or inside) the footer button: that is the walk's
+    // last item. Asked after the .row test because a card never contains it.
+    if (i === -1 && more && active && more.contains(active)) i = items.length - 1;
     if (i === -1) {
-      // Entering the list: from the sticky header, from "Show all (N)", from the
-      // toolbar, or from nowhere at all. Always the remembered card, never index
-      // 0 blindly.
+      // Entering the list from OUTSIDE it: the sticky header, the toolbar, or
+      // nowhere at all. Always the remembered CARD — never index 0 blindly, and
+      // never the footer button, which is not a place to be dropped into a queue.
       rememberedCard(rows).focus();
       return true;
     }
-    const next = Math.min(rows.length - 1, Math.max(0, i + dir));
-    rows[next].focus();
+    const next = Math.min(items.length - 1, Math.max(0, i + dir));
+    items[next].focus();
     return next !== i; // clamped: focus placed, key NOT taken — see above
+  }
+
+  /**
+   * How many cards are rendered right now. Exists for the one caller that needs
+   * to compare the list ACROSS a re-render — "Show all (N)", which reveals the
+   * cards after this count — so the counting rule (.row, this list) stays here
+   * with cards() rather than being written out again on each page.
+   * @returns {number}
+   */
+  function cardCount() {
+    return cards().length;
+  }
+
+  /**
+   * Put focus on the card at `index`, falling back to the LAST card and then the
+   * first; a list with no cards leaves focus alone rather than blurring to
+   * <body>. The fallbacks are not decoration: the index is always computed
+   * against a list that has since been re-rendered, so it can legitimately be
+   * past the end (a concurrent sweep shrank the list) or the list can be empty.
+   * @param {number} index
+   * @returns {Element|null} the card focused, or null when there was none
+   */
+  function focusCardAt(index) {
+    const rows = cards();
+    if (!rows.length) return null;
+    const target = rows[index] || rows[rows.length - 1] || rows[0];
+    target.focus();
+    return target;
   }
 
   /**
@@ -558,5 +627,5 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     if (playerPane) playerPane.focus();
   }
 
-  return { moveCard, togglePane };
+  return { moveCard, togglePane, cardCount, focusCardAt };
 }
