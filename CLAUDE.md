@@ -40,6 +40,7 @@ Issues live in **Linear**, not GitHub Issues — the repo is on GitHub and deplo
 - One team in the workspace: **Owls**, key `OWL`, id `53f5e1c0-f1b2-464c-a707-7b99f24b7b1a` — nothing to disambiguate, don't enumerate teams.
 - Default project: **YouTube Queue**, id `3f52fab5-8f05-4643-a31e-ce393556c45d` (`https://linear.app/branets-dasha/project/youtube-queue-4b1b3b8b9ad0`); new issues default to it and to the **Backlog** state unless told otherwise.
 - The ids are recorded here so `list_teams`/`list_projects` are **not** re-queried every time — go straight to creating the issue.
+- Claude authenticates as **its own Linear user** — `agent`, id `e6401194-c489-40e2-a9a4-a3e5c0e75b3a` — not as the repo owner, so **authorship is a signal**: an issue or comment by that user is Claude's, anything else is the owner's. New issues **default to it as assignee**, since Claude is doing the work. (Everything created before 2026-08-23 is attributed to the owner regardless of who actually wrote it, that account being the only one connected at the time.)
 - The Linear MCP `save_issue` create is **not idempotent**, and a `502 upstream_unavailable` can still have created the issue — if a create appears to fail, search for it before retrying (a blind retry produced duplicates OWL-10 / OWL-11 on 2026-08-09).
 
 ## Architecture
