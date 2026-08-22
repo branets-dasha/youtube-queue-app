@@ -99,10 +99,16 @@ with `js/api.js` when that changes. Records are index-derived and ordered:
   footer as the walk's last item, the clamp at both ends (which **places focus
   but does not `preventDefault`** — both halves matter), re-entry at the
   remembered card, resolving by `closest('.row')`, and `/` throwing focus
-  between the panes. These rules are emergent — a media query, real focus order,
-  a windowed list and native scrolling — so none of them is reachable from the
-  `node:assert` suites, and every one was got wrong at least once by reading the
-  code alone.
+  between the panes. Plus the jump keys: PageUp/PageDown stepping
+  `QUEUE_PAGE_STEP` walk items and landing the destination at the **top** of the
+  pane, their clamp at both ends, the reported bug they fix (a PageDown from the
+  second-to-last card with the bottom already in view must still advance),
+  Home/End at the ends of the walk, all four declining inside the player pane and
+  inside a text field, and the point of the whole thing — an ArrowDown after a
+  PageDown continuing from the NEW position. These rules are emergent — a media
+  query, real focus order, a windowed list and native scrolling — so none of them
+  is reachable from the `node:assert` suites, and every one was got wrong at
+  least once by reading the code alone.
 - `tests/card-visual.spec.mjs` — the visual baseline: a card plain / focused /
   now-playing / playing+focused / handled, and the player pane's focus ring.
 
@@ -162,6 +168,18 @@ not a variation smuggled into these files.
 - **`document.body.focus()` does not blur anything** — `<body>` carries no
   `tabindex`, so it is a no-op. Use `document.activeElement.blur()` to reproduce
   where `bindIframeFocusGuard` puts focus after a click on the video.
+- **Chrome ANIMATES a keyboard scroll.** Smooth scrolling is on by default, so
+  the scroll a key triggers is not applied by the time the press resolves:
+  measured in this rig, one native PageDown walked `.workspace__queue` from 0 to
+  460px over **about nine frames** (`[0, 0, 24, 71, 141, 226, 311, 383, 432, 457,
+  460, 460…]`). Never assert a scroll position by reading it once after
+  `keyboard.press` — `expect.poll` it. A single `requestAnimationFrame` is not
+  enough either, which is what killed an earlier design of the page keys (the app
+  no longer depends on native scroll timing at all — it moves focus and lets the
+  scroll follow — but a spec measuring geometry still does). Focus-driven scrolls
+  are a different path and *are* instant here, since the stylesheet sets no
+  `scroll-behavior: smooth`. Also beware `Math.round()` of a small negative
+  overshoot: it yields `-0`, and `expect(-0).toBe(0)` **fails**.
 - **A handled record seeded at the FRONT of the queue is deleted before the
   first render.** `init()` runs `cleanup()`, which prunes the whole handled
   prefix at or below the cutoff. That is the app working correctly. Mark cards

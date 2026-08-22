@@ -3,8 +3,10 @@
 // Leaf page chrome shared by every entry point — the single-tab lock, the
 // fatal-storage halt screens, the privacy curtain, and the two-pane focus
 // navigation both player pages drive from their arrow keys. No app state and no
-// queue logic: it imports only ui.js, toast.js and the two error classes from
-// store.js, and is never imported by queue.js/migrations.js.
+// queue logic: it imports only ui.js, toast.js, the two error classes from
+// store.js and one tunable from config.js (which every module may import — it
+// is the constants file, not a layer), and is never imported by
+// queue.js/migrations.js.
 //
 // Everything here is per-DOCUMENT, not per-page: each export takes what varies
 // (the lock name, the curtain node, the iframe getter, the two panes) as an
@@ -13,6 +15,7 @@
 // curtain's Esc, is exposed as plain functions that each page's own keydown
 // table calls.
 
+import { QUEUE_PAGE_STEP } from './config.js';
 import { el, setVisible } from './ui.js';
 import { showToast } from './toast.js';
 import { DbBlockedError, DbUnavailableError } from './store.js';
@@ -395,23 +398,44 @@ export function bindIframeFocusGuard(getIframe) {
 // Two-pane focus navigation
 //
 // Both player pages are the same two-pane workspace — a scrolling queue on the
-// left, a scrolling player on the right — and both need the same three moves:
-// walk the queue with ArrowUp/ArrowDown, get back INTO the list after focus has
-// wandered off it, and throw focus from one pane to the other. The mechanics
-// live here for one reason: the two pages' keydown tables have drifted apart
-// before, and this is the part of them that has no page-specific behavior at
-// all. Everything that varies — which nodes the panes are, which media query
-// says "stacked" — is a parameter, and each page still writes its OWN table
-// entries calling in, because this module owns no keyboard shortcut (see the
-// curtain's Esc, which is bound the same way).
+// left, a scrolling player on the right — and both need the same moves: walk the
+// queue with ArrowUp/ArrowDown, jump a page of it with PageUp/PageDown, go to
+// either end with Home/End, get back INTO the list after focus has wandered off
+// it, and throw focus from one pane to the other. The mechanics live here for one
+// reason: the two pages' keydown tables have drifted apart before, and this is
+// the part of them that has no page-specific behavior at all. Everything that
+// varies — which nodes the panes are, which media query says "stacked" — is a
+// parameter, and each page still writes its OWN table entries calling in,
+// because this module owns no keyboard shortcut (see the curtain's Esc, which is
+// bound the same way).
 //
-// WHAT THE ARROWS WALK is [card1 … cardN, "Show all (N)"?] — the cards, then
-// the windowing footer button when one is rendered. The button is a walk ITEM,
-// not a card: it is reachable only by arrowing DOWN off the last card (or by
-// Tab), ArrowUp from it goes back to that last card, and ArrowDown on it clamps
-// like any other end of the walk. It is deliberately never a card, because the
-// two things a card is — the target the list is ENTERED at, and what x / t /
-// 1,5,2 act on — are both meaningless for it.
+// WHAT THE KEYS WALK is [card1 … cardN, "Show all (N)"?] — the cards, then the
+// windowing footer button when one is rendered (walkItems below). The button is
+// a walk ITEM, not a card: it is reachable only by arrowing DOWN off the last
+// card (or by End, or by Tab), ArrowUp from it goes back to that last card, and
+// ArrowDown on it clamps like any other end of the walk. It is deliberately
+// never a card, because the two things a card is — the target the list is
+// ENTERED at, and what x / t / 1,5,2 act on — are both meaningless for it.
+//
+// EVERY KEY HERE MOVES FOCUS AND LETS THE SCROLL FOLLOW — never the reverse.
+// The only distinction left is STEP vs EDGE: ArrowUp/ArrowDown and
+// PageUp/PageDown are relative and step along the walk (moveCard, by 1 or by
+// QUEUE_PAGE_STEP), Home/End are absolute and name an end of it (focusEdge).
+// Both then let the browser's own scroll-into-view carry the pane.
+//
+// PAGEUP/PAGEDOWN DELIBERATELY DO NOT USE THE NATIVE SCROLL, and that is worth
+// writing down because it looks like a regression. They once did — not
+// preventDefaulted, with the focus cursor brought along afterwards — and it was
+// both more machinery and a worse key. A card here is ~383px tall in a ~531px
+// pane, so a browser page scrolls barely more than ONE card: the fidelity being
+// preserved was ArrowDown with a frame-watcher bolted on (Chrome ANIMATES a
+// keyboard scroll over ~9 frames, so the sync could not even be a single
+// requestAnimationFrame). Worse, it could STALL — a PageDown that landed on the
+// second-to-last card with the bottom already in view scrolled nothing, so the
+// sync re-found the card focus was already on and the key did nothing at all. A
+// fixed step of items cannot stall, needs no timing, and is a genuinely
+// different gesture from the arrow. Do not restore the native scroll as a
+// "fidelity" improvement.
 //
 // THE REMEMBERED CARD is the whole idea. Focus leaves the card list constantly
 // — onto the toolbar, onto a header button, and onto <body>, where
@@ -432,19 +456,19 @@ export function bindIframeFocusGuard(getIframe) {
 
 /**
  * Wire up the queue/player focus moves for a two-pane page and hand back the
- * two gestures its keydown table needs. Installs exactly one listener — a
- * `focusin` on the queue list, which is how the remembered card is kept up to
- * date — and binds no keys of its own.
+ * gestures its keydown table needs. Installs exactly one listener — a `focusin`
+ * on the queue list, which is how the remembered card is kept up to date — and
+ * binds no keys of its own.
  *
  * @param {object} opts
  * @param {HTMLElement|null} opts.queueList the `<ul>` of `.row` cards. Its
  *   contents are re-created wholesale by renderQueue, so nothing is cached.
  * @param {HTMLElement|null} opts.queuePane the scrolling `.workspace__queue`
  *   around it. Only the STACKED layout consults it — there it is the region
- *   arrow navigation is confined to, which is still wider than the list: it
- *   takes in the sticky header buttons, from which a press enters the list
- *   rather than doing nothing. The two-pane layout asks about the player pane
- *   instead; see moveCard.
+ *   navigation is confined to, which is still wider than the list: it takes in
+ *   the sticky header buttons, from which a press enters the list rather than
+ *   doing nothing. Side by side the gate asks about the player pane instead;
+ *   see walkApplies.
  * @param {HTMLElement|null} opts.playerPane the `.workspace__player` aside. It
  *   carries `tabindex="-1"` in the HTML so it can be focused programmatically
  *   without becoming a tab stop; once focused it scrolls natively, which is the
@@ -453,7 +477,8 @@ export function bindIframeFocusGuard(getIframe) {
  * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
  *   the document scrolls rather than the panes. Same question initCurtain asks,
  *   asked the same way, for the same reason — see moveCard.
- * @returns {{moveCard: (dir:number) => boolean, togglePane: () => void,
+ * @returns {{moveCard: (dir:number, opts?:{page?:boolean}) => boolean,
+ *   focusEdge: (dir:number) => boolean, togglePane: () => void,
  *   cardCount: () => number, focusCardAt: (index:number) => Element|null}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
@@ -511,30 +536,78 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   }
 
   /**
-   * Move focus one step along the walk in `dir` (-1 = previous/up, +1 =
-   * next/down), and report whether the key was HANDLED — the caller
-   * preventDefaults on true and only on true, so everything this declines keeps
-   * its native scrolling.
+   * Does queue navigation apply to the key being handled right now? THE ONE
+   * GATE — every move in this module asks it, because they all answer it
+   * identically and a second copy is a second thing to get wrong.
    *
-   * THE WALK IS [card1 … cardN, "Show all (N)"?]. The footer button is the one
-   * non-card item, appended when the list is windowed: ArrowDown off the last
-   * card lands on it (that being the whole point — it was previously reachable
-   * only by Tab, at the bottom of a list the arrows had just walked), ArrowUp
-   * from it steps back to that last card, and ArrowDown on it clamps, since
-   * there is nothing below it. With no button rendered the last card clamps
-   * exactly as it always did.
+   * IT IS A QUESTION ABOUT LAYOUT, not about what happens to hold focus. In the
+   * two-pane layout `body.app-active` is a 100dvh flex column whose panes scroll
+   * INTERNALLY: the document does not scroll at all, so outside the player pane
+   * there is no native scroll for a key to belong to, and it belongs to the
+   * queue — from the topbar, the toolbar, the stats and from <body>, which is
+   * where focus keeps landing (bindIframeFocusGuard puts it there on every click
+   * of the video). In the stacked (<=900px) layout the queue pane is
+   * `overflow: visible` and the DOCUMENT scrolls, so there very much is one, and
+   * only focus genuinely INSIDE the queue pane is taken.
    *
-   * WHERE IT APPLIES IS A QUESTION ABOUT LAYOUT, not about what happens to hold
-   * focus. In the two-pane layout `body.app-active` is a 100dvh flex column
-   * whose panes scroll INTERNALLY: the document does not scroll at all, so
-   * outside the player pane there is no native scroll for an arrow to belong
-   * to, and it belongs to the queue — from the topbar, the toolbar, the stats
-   * and from <body>, which is where focus keeps landing (bindIframeFocusGuard
-   * puts it there on every click of the video). In the stacked (<=900px) layout
-   * the queue pane is `overflow: visible` and the DOCUMENT scrolls, so there
-   * very much is one, and only focus genuinely INSIDE the queue pane is taken.
-   * Asked by media query rather than by measuring, following initCurtain, so
-   * the breakpoint is written the same way in both places.
+   * The player pane is out at EVERY width. It scrolls natively and that is the
+   * whole reason it is focusable, so an arrow, a PageDown, a Home and an End
+   * alike must go on scrolling a long description rather than be stolen by a
+   * list in the other pane.
+   *
+   * Asked by media query rather than by measuring, following initCurtain, so the
+   * breakpoint is written the same way in both places.
+   * @returns {boolean} false = decline the key entirely, changing nothing
+   */
+  function walkApplies() {
+    const active = document.activeElement;
+    if (playerPane && active && playerPane.contains(active)) return false;
+    // Stacked: the document scrolls, so take the key only inside the queue pane.
+    if (window.matchMedia(narrowQuery).matches) {
+      return Boolean(queuePane && active && queuePane.contains(active));
+    }
+    return true;
+  }
+
+  /**
+   * THE WALK: [card1 … cardN, "Show all (N)"?] — every card, then the windowing
+   * footer button when one is rendered. The footer button is the one non-card
+   * item: ArrowDown off the last card lands on it (that being the whole point —
+   * it was previously reachable only by Tab, at the bottom of a list the arrows
+   * had just walked), End lands on it, ArrowUp from it steps back to that last
+   * card, and ArrowDown on it clamps, since there is nothing below it. With no
+   * button rendered the last card is the last item, exactly as it always was.
+   *
+   * EMPTY when there are no cards, and that is total: the button cannot outlive
+   * them (it renders only when there are MORE records than fit), so "no cards"
+   * means there is nothing to walk at all rather than a walk of one button.
+   * @param {HTMLElement[]} [rows] this list's cards, when the caller has them already
+   * @returns {HTMLElement[]}
+   */
+  function walkItems(rows = cards()) {
+    if (!rows.length) return [];
+    const more = moreButton();
+    return more ? [...rows, more] : rows;
+  }
+
+  /**
+   * Step focus along the walk in `dir` (-1 = previous/up, +1 = next/down) and
+   * report whether the key was HANDLED — the caller preventDefaults on true and
+   * only on true, so everything this declines keeps its native scrolling. What
+   * it walks is walkItems, where it applies is walkApplies.
+   *
+   * ONE FUNCTION FOR BOTH RELATIVE KEYS, because they differ in nothing but how
+   * far they go: the arrows step 1, PageUp/PageDown pass `{ page: true }` and
+   * step QUEUE_PAGE_STEP. Writing the walk resolution, the entry-from-outside
+   * rule and the clamp a second time for the page keys is exactly the drift this
+   * module exists to prevent.
+   *
+   * A PAGE JUMP SCROLLS ITS DESTINATION TO THE TOP (`block: 'start'`), where a
+   * single step keeps the browser's default "nearest". Landing ten items down
+   * under "nearest" pins the destination against the BOTTOM edge of the pane
+   * with the nine you skipped sitting above it — which reads as a scroll that
+   * overshot rather than a page that turned. `.row`'s scroll-margin-top keeps
+   * the destination clear of the sticky header either way.
    *
    * CLAMPS at both ends rather than wrapping — and the clamp still places focus
    * on the item while reporting NOT-handled. Both halves matter. Landing on the
@@ -546,37 +619,81 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * of a tall card and on to the end of the pane. The focus() is a no-op in the
    * ordinary case (the item already had focus) and only really moves anything
    * when focus was on a control inside that card.
-   * @param {number} dir
+   * @param {number} dir -1 = up/previous, +1 = down/next
+   * @param {object} [opts]
+   * @param {boolean} [opts.page] true = one page key's worth (QUEUE_PAGE_STEP
+   *   items), landed at the top of the pane, instead of a single step.
    * @returns {boolean} true only when focus moved to a DIFFERENT walk item
    */
-  function moveCard(dir) {
-    const active = document.activeElement;
-    if (playerPane && active && playerPane.contains(active)) return false;
-    // Stacked: the document scrolls, so take the key only inside the queue pane.
-    if (window.matchMedia(narrowQuery).matches) {
-      if (!(queuePane && active && queuePane.contains(active))) return false;
-    }
+  function moveCard(dir, { page = false } = {}) {
+    if (!walkApplies()) return false;
     const rows = cards();
-    // No cards = no walk. The footer button cannot outlive them (it only renders
-    // when there are MORE records than fit), so there is nothing to fall back to.
-    if (!rows.length) return false;
-    const more = moreButton();
-    const items = more ? [...rows, more] : rows;
+    const items = walkItems(rows);
+    if (!items.length) return false; // no cards = no walk (see walkItems)
+    const active = document.activeElement;
     const card = active && active.closest ? active.closest('.row') : null;
     let i = card ? rows.indexOf(card) : -1;
     // Not in a card, but on (or inside) the footer button: that is the walk's
-    // last item. Asked after the .row test because a card never contains it.
-    if (i === -1 && more && active && more.contains(active)) i = items.length - 1;
+    // last item. `items` is longer than `rows` exactly when one is rendered.
+    // Asked after the .row test because a card never contains it.
+    const last = items[items.length - 1];
+    if (i === -1 && items.length > rows.length && active && last.contains(active)) {
+      i = items.length - 1;
+    }
     if (i === -1) {
       // Entering the list from OUTSIDE it: the sticky header, the toolbar, or
       // nowhere at all. Always the remembered CARD — never index 0 blindly, and
       // never the footer button, which is not a place to be dropped into a queue.
+      // A page key entering the list is still an ENTRY, not a jump of ten from
+      // nowhere: there is no "from" to page away from yet.
       rememberedCard(rows).focus();
       return true;
     }
-    const next = Math.min(items.length - 1, Math.max(0, i + dir));
-    items[next].focus();
+    const step = page ? QUEUE_PAGE_STEP : 1;
+    const next = Math.min(items.length - 1, Math.max(0, i + dir * step));
+    const target = items[next];
+    if (page) {
+      // Focus first with the scroll suppressed, then place it deliberately at
+      // the TOP of the scrollport — two calls rather than one because focus()
+      // takes no `block` option, and doing it in this order means the default
+      // "nearest" scroll never happens and gets corrected (which would show as a
+      // visible double jump).
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'start' });
+    } else {
+      target.focus();
+    }
     return next !== i; // clamped: focus placed, key NOT taken — see above
+  }
+
+  /**
+   * Home / End: focus one END of the walk — dir -1 = the first item, +1 = the
+   * last — and report whether the key was HANDLED, on moveCard's contract (the
+   * caller preventDefaults on true and only on true).
+   *
+   * THESE KEYS ARE ABSOLUTE, where moveCard's are relative: "the beginning" and
+   * "the end" are properties of the LIST, so there is no current position to
+   * step from and nothing to clamp. The scroll is a CONSEQUENCE of the focus,
+   * exactly as it is for a step: an ordinary focus() (no preventScroll and no
+   * explicit block here, deliberately) scrolls the item into view, which for the
+   * first and last items of the list is the top and the bottom of the pane
+   * anyway, and `.row`'s scroll-margin-top already keeps the first card out from
+   * under the sticky header.
+   *
+   * End lands on "Show all (N)" when one is rendered, because that is the walk's
+   * last item — exactly where ArrowDown off the last card goes.
+   *
+   * An EMPTY list returns false and touches nothing, so the keys keep their
+   * native meaning on a page with no queue to jump around in.
+   * @param {number} dir
+   * @returns {boolean}
+   */
+  function focusEdge(dir) {
+    if (!walkApplies()) return false;
+    const items = walkItems();
+    if (!items.length) return false;
+    (dir < 0 ? items[0] : items[items.length - 1]).focus();
+    return true;
   }
 
   /**
@@ -627,5 +744,5 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     if (playerPane) playerPane.focus();
   }
 
-  return { moveCard, togglePane, cardCount, focusCardAt };
+  return { moveCard, focusEdge, togglePane, cardCount, focusCardAt };
 }

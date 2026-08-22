@@ -1394,7 +1394,8 @@ function updateDefaultSpeedButton() {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. STASH: ↑/↓ move, x remove, Enter play focused
+// Keyboard shortcuts. STASH: ↑/↓ move, PgUp/PgDn scroll (carrying focus with
+// them), Home/End jump to either end, x remove, Enter play focused
 // card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→ seek, -/+ speed,
 // n next, l like, m mute, f fullscreen. BOTH: '/' throws focus between the two
 // panes. Ignored while typing in an input (the add field lives on this page, so
@@ -1467,6 +1468,21 @@ function onGlobalKeydown(e) {
     // included, where the clamp is also what gets focus out of a card menu this
     // page does not have.
     if (queueFocus && queueFocus.moveCard(key === 'arrowup' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'pageup' || key === 'pagedown') {
+    // The SAME move as ↑/↓, only further: moveCard steps QUEUE_PAGE_STEP walk
+    // items instead of one and lands the destination at the top of the pane.
+    // Same took-the-key contract, so a clamp at either end reports false and
+    // native scrolling finishes the job. Identical to the subscriptions page.
+    if (queueFocus && queueFocus.moveCard(key === 'pageup' ? -1 : 1, { page: true })) {
+      e.preventDefault();
+    }
+  } else if (key === 'home' || key === 'end') {
+    // ABSOLUTE keys: "the beginning" / "the end" of the LIST, so they name their
+    // target rather than step from wherever focus is, and the focus scroll
+    // follows. Prevented only when page-chrome took the key — an empty stash
+    // declines and Home/End keep their native meaning. Note the add field is an
+    // INPUT, so the typing guard above has already let Home/End through to it.
+    if (queueFocus && queueFocus.focusEdge(key === 'home' ? -1 : 1)) e.preventDefault();
   } else if (key === '/') {
     // '/' throws focus between the panes: out of the player back to the
     // remembered card, from anywhere else into the player. ALWAYS prevented —

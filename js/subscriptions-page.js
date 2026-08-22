@@ -1674,7 +1674,8 @@ function cyclePlaybackSpeed(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard shortcuts. QUEUE: ↑/↓ move, x skip, t add to stash, Enter
+// Keyboard shortcuts. QUEUE: ↑/↓ move, PgUp/PgDn scroll (carrying focus with
+// them), Home/End jump to either end, x skip, t add to stash, Enter
 // play focused card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→
 // seek, -/+ speed, n next, l like, m mute, f fullscreen. BOTH: '/' throws focus
 // between the two panes. Ignored while typing in an input/textarea, during
@@ -1743,6 +1744,20 @@ function onGlobalKeydown(e) {
     // either end of the list (which still places focus on the .row, so the card
     // menu keeps its arrow exit, but lets the pane scroll on).
     if (queueFocus && queueFocus.moveCard(key === 'arrowup' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'pageup' || key === 'pagedown') {
+    // The SAME move as ↑/↓, only further: moveCard steps QUEUE_PAGE_STEP walk
+    // items instead of one and lands the destination at the top of the pane.
+    // Same took-the-key contract, so a clamp at either end reports false and
+    // native scrolling finishes the job, exactly as it does for the arrows.
+    if (queueFocus && queueFocus.moveCard(key === 'pageup' ? -1 : 1, { page: true })) {
+      e.preventDefault();
+    }
+  } else if (key === 'home' || key === 'end') {
+    // ABSOLUTE keys: "the beginning" / "the end" of the LIST, so they name their
+    // target rather than step from wherever focus is, and the focus scroll
+    // follows. Prevented only when page-chrome took the key — an empty list
+    // declines and Home/End keep their native meaning.
+    if (queueFocus && queueFocus.focusEdge(key === 'home' ? -1 : 1)) e.preventDefault();
   } else if (key === '/') {
     // '/' throws focus between the panes: out of the player back to the
     // remembered card, from anywhere else into the player. ALWAYS prevented —
