@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A pure client-side "burn-down queue" for YouTube subscriptions: fetch videos from your subscriptions up to a moving cutoff, display them oldest→newest, and play/skip through them. Three static pages, each with its own entry-point module — `index.html` (the queue), `stash.html` (a second, hand-curated queue) and `channels.html` (per-channel prefs). Vanilla HTML/CSS/ES modules — **no build step, no framework, no bundler, no `package.json`, no `node_modules`**. The only runtime dependencies are three Google-hosted scripts (Google Identity Services, YouTube IFrame API, YouTube Data API v3).
+A pure client-side "burn-down queue" for YouTube subscriptions: fetch videos from your subscriptions up to a moving cutoff, display them oldest→newest, and play/skip through them. Three static pages, each with its own entry-point module — `index.html` (the queue), `stash.html` (a second, hand-curated queue) and `channels.html` (per-channel prefs). Vanilla HTML/CSS/ES modules — **no build step, no framework, no bundler, and no `package.json` or `node_modules` anywhere in version control**: the app and everything committed have zero dependencies, and since deploy = push to `main`, anything committed is shipped. The only runtime dependencies are three Google-hosted scripts (Google Identity Services, YouTube IFrame API, YouTube Data API v3). The one exception is invisible to git and to Pages: a **gitignored** `.browser-tests/` holds a local Playwright rig (its own `package.json`, system Chrome) for driving the real pages — never committed, never deployed, never imported by `js/`. See `.claude/skills/browser-test/SKILL.md`.
 
 ## Working style — delegate, act as overseer
 
@@ -28,6 +28,8 @@ node js/queue.test.mjs
 node js/migrations.test.mjs
 ```
 Two suites, both plain Node `node:assert`, no test framework, zero dependencies. Each runs every test top-to-bottom and throws on the first failure — there is **no filter/single-test runner**; to isolate one, comment out the others in the file. Only `js/queue.js` and `js/migrations.js` are tested because they are the only modules with no browser globals at import time (`migrations.js` touches `localStorage` inside one function body, which its tests stub).
+
+For what only a real browser can answer — focus order, key handling, layout at a breakpoint, screenshot baselines — there is the gitignored `.browser-tests/` Playwright rig (`.claude/skills/browser-test/SKILL.md`). These two suites stay the first stop for anything pure.
 
 **Deploy:** GitHub Pages serves the repo root of `main` directly. There is no CI and no build/deploy step — **deployment = push to `main`**. Live at `https://branets-dasha.github.io/youtube-queue-app/`.
 
