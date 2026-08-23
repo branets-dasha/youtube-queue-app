@@ -4,8 +4,9 @@
 // fatal-storage halt screens, the privacy curtain, and the two-pane focus
 // navigation both player pages drive from their arrow keys. No app state and no
 // queue logic: it imports only ui.js, toast.js, the two error classes from
-// store.js and one tunable from config.js (the constants file, not a layer),
-// and is never imported by queue.js/migrations.js.
+// store.js, one tunable from config.js (the constants file, not a layer) and
+// one pure helper from queue.js — no cycle, since queue.js imports nothing but
+// config.js and is never given this module in return.
 //
 // Everything here is per-DOCUMENT, not per-page: each export takes what varies
 // (the lock name, the curtain node, the iframe getter, the two panes) as an
@@ -14,6 +15,7 @@
 // navigation is exposed as functions each page's own keydown table calls.
 
 import { QUEUE_PAGE_STEP } from './config.js';
+import { nearestSurvivor } from './queue.js';
 import { el, setVisible, stepCardMenu } from './ui.js';
 import { showToast } from './toast.js';
 import { DbBlockedError, DbUnavailableError } from './store.js';
@@ -443,11 +445,16 @@ export function bindIframeFocusGuard(getIframe) {
  *   asked the same way.
  * @returns {{moveCard: (dir:number, opts?:{page?:boolean}) => boolean,
  *   focusEdge: (dir:number) => boolean, togglePane: () => void,
- *   cardCount: () => number, focusCardAt: (index:number) => Element|null}}
+ *   cardCount: () => number, focusCardAt: (index:number) => Element|null,
+ *   rememberCard: (videoId:string|null|undefined) => void,
+ *   renderKeepingAnchor: (rerender:() => void) => void}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
-  // The videoId of the last card that CONTAINED focus — an id, never a node,
-  // so it survives every re-render. Null until the user has been in the list.
+  // The videoId of the card the walk resumes at — an id, never a node, so it
+  // survives every re-render. Null until the user has been in the list. Focus
+  // landing in a card is its usual writer (the focusin below), but not its only
+  // one: a page that moves the user's PLACE without moving focus sets it
+  // outright through rememberCard, and no focusin fires for that.
   let rememberedId = null;
 
   if (queueList) {
@@ -469,6 +476,18 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   /** This list's cards, in DOM order. Re-queried every time: the <ul> is rebuilt. */
   function cards() {
     return queueList ? Array.from(queueList.querySelectorAll('.row')) : [];
+  }
+
+  /**
+   * Move the walk cursor to `videoId` WITHOUT moving focus — for the two places
+   * the user's position changes while focus is somewhere else entirely: the
+   * Hide-skipped toggle (focus is on the button that was pressed) and a card
+   * removed out from under a cursor that was never in it. Neither fires a
+   * focusin, so without this the walk silently falls back to the first card.
+   * @param {string|null|undefined} videoId
+   */
+  function rememberCard(videoId) {
+    if (typeof videoId === 'string' && videoId) rememberedId = videoId;
   }
 
   /**
@@ -669,6 +688,89 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   }
 
   /**
+   * Is `el` at least partly within the scrollport the user is reading through?
+   * ONE expression for both layouts: wide, the queue pane clips; stacked, the
+   * pane is `overflow: visible` and the VIEWPORT clips. Intersecting the two
+   * gives the visible band either way, with no branch on the media query.
+   */
+  function inView(el) {
+    const pane = queuePane ? queuePane.getBoundingClientRect() : null;
+    const top = pane ? Math.max(pane.top, 0) : 0;
+    const bottom = pane ? Math.min(pane.bottom, window.innerHeight) : window.innerHeight;
+    const r = el.getBoundingClientRect();
+    return r.bottom > top && r.top < bottom;
+  }
+
+  /**
+   * The videoId of the card the user's PLACE is at — what a re-render that
+   * changes the list's membership has to preserve. First hit wins:
+   *   1. the card containing focus;
+   *   2. the remembered card, IF it is on screen;
+   *   3. the first card at least partly on screen;
+   *   4. the remembered card;
+   *   5. the first card.
+   *
+   * 2 before 3 because the gesture this exists for is a toolbar button: a press
+   * moves focus to the BUTTON, so 1 rarely fires, and the card the user was
+   * arrowing on is a truer answer than whatever happens to be topmost.
+   * @returns {string|null} null only when there are no cards at all
+   */
+  function anchorId() {
+    const rows = cards();
+    if (!rows.length) return null;
+    const active = document.activeElement;
+    const focused = active && active.closest ? active.closest('.row') : null;
+    if (focused && queueList && queueList.contains(focused)) return focused.dataset.videoId || null;
+    const remembered = rememberedId ? rows.find((r) => r.dataset.videoId === rememberedId) : null;
+    if (remembered && inView(remembered)) return rememberedId;
+    const visible = rows.find(inView);
+    if (visible) return visible.dataset.videoId || null;
+    return (remembered && rememberedId) || rows[0].dataset.videoId || null;
+  }
+
+  /**
+   * Run `rerender` and KEEP THE USER'S PLACE across it — for a re-render that
+   * changes which records are rendered at all (the Hide-skipped toggle), where
+   * the anchor itself can be one of the cards going into hiding.
+   *
+   * Restores THE SCROLL AND THE WALK CURSOR, never focus: the caller's own
+   * control (the toggle button) holds focus and must keep it, or toggling
+   * straight back would be impossible. One anchor drives both, so the pane and
+   * the next arrow press can never disagree about where the user is.
+   *
+   * The scroll is restored as a DELTA in viewport coordinates — put the
+   * surviving card back at the screen y the anchor occupied — not as a raw
+   * scrollTop, which means a different card once the list's length changes. That
+   * also makes it layout-agnostic apart from naming the scroller: the document
+   * stacked, the pane wide. Over-scroll clamps on its own.
+   *
+   * NOT stash-page.js's renderKeepingPlace, which restores an absolute scrollTop
+   * and re-focuses the same control: that is exact for a cross-tab reconcile,
+   * where membership only grows so the anchor cannot vanish and focus never left
+   * the list. Keep the two separate.
+   * @param {() => void} rerender the page's own render, called exactly once
+   */
+  function renderKeepingAnchor(rerender) {
+    const rowsBefore = cards();
+    const beforeIds = rowsBefore.map((c) => c.dataset.videoId);
+    const id = anchorId();
+    const before = id ? rowsBefore.find((c) => c.dataset.videoId === id) : null;
+    const anchorTop = before ? before.getBoundingClientRect().top : null;
+    rerender();
+    const after = cards();
+    const survivor = nearestSurvivor(beforeIds, id, after.map((c) => c.dataset.videoId));
+    if (!survivor) return;
+    const target = after.find((c) => c.dataset.videoId === survivor);
+    if (!target) return;
+    rememberedId = survivor;
+    if (anchorTop == null) return;
+    const delta = target.getBoundingClientRect().top - anchorTop;
+    if (!delta) return;
+    if (window.matchMedia(narrowQuery).matches) window.scrollBy(0, delta);
+    else if (queuePane) queuePane.scrollTop += delta;
+  }
+
+  /**
    * Throw focus between the two panes ('/'): out of the player and back to the
    * remembered card, or from anywhere else INTO the player. At every width — the
    * player pane is otherwise unreachable without tabbing through every control
@@ -687,5 +789,5 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     if (playerPane) playerPane.focus();
   }
 
-  return { moveCard, focusEdge, togglePane, cardCount, focusCardAt };
+  return { moveCard, focusEdge, togglePane, cardCount, focusCardAt, rememberCard, renderKeepingAnchor };
 }

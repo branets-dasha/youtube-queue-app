@@ -234,6 +234,40 @@ export function lastSkipped(records) {
 }
 
 /**
+ * Given the id order BEFORE a re-render and the ids that SURVIVED it, pick the
+ * id that stands in for `anchorId` — the user's place in the list. The anchor
+ * itself if it survived; otherwise the first survivor AFTER it, else the
+ * nearest survivor BEFORE it. Forward-first, the same preference the removal
+ * rescue uses when a marked card leaves under the cursor.
+ *
+ * Returns null when nothing survived, and also when the anchor is null or is
+ * not in `orderedIds` at all: that is an honest "no opinion" rather than a
+ * guess, and callers already fall back to the first card.
+ *
+ * `survivingIds` may be a Set or an array. Pure; mutates nothing.
+ * @param {Array<string>} orderedIds ids in render order, before the re-render
+ * @param {string|null|undefined} anchorId the id the user's place was at
+ * @param {Set<string>|Array<string>|null|undefined} survivingIds ids still rendered
+ * @returns {string|null}
+ */
+export function nearestSurvivor(orderedIds, anchorId, survivingIds) {
+  const order = Array.isArray(orderedIds) ? orderedIds : [];
+  const alive =
+    survivingIds instanceof Set ? survivingIds : new Set(Array.isArray(survivingIds) ? survivingIds : []);
+  if (!anchorId) return null;
+  const at = order.indexOf(anchorId);
+  if (at < 0) return null;
+  if (alive.has(anchorId)) return anchorId;
+  for (let k = at + 1; k < order.length; k++) {
+    if (alive.has(order[k])) return order[k];
+  }
+  for (let k = at - 1; k >= 0; k--) {
+    if (alive.has(order[k])) return order[k];
+  }
+  return null;
+}
+
+/**
  * Compute the live CUTOFF marker: the boundary of the contiguous handled prefix
  * among the currently-present videos — "everything up to here is handled; the
  * first UNMARKED video is just after it."

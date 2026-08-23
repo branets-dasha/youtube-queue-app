@@ -13,6 +13,7 @@ import {
   computeCutoff,
   videosToClean,
   lastSkipped,
+  nearestSurvivor,
   nextPlayable,
   firstPlayable,
   compareIso,
@@ -146,6 +147,50 @@ test('lastSkipped returns null when nothing is handled', () => {
 test('lastSkipped returns null for an empty / missing list', () => {
   assert.equal(lastSkipped([]), null);
   assert.equal(lastSkipped(undefined), null);
+});
+
+// --- nearestSurvivor: the user's place, carried across a filtering re-render ---
+
+const ORDER = ['a', 'b', 'c', 'd', 'e'];
+
+test('nearestSurvivor keeps the anchor when it survived', () => {
+  assert.equal(nearestSurvivor(ORDER, 'c', ['a', 'c', 'e']), 'c');
+});
+
+test('nearestSurvivor prefers the first survivor AFTER a vanished anchor', () => {
+  // 'b' and 'c' both went; 'd' is forward, 'a' is back — forward wins.
+  assert.equal(nearestSurvivor(ORDER, 'b', ['a', 'd', 'e']), 'd');
+});
+
+test('nearestSurvivor falls BACK when nothing after the anchor survived', () => {
+  assert.equal(nearestSurvivor(ORDER, 'd', ['a', 'b']), 'b');
+});
+
+test('nearestSurvivor returns null when nothing survived at all', () => {
+  assert.equal(nearestSurvivor(ORDER, 'c', []), null);
+});
+
+test('nearestSurvivor has NO opinion without a usable anchor', () => {
+  assert.equal(nearestSurvivor(ORDER, null, ORDER), null);
+  assert.equal(nearestSurvivor(ORDER, undefined, ORDER), null);
+  assert.equal(nearestSurvivor(ORDER, '', ORDER), null);
+  // An anchor absent from the order it is supposed to index into.
+  assert.equal(nearestSurvivor(ORDER, 'zz', ORDER), null);
+});
+
+test('nearestSurvivor accepts a Set or an array of survivors alike', () => {
+  assert.equal(nearestSurvivor(ORDER, 'b', new Set(['a', 'd'])), 'd');
+  assert.equal(nearestSurvivor(ORDER, 'b', ['a', 'd']), 'd');
+});
+
+test('nearestSurvivor tolerates non-array input and mutates neither argument', () => {
+  assert.equal(nearestSurvivor(undefined, 'a', ['a']), null);
+  assert.equal(nearestSurvivor(ORDER, 'a', undefined), null);
+  const order = ['a', 'b', 'c'];
+  const alive = new Set(['c']);
+  nearestSurvivor(order, 'a', alive);
+  assert.deepEqual(order, ['a', 'b', 'c']);
+  assert.deepEqual([...alive], ['c']);
 });
 
 // --- computeCutoff: contiguous handled-prefix marker, floor-bounded, tie-safe ---
