@@ -288,6 +288,8 @@ function cacheDom() {
   dom.queuePane = document.querySelector('.workspace__queue');
   dom.queueList = byId('queue-list');
   dom.emptyState = byId('empty-state');
+  dom.emptyCaughtUp = byId('empty-caught-up');
+  dom.emptyAllHidden = byId('empty-all-hidden');
   dom.curtain = byId('curtain');
 
   // Player pane. The pane itself is the scroll container (selected by class,
@@ -817,19 +819,41 @@ async function setVideoState(videoId, nextState, opts = {}) {
   applyHandledDelta(prevState, nextState);
 
   // When "hide handled" is ON and this video just became marked, REMOVE only its
-  // card (lightweight — no full re-render, no scroll jump), advancing focus to the
-  // next (or previous) card. Otherwise keep the grey-in-place behaviour: marked
+  // card (lightweight — no scroll jump), carrying the walk cursor and, when the
+  // card held focus, focus itself to the next (or previous) card. Only emptying
+  // the window re-renders. Otherwise keep the grey-in-place behaviour: marked
   // videos stay visible/greyed until CLEANUP, and toggling off un-marks them.
   const removedCard = state.hideMarked && nextState !== STATE_NEW && !!card;
   if (removedCard) {
-    let focusTarget = null;
-    if (opts.advanceFocus) {
-      const rows = Array.from(dom.queueList.querySelectorAll('.row'));
-      const i = rows.indexOf(card);
-      if (i >= 0) focusTarget = rows[i + 1] || rows[i - 1] || null;
-    }
+    const rows = Array.from(dom.queueList.querySelectorAll('.row'));
+    const i = rows.indexOf(card);
+    const neighbour = i >= 0 ? rows[i + 1] || rows[i - 1] || null : null;
+    // WHETHER THE CARD HOLDS FOCUS, not who asked for the removal. Read BEFORE
+    // remove(), which drops focus to <body> synchronously. The old gate was
+    // opts.advanceFocus, which only the x/t KEYS pass — so the menu's "Add to
+    // stash", a mouse click on Skip and auto-advance on ENDED each removed the
+    // card the user was standing in and left them on <body>.
+    const takesFocus = card.contains(document.activeElement);
+    // One rendered card means the whole filtered view is about to be empty: the
+    // rendered count is min(QUEUE_DISPLAY_LIMIT, viewList.length).
+    const emptied = rows.length === 1;
     card.remove();
-    if (focusTarget) focusTarget.focus();
+    // Unconditional, not gated on focus: after an ENDED auto-advance from
+    // <body> the walk should resume beside the card that left, not at card 1.
+    if (neighbour && queueFocus) queueFocus.rememberCard(neighbour.dataset.videoId);
+    // The only thing that draws the empty state, disables "Jump to last skipped"
+    // and re-windows the next QUEUE_DISPLAY_LIMIT records — without it, emptying
+    // the window leaves a permanently blank pane with live controls over it.
+    if (emptied) render();
+    if (opts.advanceFocus || takesFocus) {
+      if (neighbour) neighbour.focus();
+      // Nothing left to stand on. #hide-marked-btn is the honest landing: a live
+      // control one press from bringing the hidden cards back, and the only
+      // affordance the empty pane still has. Mirrors onCleanup on the stash.
+      else if (!(queueFocus && queueFocus.focusCardAt(0)) && dom.hideMarkedBtn) {
+        dom.hideMarkedBtn.focus();
+      }
+    }
   } else if (card) {
     setCardState(card, nextState);
     if (opts.advanceFocus) {
@@ -853,7 +877,10 @@ async function setVideoState(videoId, nextState, opts = {}) {
     rec.state = prevState;
     applyHandledDelta(nextState, prevState);
     if (removedCard) {
-      render(); // the card was removed; rebuild the (windowed) view to restore it
+      // The card was removed; rebuild the (windowed) view to restore it. Through
+      // the anchor so the restore does not also throw the user's place away —
+      // a bare render() drops focus to <body>, the same defect as the toggle.
+      rerenderKeepingPlace();
     } else if (card) {
       setCardState(card, prevState);
     }
@@ -901,13 +928,26 @@ function toggleSkip(videoId, opts = {}) {
  * Either way the source card IS still marked here: "it lives in the stash now"
  * is true in all three cases.
  * @param {string} videoId
- * @param {object} [opts] passed straight to setVideoState, exactly as toggleSkip
- *        passes its own: the `t` key sends { advanceFocus: true }, the menu item
- *        sends nothing (a mouse user's focus is in the menu, not on a card).
+ * @param {object} [opts]
+ * @param {boolean} [opts.advanceFocus] walk the cursor to the next card, as the
+ *        `t` key wants and the menu item does not (a mouse user's focus is in
+ *        the menu, not on a card). Handled HERE rather than forwarded to
+ *        setVideoState, so it happens before the awaits rather than after.
  */
 async function addCardToStash(videoId, opts = {}) {
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;
+
+  // FOCUS MOVES FIRST, before the two IndexedDB round trips below. Until it
+  // leaves this card the next `t` resolves to the SAME card (focusedCardIndex
+  // walks up from activeElement), so a fast double-press re-stashes one card
+  // instead of walking the queue. The MARK still waits for the write — only the
+  // cursor is early, and the catch below puts it back.
+  const advancingFrom = opts.advanceFocus ? findCard(videoId) : null;
+  if (advancingFrom) {
+    const next = nextRowAfter(advancingFrom);
+    if (next) next.focus();
+  }
 
   try {
     const incoming = { ...rec };
@@ -943,16 +983,21 @@ async function addCardToStash(videoId, opts = {}) {
       showToast('That video is already in your stash.', { type: 'info' });
     }
   } catch (err) {
-    // Nothing has been marked yet, so there is nothing to revert: just route it
-    // through this page's one error router, which raises the halt screen for a
-    // fatal DB state and toasts everything else.
+    // Nothing has been marked yet, so there is nothing to revert — except the
+    // cursor, which moved above: put it back, so "a failed write leaves the card
+    // untouched" holds for the keyboard too.
+    if (advancingFrom && advancingFrom.isConnected) advancingFrom.focus();
+    // Route it through this page's one error router, which raises the halt
+    // screen for a fatal DB state and toasts everything else.
     handleError(err);
     return;
   }
 
   // Both paths land here: the video is in the stash, so this queue is done with
-  // it. setVideoState (never toggleSkip) — a mark, not a toggle.
-  await setVideoState(videoId, STATE_SKIPPED, opts);
+  // it. setVideoState (never toggleSkip) — a mark, not a toggle. No advanceFocus:
+  // the cursor already left, above. With Hide-skipped ON the removal arm then
+  // sees a card that no longer holds focus and correctly leaves focus alone.
+  await setVideoState(videoId, STATE_SKIPPED);
 }
 
 /**
@@ -1494,7 +1539,18 @@ function render() {
   const total = viewList.length;
   const hasItems = total > 0;
   setVisible(dom.queueList, hasItems);
-  setVisible(dom.emptyState, !hasItems && hasSession());
+  // Records ARE queued, they are just filtered out of view: the way back is the
+  // toggle, not Refresh, so the caught-up wording would be a lie. Exactly one of
+  // the two messages shows.
+  const allHidden = !hasItems && state.hideMarked && state.visible.length > 0;
+  // UNGATED. render() is unreachable until showMainApp() reveals #app-main, so
+  // there is no first run to stay quiet for — the onboarding panels hide the
+  // whole app, not just the queue. An empty pane must always say why it is
+  // empty; the old hasSession() gate left a signed-out user a blank one, and
+  // "hit Refresh" is exactly the right advice to them.
+  setVisible(dom.emptyState, !hasItems);
+  setVisible(dom.emptyCaughtUp, !allHidden);
+  setVisible(dom.emptyAllHidden, allHidden);
 
   // Render only the windowed cards; the "Show all (N)" count reflects the filtered
   // total. state.visible and auto-advance are untouched — only rendered CARDS are
@@ -1535,14 +1591,29 @@ function render() {
 }
 
 /**
+ * render(), keeping the user's place across it — for the re-renders that change
+ * which records are rendered at all, where a bare render() leaves the pane
+ * scrolled to a different card and the arrow walk back at card 1. Restores the
+ * scroll and the walk cursor, never focus: the control that triggered it keeps
+ * that. Falls back to a plain render before initQueueFocus has run.
+ */
+function rerenderKeepingPlace() {
+  if (queueFocus) queueFocus.renderKeepingAnchor(render);
+  else render();
+}
+
+/**
  * "Hide skipped" toggle: flip the view filter, persist it (unlike the render
  * window, this one survives a reload) and re-render through the normal path.
+ * The re-render keeps the user's place: this is the one gesture that changes
+ * the rendered set wholesale, and the anchor card itself may be one of the ones
+ * going into hiding.
  */
 function onToggleHideMarked() {
   state.hideMarked = !state.hideMarked;
   setHideMarked(state.hideMarked); // persist across reloads
-  updateHideMarkedButton();
-  render(); // normal windowed re-render, applying/removing the filter
+  updateHideMarkedButton(); // relabels the button; does not move focus off it
+  rerenderKeepingPlace(); // normal windowed re-render, applying/removing the filter
 }
 
 /** Reflect the hide-handled toggle's label + aria-pressed from state.hideMarked. */
