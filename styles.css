@@ -689,11 +689,17 @@ main {
 .row__title:hover {
   color: var(--accent);
 }
-/* Same focus ring as every other control in a card (.btn, .row__channel-link):
-   a 2px --focus outline at a 1px offset, instead of the UA default, which is a
-   different colour and hugs the text. The small radius softens the ring where a
-   long title wraps — like the channel link's pill radius, it shapes the outline
-   only (the link has no background or border of its own). */
+/* Same focus ring as .btn: a 2px --focus outline at a 1px offset, instead of
+   the UA default, which is a different colour and hugs the text. The small
+   radius softens the ring where a long title wraps — it shapes the outline only
+   (the link has no background or border of its own).
+   .row__channel-link below is the one control here that departs from the 1px
+   offset, for a reason particular to it — see the note there.
+   This rule serves the now-playing title too: renderPlayerTitle (js/ui.js)
+   renders #player-title's link with this very class, so the card and the player
+   bar cannot grow two different title treatments. That gives it the widest
+   reach of any ring in the file — 3px — inside .workspace__player, whose
+   scrollport is grown by 4px precisely to fit rings like it. */
 .row__title:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
@@ -729,10 +735,27 @@ main {
 .row__channel-link:focus-visible .row__channel {
   text-decoration: underline;
 }
+/* A 2px --focus ring like every other control here, but with TWO deliberate
+   departures from the house 1px-offset / pill-radius pair, both of them about
+   the one thing that makes this link different: its box hugs a 36px round
+   avatar and a line of text EXACTLY, with no padding of its own.
+   RADIUS 12px, not 999px. A 999px radius on a box that tight makes the ring a
+   pill whose end caps curve back INTO the content — measured at ~3px of
+   horizontal intrusion at the text's cap height, which put the ring straight
+   through the last glyph of the channel name (and traced the avatar's own
+   circumference on the left). 12px rounds the corners in the empty band above
+   and below the text and leaves the glyphs alone.
+   OFFSET 2px, not 1px. 1px read as touching. 2px is as far as it can go: the
+   flex gap to the following "·" is 6px, so the ring's outer edge at +4px keeps
+   exactly 2px of clearance, and anything more would run into the dot. Widening
+   that gap would move the dot and the date, which is a layout change, not a
+   focus-ring change.
+   The ring reaches 4px outside the link, which is why .workspace__player grows
+   its scrollport by exactly that much — see the padding/margin pair there. */
 .row__channel-link:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 1px;
-  border-radius: 999px;
+  outline-offset: 2px;
+  border-radius: 12px;
 }
 .row__dot {
   opacity: 0.6;
@@ -1060,6 +1083,40 @@ body.app-active #app-main.app[hidden] {
 .workspace__player {
   min-height: 0;
   overflow-y: auto; /* if player + info exceed the pane, scroll here — never clip */
+  /* THE SCROLLPORT IS 4px BIGGER THAN THE CONTENT ON EVERY SIDE, AND THE
+     CONTENT DOES NOT MOVE. padding pushes the content in, the equal negative
+     margin pulls the whole box back out, so .player — the video, the
+     now-playing bar and the description — lands on exactly the same pixel it
+     did before (verified: every box in the pane measures identically). The only
+     thing that moves is the CLIP EDGE.
+     Why it has to: overflow-y:auto makes this a scroll container, which clips
+     BOTH axes at the padding box (overflow-x computes to auto beside it, and
+     `clip` computes to `hidden` here, so overflow-clip-margin cannot help —
+     tried, it does nothing). #player-meta and #player-title sit flush against
+     the content-box left edge, so a focus ring drawn OUTSIDE those links —
+     which is where every ring in this file is drawn — was painted at x < 0 and
+     clipped away: the channel badge's ring showed up with its left side sliced
+     flat off. It is unfixable from the link's side, because a ring that does
+     not overlap its content must start left of that content, and the content
+     starts at the clip edge.
+     4px is what .row__channel-link:focus-visible reaches (2px offset + 2px
+     width) — exactly, with nothing spare, so that a ring which outgrows the
+     band fails the rig's "every ring fits inside the clip box" assertion rather
+     than quietly clipping again. It fits, growth plus the pane's own 2px ring:
+     .workspace's 20px grid gap to the left (14px still free), 12px to the right
+     and below, and 8px of clear air above, where the .shortcuts line ends — at
+     every width and in the stacked ≤900px layout too.
+     On the VERTICAL axis the same 4px is all that can be had, and it is only
+     headroom at the two ends of the scroll range: content can always be
+     hand-scrolled right up to a scrollport edge, so a ring on a control the
+     user scrolls off the top still loses its top segment. That is inherent to
+     every scroll container and is unchanged by any of this. `scroll-padding`
+     was tried for the focus-driven half of it and removed again: measured, this
+     pane's focus scrolls never park a control flush against an edge anyway
+     (there is always frame, gap or description padding around them), so it
+     changed nothing at all. */
+  padding: 4px;
+  margin: -4px;
   /* Rounded like everything else here, and it exists FOR the ring below: an
      outline traces its element's border-radius, so a square pane can only ever
      grow a square ring — which is what made the first version look foreign
@@ -1072,27 +1129,36 @@ body.app-active #app-main.app[hidden] {
 /* The pane is focusable programmatically only (tabindex="-1" in the HTML), so
    this ring appears for exactly one gesture: the '/' pane toggle. Restrained on
    purpose — it says "the arrows scroll HERE now", it is not a control.
-   The offset is POSITIVE, putting the ring wholly OUTSIDE the pane's border box,
-   and that is the entire point: an element paints its outline BEFORE its
+   The offset is NON-NEGATIVE, putting the ring wholly OUTSIDE the pane's border
+   box, and that is the entire point: an element paints its outline BEFORE its
    descendants, so the inset -2px ring this started as was painted over by
    .player__frame — full-bleed, `background: #000`, flush to the pane's top and
    left — which left barely a quarter of the left segment and a tenth of the top
    one on screen, and on the right it ran through the outer 2px of the scrollbar.
    Outside the border box, nothing the pane contains can reach it — scrollbar
    included, since a scrollbar is painted inside that same box.
-   It fits on every edge: 20px of .workspace grid gap to the left, 12px of main's
-   padding to the right and below, and the 100dvh column always keeps that bottom
-   padding, so the pane is never flush with the viewport. The ring needs 4px
-   (2 offset + 2 width) and is clipped by nothing at any width, the stacked
-   ≤900px layout included.
+   It is 0 rather than the 2px this shipped as ONLY because the border box has
+   since grown 4px on every side (see the padding/margin pair above): the ring
+   sits 4px from the video instead of 2px, and 0 is as tight as it can be drawn
+   while staying outside the box. Going back to a negative offset to recover
+   those 2px would put the right-hand segment back on the scrollbar, which now
+   rides 4px further out with the padding box — the padding band is NOT clear
+   air on that side.
+   It fits on every edge: 20px of .workspace grid gap to the left, 12px to the
+   right and below, and the 100dvh column always keeps that bottom padding, so
+   the pane is never flush with the viewport. Ring plus growth needs 6px and is
+   clipped by nothing at any width, the stacked ≤900px layout included.
    Rejected: a permanently reserved `border: 2px solid transparent` — equally
    uncoverable, but it insets the video by 2px forever and needs `outline: none`,
    which this stylesheet has nowhere; and `padding: 2px` behind an inset outline —
    same permanent 2px, and the scrollbar still shares those pixels. An outline
-   costs no layout at all, which is why this one wins. */
+   costs no layout at all, which is why this one wins. (The padding above is not
+   that rejected padding: it is cancelled by an equal negative margin, so it
+   insets the video by nothing, and the ring it makes room for is not this one —
+   it belongs to the pane's CONTENTS.) */
 .workspace__player:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: 0;
 }
 
 .player {

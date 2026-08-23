@@ -75,6 +75,7 @@ import {
   hideStatus,
   renderQueue,
   renderStats,
+  renderPlayerTitle,
   renderPlayerMeta,
   renderDescription,
   setCardState,
@@ -1141,7 +1142,9 @@ function resolveChannel(rec) {
 }
 
 function setPlayerNowPlaying(rec) {
-  if (dom.playerTitle) dom.playerTitle.textContent = rec ? rec.title : ''; // safe text
+  // Title, as a link to the video on YouTube — the same link a card's title is
+  // (see renderPlayerTitle); the frame itself is out of the tab order.
+  renderPlayerTitle(dom.playerTitle, rec);
   // Channel avatar + name + posted date, like the queue cards (updated on every
   // load, incl. auto-advance).
   renderPlayerMeta(dom.playerMeta, rec, resolveChannel);
@@ -1165,7 +1168,7 @@ function setPlayerNowPlaying(rec) {
 function showPlayerEmpty(caughtUp) {
   state.playing = null;
   state.playerCaughtUp = !!caughtUp;
-  if (dom.playerTitle) dom.playerTitle.textContent = '';
+  renderPlayerTitle(dom.playerTitle, null);
   renderPlayerMeta(dom.playerMeta, null);
   renderDescription(dom.playerDescription, null, { onSeek: seekTo });
   setVisible(dom.playerEmpty, true);

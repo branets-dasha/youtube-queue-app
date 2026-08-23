@@ -67,6 +67,7 @@ import {
   showStatus,
   hideStatus,
   renderQueue,
+  renderPlayerTitle,
   renderPlayerMeta,
   renderDescription,
   setCardState,
@@ -1055,7 +1056,9 @@ function channelResolver(channels) {
 }
 
 function setPlayerNowPlaying(rec) {
-  if (dom.playerTitle) dom.playerTitle.textContent = rec ? rec.title : ''; // safe text
+  // Title, as a link to the video on YouTube — the same link a card's title is
+  // (see renderPlayerTitle); the frame itself is out of the tab order.
+  renderPlayerTitle(dom.playerTitle, rec);
   renderPlayerMeta(dom.playerMeta, rec, channelResolver(loadChannels()));
   renderDescription(dom.playerDescription, rec, { onSeek: seekTo });
   // A new video loaded: scroll the pane back to the top so the video shows.
@@ -1073,7 +1076,7 @@ function setPlayerNowPlaying(rec) {
 function showPlayerEmpty(caughtUp) {
   state.playing = null;
   state.playerCaughtUp = !!caughtUp;
-  if (dom.playerTitle) dom.playerTitle.textContent = '';
+  renderPlayerTitle(dom.playerTitle, null);
   renderPlayerMeta(dom.playerMeta, null);
   renderDescription(dom.playerDescription, null, { onSeek: seekTo });
   setVisible(dom.playerEmpty, true);

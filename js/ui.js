@@ -56,6 +56,24 @@ function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
+/**
+ * The canonical youtube.com watch URL for a videoId, id percent-encoded.
+ *
+ * ONE builder for the whole module, because "the same URL shape" is a claim
+ * three call sites make about each other and a string literal repeated three
+ * times cannot keep: a card's title link and its thumbnail (buildQueueRow), the
+ * now-playing title (renderPlayerTitle) and the description's chapter
+ * timestamps (renderDescription, which appends `&t=NNNs` to this base). Private
+ * to ui.js rather than exported from queue.js — it is not a domain derivation,
+ * it is the href half of the DOM these functions build, and it belongs next to
+ * them.
+ * @param {string} videoId
+ * @returns {string}
+ */
+function watchUrl(videoId) {
+  return 'https://www.youtube.com/watch?v=' + encodeURIComponent(videoId);
+}
+
 // ---------------------------------------------------------------------------
 // Time formatting
 // ---------------------------------------------------------------------------
@@ -294,6 +312,49 @@ function buildChannelBadge(rec, resolveChannel) {
 }
 
 /**
+ * Render the now-playing TITLE for `rec` into `container` (the #player-title
+ * aria-live region on both player pages), as a LINK to the video on YouTube.
+ * Pass rec = null to clear it.
+ *
+ * It is a link because the player frame is deliberately out of the tab order
+ * (detachIframeFromTabOrder in player.js), so YouTube's own in-frame title is
+ * unreachable from the keyboard and there was no way at all to open the playing
+ * video on youtube.com without a mouse.
+ *
+ * It MIRRORS the card title rather than inventing a second convention: the same
+ * `.row__title` class (which is what keeps it looking exactly as the plain <p>
+ * text did — the class sets `color: var(--text)` and `text-decoration: none`,
+ * beating the bare `a { color: var(--accent) }` rule, and brings its own
+ * :focus-visible ring), the same watchUrl(), the same target/rel, the same
+ * textContent-only title. The `row__` prefix is not a slip: renderPlayerMeta
+ * below already reuses row__channel-link / row__channel / row__dot /
+ * row__time-abs for exactly this reason — the player bar and a card must not be
+ * able to drift apart.
+ *
+ * The <a> is a CHILD of the container rather than the container itself, so the
+ * page's `<p id="player-title" class="player__title" aria-live="polite">` keeps
+ * its tag, its id and its live region unchanged, an empty state is an empty
+ * paragraph (no anchor, therefore no tab stop, therefore no href to remember to
+ * strip), and the inline anchor changes the paragraph's box by nothing at all.
+ * @param {HTMLElement} container the #player-title element
+ * @param {object|null} rec video record (uses rec.videoId, rec.title)
+ */
+export function renderPlayerTitle(container, rec) {
+  if (!container) return;
+  clear(container);
+  if (!rec) return;
+  container.append(
+    el('a', {
+      class: 'row__title',
+      href: watchUrl(rec.videoId),
+      target: '_blank',
+      rel: 'noopener',
+      text: rec.title, // safe
+    })
+  );
+}
+
+/**
  * Render the player's info meta row (avatar + channel + posted date) for `rec`
  * into `container`, mirroring a card's meta row through the very same channel
  * badge — so the now-playing bar and the cards can never resolve a channel
@@ -344,7 +405,7 @@ export function renderDescription(container, rec, { onSeek } = {}) {
     container.hidden = true;
     return;
   }
-  const watchBase = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
+  const watchBase = watchUrl(rec.videoId);
   for (const seg of parseDescription(rec.description)) {
     if (seg.type === 'timestamp') {
       const a = el('a', {
@@ -578,7 +639,7 @@ function buildCardMenu(rec, items) {
  * @returns {HTMLLIElement}
  */
 export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip') {
-  const watchUrl = 'https://www.youtube.com/watch?v=' + encodeURIComponent(rec.videoId);
+  const watchHref = watchUrl(rec.videoId);
 
   // A card is treated as non-embeddable ONLY when the details fetch has
   // explicitly reported it so (rec.embeddable === false). While embeddable is
@@ -665,7 +726,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
           // Non-embeddable: let the native link handle everything. Plain
           // left-click opens YouTube in a new tab (same as the old window.open).
           class: 'row__thumb-btn',
-          href: watchUrl,
+          href: watchHref,
           target: '_blank',
           rel: 'noopener',
           tabindex: '-1',
@@ -676,7 +737,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
           // non-left button) falls through to the native href so ctrl/cmd/shift/
           // middle-click still opens YouTube in a new tab.
           class: 'row__thumb-btn',
-          href: watchUrl,
+          href: watchHref,
           tabindex: '-1',
           'aria-hidden': 'true',
           onclick: (e) => {
@@ -690,7 +751,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
 
   const titleLink = el('a', {
     class: 'row__title',
-    href: watchUrl,
+    href: watchHref,
     target: '_blank',
     rel: 'noopener',
     text: rec.title, // safe
@@ -777,7 +838,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   // strings (never API data).
   const youtubeBtn = el('a', {
     class: 'btn btn--youtube',
-    href: watchUrl,
+    href: watchHref,
     target: '_blank',
     rel: 'noopener',
     'aria-label': `Open "${rec.title}" on YouTube (can't play in the app)`,

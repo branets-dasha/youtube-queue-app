@@ -140,17 +140,35 @@ with `js/api.js` when that changes. Records are index-derived and ordered:
   focus to `<body>`, but Chrome's sequential-focus starting point stayed on the
   iframe — the next Tab re-entered and bounced again, forever. It covers the
   attribute being set at construction and surviving a video change, the verified
-  Tab order through the island (channel link → Like → 1x/1.5x/2x → Skip →
-  description timestamp → description URL), consecutive Tabs progressing rather
+  Tab order through the island (now-playing title link → channel link → Like →
+  1x/1.5x/2x → Skip → description timestamp → description URL — the title link
+  leads because it is first in the DOM, and exists *because* the frame is out of
+  the tab order), consecutive Tabs progressing rather
   than looping, Shift+Tab reversing, "Start the queue" being reachable with
   **nothing playing**, that a **click** on the video still bounces to `<body>`
   (the guard is untouched and must stay), and that `/` plus the arrow walk are
   unaffected. Needs `fixtures/fake-player.mjs` — see above for why a same-origin
   stub cannot test any of it.
+- `tests/player-meta.spec.mjs` — the now-playing bar, over BOTH player pages:
+  the title being a LINK (`renderPlayerTitle` in `js/ui.js` — right href/target/
+  rel, the card's own `.row__title` class, an `<a>` *inside* the unchanged
+  `<p id="player-title">`, gone again when nothing plays) and looking like the
+  plain text it replaced (the stylesheet's bare `a { color: var(--accent) }` is
+  one missing class away from turning it blue); plus the geometry underneath it
+  — the bar flush with the video, the badge flush with the bar, the 6px flex gap
+  to the `·`, and, the point of the file, **every focus ring in the pane landing
+  inside the pane's clip box**. `.workspace__player` is a scroll container, so it
+  clips at its padding box, and both those links sit on the content edge; the
+  fix grows the pane's box 4px (padding plus an equal negative margin) so the
+  clip edge moves and the content does not. Mutation-checked both ways: drop the
+  padding and the ring tests fail, drop the negative margin and the geometry
+  tests fail.
 - `tests/card-visual.spec.mjs` — the visual baseline: a card plain / focused /
-  now-playing / playing+focused / handled, and the player pane's focus ring.
+  now-playing / playing+focused / handled, the card's channel badge focused, the
+  now-playing title idle and focused, the player-bar channel badge focused, and
+  the player pane's focus ring.
 
-All three run at 1280×800, i.e. the **side-by-side** layout. The stacked (≤900px)
+All four run at 1280×800, i.e. the **side-by-side** layout. The stacked (≤900px)
 layout has genuinely different arrow-key rules and would be a second project,
 not a variation smuggled into these files.
 
@@ -174,6 +192,15 @@ not a variation smuggled into these files.
   clean out. `shotWithMargin()` in `card-visual.spec.mjs` re-measures the box and
   clips the page around it with a 10px margin. An element shot would have made
   "focused" pixel-identical to "plain" and asserted nothing.
+- **`:focus-visible` needs the KEYBOARD to have been the last interaction** — a
+  bare `locator.focus()` does not match it. Chrome paints a focus-visible ring on
+  a programmatic focus only when the most recent user interaction was a keypress,
+  so any shot or measurement of one of those rings must press a key first
+  (`focusVisibly()` in `card-visual.spec.mjs` and `player-meta.spec.mjs` does one
+  `Tab`, then focuses). Get this wrong and the baseline is a picture of the
+  *unfocused* element — the same silent-nothing failure as the element-shot trap
+  above, and it caught this rig once already. `.row:focus` is the exception: it
+  is plain `:focus` on purpose (see styles.css), so `card.focus()` is enough.
 - **Determinism** comes from the pinned viewport / scale / colour scheme /
   timezone / locale in the config (a card prints a locale-formatted publish
   date), the local stub images, and index-derived record text. Fonts still come
