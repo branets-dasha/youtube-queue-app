@@ -105,6 +105,7 @@ import {
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
+  focusFirst,
   bindIframeFocusGuard,
 } from './page-chrome.js';
 
@@ -518,10 +519,22 @@ function updateAuthUi() {
   const signed = hasSession();
   dom.authStatus.textContent = signed ? 'Signed in' : 'Not signed in';
   dom.authStatus.classList.toggle('is-signed-in', signed);
+  // The pair SWAPS: one hides as the other appears, so whichever is going away
+  // would drop focus to <body>. Note it before the swap and place it after —
+  // focus() on a still-hidden element is a no-op. Self-limiting: on every other
+  // call the outgoing button is already hidden and cannot be holding focus.
+  const outgoing = signed ? dom.signinBtn : dom.signoutBtn;
+  const incoming = signed ? dom.signoutBtn : dom.signinBtn;
+  const takesFocus = document.activeElement === outgoing;
   setVisible(dom.signinBtn, !signed);
   setVisible(dom.signoutBtn, signed);
-  dom.refreshBtn.disabled = state.refreshing;
-  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = state.refreshing;
+  if (takesFocus) focusFirst(incoming);
+  // aria-disabled, never the `disabled` property: a refresh runs for seconds and
+  // the click that started it came from one of these buttons, so disabling would
+  // drop the user's focus to <body> for the duration. runRefresh's own
+  // `if (state.refreshing) return` is the re-entry guard.
+  dom.refreshBtn.setAttribute('aria-disabled', String(state.refreshing));
+  if (dom.refreshNewBtn) dom.refreshNewBtn.setAttribute('aria-disabled', String(state.refreshing));
   updateCleanupUi();
   updateLikeButton();
 }
@@ -597,8 +610,9 @@ async function onRefreshNew() {
 async function runRefresh(bound, sweepSpeeds) {
   if (state.refreshing) return;
   state.refreshing = true;
-  dom.refreshBtn.disabled = true;
-  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = true;
+  // Kept alongside updateAuthUi's pair: nothing calls that on the way IN.
+  dom.refreshBtn.setAttribute('aria-disabled', 'true');
+  if (dom.refreshNewBtn) dom.refreshNewBtn.setAttribute('aria-disabled', 'true');
   hideProgress();
 
   try {
@@ -1048,10 +1062,21 @@ async function cleanup() {
  */
 async function onCleanup() {
   if (state.refreshing) return;
+  // Read BEFORE the trim: recompute() -> updateStats() -> updateCleanupUi()
+  // disables this button at 0, and a disabled control drops focus to <body>.
+  // The twin of stash-page.js's onCleanup.
+  const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     await cleanup();
     recompute();
     showToast('Cleaned up handled videos.', { type: 'success' });
+    // The first remaining card — the oldest still-'new' video, exactly where the
+    // burn-down resumes (and focusCardAt updates the remembered card for free).
+    // With none, #hide-marked-btn: the same honest landing setVideoState picks,
+    // and the one header control that is never disabled.
+    if (takesFocus && !(queueFocus && queueFocus.focusCardAt(0))) {
+      focusFirst(dom.hideMarkedBtn);
+    }
   } catch (err) {
     handleError(err);
   }
@@ -1146,7 +1171,14 @@ function onStartQueue() {
     updatePlayingControls(); // nothing to play after all: hide the stale button
     return;
   }
+  // This button is HIDDEN the moment playback starts (playVideo ->
+  // updatePlayingControls), so hand its focus off first. The card of the video
+  // just started, matching a card's own Play button, which leaves focus in the
+  // queue and keeps the arrow walk alive; the player pane when that card is not
+  // rendered (outside the window, or filtered out).
+  const takesFocus = dom.startQueueBtn.contains(document.activeElement);
   playVideo(first.videoId);
+  if (takesFocus) focusFirst(findCard(first.videoId), dom.playerPane);
 }
 
 function openOnYouTube(videoId) {
@@ -1211,6 +1243,16 @@ function setPlayerNowPlaying(rec) {
  * empty player that later gains a playable video updates itself.
  */
 function showPlayerEmpty(caughtUp) {
+  // EVERYTHING focusable in the now-playing region is about to be destroyed or
+  // hidden: Skip and Like (disabled, under a bar that hides), the title link, the
+  // channel-badge link and the description's timestamp/URL links. One gate for
+  // the lot — the two subtrees, NOT the whole player pane, so focus already on
+  // the pane itself is left where the user put it.
+  const active = document.activeElement;
+  const takesFocus =
+    (dom.playerBar && dom.playerBar.contains(active)) ||
+    (dom.playerDescription && dom.playerDescription.contains(active));
+
   state.playing = null;
   state.playerCaughtUp = !!caughtUp;
   renderPlayerTitle(dom.playerTitle, null);
@@ -1221,6 +1263,11 @@ function showPlayerEmpty(caughtUp) {
   updatePlayingControls(); // stopped -> disable the jump, show/hide "Start the queue"
   updateLikeButton(); // state.playing is null -> disabled, not liked
   markPlayingCard(null);
+
+  // After updatePlayingControls, which is what reveals "Start the queue".
+  // Else the pane, always focusable (tabindex="-1") and one '/' from the queue.
+  // Never <body>.
+  if (takesFocus) focusFirst(dom.startQueueBtn, dom.playerPane);
 }
 
 /**
@@ -1414,7 +1461,13 @@ function updateLikeButton() {
     'aria-label',
     liked ? 'Remove like from this video' : 'Like this video'
   );
-  dom.likeBtn.disabled = !state.playing || state.liking;
+  // STRUCTURAL vs TRANSIENT. Nothing playing means the control is genuinely dead
+  // (and the bar is hidden over it), so `disabled` is right and keeps it out of
+  // the tab order. A like IN FLIGHT is transient — the button comes back a moment
+  // later — so aria-disabled, which leaves focus where the user put it; onLike's
+  // `if (state.liking) return` is what actually stops a second click.
+  dom.likeBtn.disabled = !state.playing;
+  dom.likeBtn.setAttribute('aria-disabled', String(state.liking));
 }
 
 /**
@@ -1433,6 +1486,8 @@ function updateLikeButton() {
 async function onLike() {
   const videoId = state.playing;
   if (state.liking) return;
+  // .disabled now means ONLY "nothing playing" (a like in flight is aria-disabled,
+  // so the button keeps focus) — which !videoId already covers. Kept as a belt.
   if (!videoId || !dom.likeBtn || dom.likeBtn.disabled) return;
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;

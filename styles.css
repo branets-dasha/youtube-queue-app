@@ -290,7 +290,7 @@ main {
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
 }
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--surface-2);
 }
 .btn:focus-visible {
@@ -298,6 +298,14 @@ main {
   outline-offset: 1px;
 }
 .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* IN-FLIGHT, not unavailable: the control keeps focus, because disabling one
+   under the user's own focus drops that focus to <body>. Its re-entry guard is
+   the page's own state flag, not the DOM. Must look identical to :disabled, or
+   "busy" is invisible. */
+.btn[aria-disabled='true'] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1088,7 +1096,10 @@ body.app-active #app-main.app[hidden] {
   border-radius: var(--radius);
 }
 /* The pane is focusable programmatically only (tabindex="-1" in the HTML), so
-   this ring appears for exactly one gesture: the '/' pane toggle.
+   this ring appears for two gestures: the '/' pane toggle, and the handoff off a
+   now-playing control that is about to vanish (showPlayerEmpty). It is
+   :focus-visible, so the handoff draws a ring for a keyboard user and nothing
+   for a mouse one — which is the wanted behaviour either way.
    The offset must stay NON-NEGATIVE, keeping the ring wholly OUTSIDE the border
    box: an element paints its outline BEFORE its descendants, so an inset ring is
    painted over by .player__frame (full-bleed, black, flush to the pane's top and
@@ -1273,7 +1284,7 @@ body.app-active #app-main.app[hidden] {
   border-color: var(--accent);
   color: var(--primary-text);
 }
-.btn--like.is-active:hover:not(:disabled) {
+.btn--like.is-active:hover:not(:disabled):not([aria-disabled='true']) {
   background: color-mix(in srgb, var(--accent) 90%, #000);
   color: var(--primary-text);
 }

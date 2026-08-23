@@ -394,6 +394,27 @@ export function bindIframeFocusGuard(getIframe) {
   });
 }
 
+/**
+ * Focus the first candidate that will actually TAKE it, and report which did.
+ * For handing focus off a control that is about to be disabled or hidden — the
+ * browser drops that focus to <body>, which is the whole defect.
+ *
+ * The ladders are two or three deep because the obvious landing is often itself
+ * hidden, disabled or inside the subtree that just went away, and focusing one
+ * of those re-drops focus to <body>. Verifying activeElement afterwards catches
+ * every reason a focus() can fail without enumerating them.
+ * @param {...(Element|null|undefined)} candidates in order of preference
+ * @returns {Element|null} the one that took focus, or null if none did
+ */
+export function focusFirst(...candidates) {
+  for (const el of candidates) {
+    if (!el) continue;
+    el.focus();
+    if (document.activeElement === el) return el;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Two-pane focus navigation
 //
