@@ -68,8 +68,9 @@ export const STASH_SYNC_COALESCE_MS = 120;
 
 // How many items of the queue walk one PageUp/PageDown covers — the "page" in
 // the page keys, deliberately a COUNT OF CARDS and not a screenful of pixels.
-// Both keydown tables pass it to page-chrome's moveCard() as its step (see
-// initQueueFocus); the arrows pass nothing and step 1.
+// page-chrome.js is its only importer: the keydown tables pass moveCard() just
+// { page: true }, and initQueueFocus turns that flag into this step (the arrows
+// pass nothing and step 1).
 //
 // It is a fixed count because a native page here is worth almost nothing: a card
 // is ~383px tall in a ~531px pane, so the browser's own PageDown advances barely

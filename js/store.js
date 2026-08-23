@@ -7,9 +7,11 @@
 //     videos without it. ONE database holds TWO object stores that share the
 //     same keyPath (`videoId`) and the same record shape: `videos` — the
 //     burn-down queue, written by index.html — and `stash` — the manually
-//     curated queue, written by stash.html (whose records carry `addedAt` and
-//     `channelAvatarUrl` on top). Everything else below (the open, the sticky
-//     flags, the guards) is per-DATABASE and covers both.
+//     curated queue, whose records carry `addedAt` and `channelAvatarUrl` on
+//     top and which has TWO writers (stash.html's add form and index.html's
+//     "Add to stash"), so every stash write is the single-key `putStashVideo`
+//     upsert and there is deliberately no bulk stash put. Everything else below
+//     (the open, the sticky flags, the guards) is per-DATABASE and covers both.
 //   - If IndexedDB is genuinely unavailable (missing global, the open() call
 //     throws, or `req.onerror` fires) every video API throws
 //     `DbUnavailableError` and the queue page (index.html or stash.html) halts

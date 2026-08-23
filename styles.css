@@ -717,9 +717,11 @@ main {
 /* A PILL at the house radius, drawn INSET so it occupies the outermost 2px of
    the padded box instead of sitting outside it. Both halves are load-bearing:
    on an UNPADDED box the end caps curve back through the avatar and the last
-   glyph of the name, and an OUTSET ring here reaches 2px further on every side
-   than .workspace__player's clip band allows — that band is sized to this
-   ring's 4px left reach (see the padding/margin pair there). The 8px it reaches
+   glyph of the name, and an OUTSET ring — at the house 1px offset — would reach
+   3px beyond this link's padded box on every side, past .workspace__player's
+   4px clip band, which the box's own -4px margin already spends in full (that
+   band's constraint is stated where it is set). Inset, the ring reaches no
+   further than the margin does and so costs the band nothing. The 8px it reaches
    to the right of the name is paid for by .row__dot's margin. */
 .row__channel-link:focus-visible {
   outline: 2px solid var(--focus);
@@ -1008,7 +1010,7 @@ body.app-active #app-main.app {
 /* An author `display` beats the UA [hidden] rule — so the rule above would keep
    #app-main on screen (focusable, in the a11y tree) behind the fatal-storage
    overlay when showFatalStorageError() hides it. Specificity must beat the
-   0-1-3-1 above, hence the same selector plus [hidden]. */
+   0-1-2-1 above, hence the same selector plus [hidden]. */
 body.app-active #app-main.app[hidden] {
   display: none;
 }
@@ -1067,9 +1069,14 @@ body.app-active #app-main.app[hidden] {
      sliced off at x < 0. Not fixable from the link's side, nor by
      overflow-clip-margin: beside overflow-y:auto, overflow-x `clip` computes to
      `hidden` and the margin does nothing.
-     4px is .row__channel-link:focus-visible's left reach exactly, with nothing
-     spare and nothing checking it, so a ring given more clips silently — check
-     it in a browser. On the scrolling axis the 4px is headroom only at the ends
+     The band must cover the WIDEST left reach in here, which is
+     .row__channel-link's 4px — and that is the link's own -4px margin, not its
+     ring: that one is INSET, painting the outermost 2px of the padded box and
+     reaching nothing beyond it. .row__title's ring IS outset (1px offset + 2px)
+     but sits flush, so it reaches 3px and has 1px to spare. Nothing checks
+     either bound, so widening that margin — or flipping that ring outset —
+     clips silently; check it in a browser.
+     On the scrolling axis the 4px is headroom only at the ends
      of the range: content hand-scrolled to an edge still loses a ring segment,
      as in any scroll container, and scroll-padding does not help. */
   padding: 4px;

@@ -70,7 +70,7 @@ export function migrateChannelPrefs(prefs) {
 }
 
 /**
- * The one-shot localStorage migration, run once at startup by BOTH entry points
+ * The one-shot localStorage migration, run at startup by ALL entry points
  * before anything reads prefs. The only migration that rewrites what is ON DISK
  * rather than just the loaded copy, so the read paths in store.js stay plain
  * parses. Only writes when the shape actually changed, and keeps the prefs

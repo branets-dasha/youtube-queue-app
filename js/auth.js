@@ -1,8 +1,9 @@
 // js/auth.js
 //
 // OAuth 2.0 via Google Identity Services (GIS) "token model".
-//   - Uses google.accounts.oauth2.initTokenClient with the youtube.readonly
-//     scope.
+//   - Uses google.accounts.oauth2.initTokenClient with the youtube.force-ssl
+//     scope — the app's reads plus the videos.rate write behind the Like
+//     button.
 //   - The access token is kept in memory ONLY. It is never written to
 //     localStorage / IndexedDB.
 //   - Callers authorize on demand from inside a click (ensureAuthorized), and
