@@ -13,7 +13,7 @@ desktop.ini
 # Node
 node_modules/
 
-# Local-only Playwright browser-testing rig (see .claude/skills/browser-test/).
-# The app itself has NO dependencies and NO build step - that invariant is
-# deliberate, so the rig lives here and is never committed or deployed.
-.browser-tests/
+# Scratch output from the Playwright MCP server (page snapshots, console logs).
+# It writes into the repo root as you drive the app; none of it is ever
+# committed - see .claude/skills/browser-test/SKILL.md.
+.playwright-mcp/
