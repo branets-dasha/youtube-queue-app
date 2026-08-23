@@ -444,49 +444,40 @@ function closeCardMenu({ restoreFocus = true } = {}) {
   const hadFocus = restoreFocus && open.panel.contains(document.activeElement);
   open.panel.hidden = true;
   open.trigger.setAttribute('aria-expanded', 'false');
-  // Back to the trigger, but ONLY from inside the panel — an Esc press, or an
-  // item being used. Opening leaves focus on the trigger, so every other close
-  // (focus already gone, or a pointerdown outside) has nothing to restore.
+  // Back to the trigger, but ONLY from inside the panel — an item being used,
+  // or an arrow stepping off the top of the list. Opening leaves focus on the
+  // trigger, so every other close (focus already gone, or a pointerdown
+  // outside) has nothing to restore.
   if (hadFocus) open.trigger.focus();
 }
 
 /**
  * Open one card menu (closing any other) and install its two document-level
- * dismissal listeners. FOCUS DOES NOT MOVE: this is a disclosure, not an ARIA
- * menu, so the trigger keeps focus — pressing the same key again toggles it
- * shut — and Tab steps from there into the panel, its next sibling. Dismissal
- * on the way OUT is the wrapper's own focusout listener (see buildCardMenu);
- * these two cover the cases focus never moves for: Esc, and a pointerdown on
- * something unfocusable.
+ * listeners. FOCUS DOES NOT MOVE: this is a disclosure, not an ARIA menu, so the
+ * trigger keeps focus — pressing the same key again toggles it shut — and Tab
+ * steps from there into the panel, its next sibling. Dismissal is the wrapper's
+ * own focusout listener (see buildCardMenu) plus the pointerdown below, which
+ * covers the one case focus never moves for: a click on something unfocusable.
  * @param {HTMLElement} trigger the card menu's trigger button
  * @param {HTMLElement} panel the menu panel
  */
 function openCardMenu(trigger, panel) {
   closeCardMenu();
 
-  // Capture phase, so the staleness check below runs before the page's own
-  // keydown table reads the key. It SWALLOWS NOTHING: every key reaches that
-  // table, so the card shortcuts keep working with a menu open — they resolve
-  // the card by walking up from whatever holds focus, and ArrowUp/ArrowDown
-  // move focus onto the .row itself, which leaves this wrapper and lets its
-  // focusout dismiss the menu.
-  const onKeydown = (e) => {
-    // A card can be dropped WITHOUT renderQueue — with Hide-marked on, marking a
-    // video removes just its card (auto-advance does exactly that when the
-    // playing video ends) — taking this panel with it. Such a menu is stale: it
-    // is detached but still holds both document listeners, so retire it here,
-    // on the next key, and let that key through UNTOUCHED.
-    if (!panel.isConnected) {
-      closeCardMenu();
-      return;
-    }
-    if (e.key === 'Escape') {
-      // Esc is the app's PANIC key, unconditionally. Close this menu — a
-      // detached-but-live one would keep both document listeners behind the
-      // curtain — but do NOT stop or prevent anything: the same press must
-      // still reach the page's table and cover the page.
-      closeCardMenu();
-    }
+  // Capture phase, so the staleness check runs before the page's own keydown
+  // table reads the key. It SWALLOWS NOTHING — no preventDefault, no
+  // stopPropagation — so every key reaches that table, which is how the card
+  // shortcuts keep working with a menu open (they resolve the card by walking
+  // up from whatever holds focus) and how ArrowUp/ArrowDown reach page-chrome's
+  // moveCard, which steps this menu via stepCardMenu before it steps cards.
+  const onKeydown = () => {
+    // THE LISTENER'S ONE REMAINING JOB. A card can be dropped WITHOUT
+    // renderQueue — with Hide-marked on, marking a video removes just its card
+    // (auto-advance does exactly that when the playing video ends) — taking
+    // this panel with it. Such a menu is stale: it is detached but still holds
+    // both document listeners, so retire it here, on the next key, and let that
+    // key through UNTOUCHED.
+    if (!panel.isConnected) closeCardMenu();
   };
   const onPointerDown = (e) => {
     if (panel.contains(e.target) || trigger.contains(e.target)) return;
@@ -495,9 +486,56 @@ function openCardMenu(trigger, panel) {
 
   activeCardMenu = { trigger, panel, onKeydown, onPointerDown };
   panel.hidden = false;
+  // AFTER unhiding — a hidden panel has no box to scroll to. The queue pane
+  // clips (overflow-y: auto) and the panel opens upward, so a menu on a card at
+  // the top of the pane renders above that edge: invisible, while aria-expanded
+  // says it is open and Tab walks into items nobody can see. 'nearest' scrolls
+  // the minimum, and nothing at all when the panel is already fully in view.
+  panel.scrollIntoView({ block: 'nearest' });
   trigger.setAttribute('aria-expanded', 'true');
   document.addEventListener('keydown', onKeydown, true);
   document.addEventListener('pointerdown', onPointerDown);
+}
+
+/**
+ * Step focus through the OPEN card menu in `dir` (-1 = up, +1 = down), or report
+ * that the arrow was never the menu's to take. THE ONE THING THIS MODULE EXPOSES
+ * ABOUT THE MENU: page-chrome's moveCard calls it before its own card step, so
+ * the selectors stay in here and no page module ever names .btn--menu,
+ * .row__menu-panel or .row__menu-item.
+ *
+ * THE SEQUENCE IS SPATIAL, top to bottom: [...enabled items, trigger]. The panel
+ * opens upward (styles.css: bottom: calc(100% + 6px)), so the trigger sits BELOW
+ * its own items, and the settled mapping falls out of one indexOf with no
+ * branching — from the trigger Up reaches the last item and Down leaves out the
+ * bottom; from an item Up steps up and off the first one leaves out the top;
+ * from the last item Down returns to the trigger. Disabled items are left out
+ * because they are not focus stops, so a menu of nothing but them is a sequence
+ * of one where either arrow exits.
+ *
+ * 'exited' has already CLOSED the menu, leaving focus on the trigger — which is
+ * inside the .row, so the caller's ordinary step then resolves that same card
+ * and moves to its neighbour. That is the whole exit story: this function never
+ * moves focus between cards itself.
+ * @param {number} dir -1 = up/previous, +1 = down/next
+ * @returns {'moved'|'exited'|null} null = no menu open, or focus is not in the
+ *   open one, so the caller should walk cards as if this had not been called
+ */
+export function stepCardMenu(dir) {
+  const open = activeCardMenu;
+  if (!open) return null;
+  const active = document.activeElement;
+  if (!active || (active !== open.trigger && !open.panel.contains(active))) return null;
+  // :disabled, not [disabled] — buildCardMenu sets the PROPERTY.
+  const items = Array.from(open.panel.querySelectorAll('.row__menu-item:not(:disabled)'));
+  const sequence = [...items, open.trigger];
+  const next = sequence.indexOf(active) + dir;
+  if (next < 0 || next >= sequence.length) {
+    closeCardMenu();
+    return 'exited';
+  }
+  sequence[next].focus();
+  return 'moved';
 }
 
 /**
@@ -510,11 +548,14 @@ function openCardMenu(trigger, panel) {
  *
  * A DISCLOSURE, not the ARIA menu-button pattern — that pattern REQUIRES focus
  * to move into the menu on open, and this one deliberately leaves focus on the
- * trigger so the same key toggles it shut. Claiming role="menu"/"menuitem"
- * while refusing the focus contract would describe the widget to a screen
- * reader as something it is not, so the roles are gone, and aria-haspopup with
- * them (it announces a menu/dialog/listbox, none of which this is). What is
- * left — aria-expanded plus aria-controls — IS the whole disclosure contract.
+ * trigger so the same key toggles it shut. Arrow keys walking the items
+ * (stepCardMenu) does not buy the pattern back: they walk straight on into the
+ * cards, so the items are a continuation of the card list rather than a mode
+ * you are put into. Claiming role="menu"/"menuitem" while refusing the focus
+ * contract would describe the widget to a screen reader as something it is not,
+ * so the roles are gone, and aria-haspopup with them (it announces a
+ * menu/dialog/listbox, none of which this is). What is left — aria-expanded
+ * plus aria-controls — IS the whole disclosure contract.
  *
  * Nothing here carries btn--skip or btn--cardspeed (setCardState/setCardSpeed
  * query those), and the wrapper is not a .row (arrow-key navigation walks those).

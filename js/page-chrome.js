@@ -14,7 +14,7 @@
 // navigation is exposed as functions each page's own keydown table calls.
 
 import { QUEUE_PAGE_STEP } from './config.js';
-import { el, setVisible } from './ui.js';
+import { el, setVisible, stepCardMenu } from './ui.js';
 import { showToast } from './toast.js';
 import { DbBlockedError, DbUnavailableError } from './store.js';
 
@@ -562,11 +562,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    *
    * CLAMPS at both ends rather than wrapping, and the clamp still places focus
    * on the item while reporting NOT-handled. Both halves matter: landing on the
-   * .row is how the arrows get focus OUT of an open card menu (it leaves the
-   * .row__menu wrapper, whose focusout dismisses it), and reporting not-handled
-   * gives the pane its native scroll back at the ends of the walk, so ArrowDown
-   * on the LAST item still scrolls to the bottom of a tall card and on to the
-   * end of the pane.
+   * .row is how the PAGE keys get focus out of an open card menu (it leaves the
+   * .row__menu wrapper, whose focusout dismisses it — the arrows leave by the
+   * menu step below instead), and reporting not-handled gives the pane its
+   * native scroll back at the ends of the walk, so ArrowDown on the LAST item
+   * still scrolls to the bottom of a tall card and on to the end of the pane.
    * @param {number} dir -1 = up/previous, +1 = down/next
    * @param {object} [opts]
    * @param {boolean} [opts.page] true = one page key's worth (QUEUE_PAGE_STEP
@@ -575,6 +575,14 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    */
   function moveCard(dir, { page = false } = {}) {
     if (!walkApplies()) return false;
+    // AN OPEN CARD MENU WALKS FIRST, and only a single step at a time: its items
+    // sit above their own trigger, so one arrow sequence reads down the panel
+    // and straight on into the cards. 'exited' has already closed the menu and
+    // left focus on the trigger — inside the .row — so the ordinary step below
+    // resolves that same card and moves to its neighbour, which IS "out of the
+    // menu and on to the next card". PageUp/PageDown skip this deliberately:
+    // paging past a menu leaves the wrapper outright and its focusout closes it.
+    if (!page && stepCardMenu(dir) === 'moved') return true;
     const rows = cards();
     const items = walkItems(rows);
     if (!items.length) return false; // no cards = no walk (see walkItems)
