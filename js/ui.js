@@ -2,7 +2,7 @@
 //
 // Rendering helpers. STRICT XSS SAFETY: every API-derived string (video title,
 // channel name, etc.) is rendered via textContent or created DOM text nodes.
-// We NEVER assign API data into innerHTML. Video URLs are built with
+// This module has no innerHTML assignment at all. Video URLs are built with
 // encodeURIComponent on the id, and thumbnails are set via img.src only.
 //
 // This module holds NO data policy. It never decides where a channel title or
@@ -33,9 +33,6 @@ export function el(tag, props = {}, children = []) {
       node.className = value;
     } else if (key === 'text') {
       node.textContent = value; // safe text assignment
-    } else if (key === 'html') {
-      // Deliberately unused for API data. Only pass trusted static strings.
-      node.innerHTML = value;
     } else if (key.startsWith('on') && typeof value === 'function') {
       node.addEventListener(key.slice(2).toLowerCase(), value);
     } else if (key === 'dataset' && typeof value === 'object') {
