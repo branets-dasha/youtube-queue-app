@@ -7,9 +7,8 @@
 // in via callbacks.
 //
 // The one exception to "no DOM policy" is detachIframeFromTabOrder() below: the
-// iframe is this module's own element, created here and nowhere else, so keeping
-// it out of the tab order belongs beside its creation rather than duplicated in
-// each page's boot. Read its comment before touching focus behavior.
+// iframe is created here and nowhere else, so keeping it out of the tab order
+// belongs beside its creation. Read its comment before touching focus behavior.
 
 const IFRAME_API_SRC = 'https://www.youtube.com/iframe_api';
 
@@ -52,31 +51,20 @@ export function initPlayer({ mountId, onEnded, onReady, onProgress }) {
 }
 
 /**
- * Keep the player iframe OUT of the sequential tab order.
+ * Keep the player iframe OUT of the sequential tab order. It lives here because
+ * this module CREATES the element and is the only one that knows when it exists.
  *
- * This is the one piece of DOM policy player.js owns, and it lives here because
- * this module CREATES the element and is the only one that knows the moment it
- * comes into existence — a page module would have to guess that moment through
- * getIframe(), twice, once per page.
+ * `.workspace__player` carries tabindex="-1", so a Tab from the focused pane
+ * continues into this frame; bindIframeFocusGuard blurs it back to <body>, but
+ * Chrome's sequential-focus starting point STAYS on the iframe, so the next Tab
+ * re-enters and bounces again — a loop that kills forward Tab for the rest of
+ * the session and strands every control after the frame.
  *
- * Why it is needed: `.workspace__player` carries tabindex="-1", so a Tab from
- * the focused pane continues into its first focusable descendant — this frame.
- * Focus entering a cross-origin frame fires `window` blur; bindIframeFocusGuard
- * (page-chrome.js) blurs it back to <body>, but Chrome's sequential-focus
- * starting point STAYS on the iframe, so the next Tab re-enters and bounces
- * again. That two-element loop made forward Tab dead for the rest of the session
- * and left everything after the frame — Like, the speeds, Skip, the description
- * links, "Start the queue" — unreachable by keyboard.
- *
- * What it costs, deliberately: YouTube's own in-frame controls (captions,
- * quality, the scrubber) are no longer Tab-reachable. That is not a regression
- * being accepted quietly — it is the price bindIframeFocusGuard was ALREADY
- * paying, since a focused cross-origin frame swallows keydown and takes the
- * app's whole keyboard layer with it; the guard would bounce focus straight back
- * out anyway. This just makes it deliberate instead of an infinite loop.
- *
- * A CLICK on the video still focuses the frame — tabindex governs sequential
- * navigation only — so the guard is still doing necessary work. Do not remove it.
+ * Deliberate cost: YouTube's own in-frame controls are no longer Tab-reachable,
+ * and that is not to be "fixed" — a focused cross-origin frame swallows keydown
+ * and takes the app's whole keyboard layer with it, so the guard would bounce
+ * focus out anyway. A CLICK still focuses the frame (tabindex governs sequential
+ * navigation only), so bindIframeFocusGuard is still necessary.
  */
 function detachIframeFromTabOrder() {
   const iframe = getIframe();
@@ -94,13 +82,11 @@ function createPlayer(mountId) {
     events: {
       onReady: () => {
         ready = true;
-        // Again on ready, not only after construction: the constructor replaces
-        // the mount div with the iframe synchronously, but re-asserting costs
-        // one attribute write and covers any swap the API makes before ready.
-        // Nothing AFTER ready can replace it — loadVideoById postMessages into
-        // the existing frame, initPlayer/createPlayer both early-return once
-        // `player` is set, and destroy() is never called — so two sites is the
-        // whole lifecycle and no observer is warranted.
+        // Again on ready, covering any swap the API makes before it. Nothing
+        // AFTER ready can replace the frame — loadVideoById postMessages into
+        // the existing one, initPlayer/createPlayer early-return once `player`
+        // is set, destroy() is never called — so these two sites are the whole
+        // lifecycle and no observer is warranted.
         detachIframeFromTabOrder();
         applySpeed();
         if (pending) {
@@ -128,8 +114,8 @@ function createPlayer(mountId) {
     },
   });
   // The YT.Player constructor replaces the mount <div> with its <iframe>
-  // synchronously, so the element is already here — do it now rather than wait
-  // for onReady, which only fires once the frame has actually loaded.
+  // synchronously, so the element is already here — no need to wait for onReady,
+  // which fires only once the frame has actually loaded.
   detachIframeFromTabOrder();
 }
 
@@ -224,10 +210,9 @@ export function isReady() {
 
 /**
  * The <iframe> element YT.Player created, or null if the player isn't up yet.
- * Two consumers: page-chrome.js's bindIframeFocusGuard, which detects (and
- * undoes) focus moving into the cross-origin frame — it would otherwise swallow
- * the page's document-level keyboard shortcuts — and this module's own
- * detachIframeFromTabOrder(), which keeps Tab from ever landing there at all.
+ * Two consumers: page-chrome.js's bindIframeFocusGuard, which undoes focus
+ * moving into the cross-origin frame (it would otherwise swallow the page's
+ * document-level keyboard shortcuts), and detachIframeFromTabOrder() above.
  * @returns {HTMLIFrameElement|null}
  */
 export function getIframe() {

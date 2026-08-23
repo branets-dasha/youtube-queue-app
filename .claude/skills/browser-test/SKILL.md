@@ -15,10 +15,9 @@ it**. The evidence belongs in the conversation; nothing is saved as a test.
    repo root. All of `js/queue.js` is pure by rule, and new pure logic goes
    there **with a matching test**. `computeCutoff`, `addToStash`,
    `reconcileStash`, `parseVideoId` — not one of them needs a browser.
-2. **Reading the code beats automating it.** The most valuable finding of a
-   performance investigation here was that `loading="lazy"` was *already* on
-   the card thumbnails — so the fix being planned would have changed nothing.
-   No browser check would ever have surfaced that; one `grep` did.
+2. **Reading the code beats automating it.** A planned performance fix here was
+   already in the file — `loading="lazy"` on the card thumbnails — which one
+   `grep` settled and no browser check would have surfaced.
 3. Reach for the browser when the question is genuinely **what the browser
    does** (real focus order, key handling, `preventDefault`, layout at a
    breakpoint, IndexedDB-backed rendering) or **what it draws**.
@@ -128,12 +127,10 @@ anything downstream.
 
 - **Chrome ANIMATES a native keyboard scroll — never read a scroll position
   once.** Measured here: an ArrowDown at the end of the walk (where the app
-  declines the key and native scrolling takes over) moved `.workspace__queue`
-  `2000 → 2002, 2005, 2011, 2018, 2026, 2033, 2037, 2040` over **eight frames**.
-  Sample across frames with a `requestAnimationFrame` collector.
-  **The app's OWN scrolls are instant** — focus-driven `scrollIntoView`, and the
-  stylesheet sets `scroll-behavior: smooth` nowhere; a PageDown moved the pane
-  `0 → 3861` in a single frame. So the animation only bites where the walk
+  declines the key and native scrolling takes over) crept `.workspace__queue`
+  2000 → 2040 over **eight frames**; sample them with a `requestAnimationFrame`
+  collector. **The app's OWN scrolls are instant** — a PageDown moved the pane
+  `0 → 3861` in one frame — so the animation only bites where the walk
   *declines* the key: inside `.workspace__player`, and at the clamp ends.
 - **The MCP round-trip is itself a timing problem.** You cannot press a key from
   inside `browser_evaluate`, so sampling is three calls — install the rAF
@@ -141,11 +138,9 @@ anything downstream.
   idle frames** while those calls travel. Find the transition
   (`s.findIndex(v => v !== s[0])`); never read the front of the array.
 - **An ELEMENT screenshot clips to the bounding box, which crops this app's
-  focus rings.** Both are painted *outside* the border box — `.row:focus` is a
-  `box-shadow` with no inset, `.workspace__player` an outline with a
-  **non-negative** `outline-offset`. Use a viewport or full-page screenshot when
-  a ring is the point; an element shot makes "focused" look identical to "plain"
-  and proves nothing.
+  focus rings** — every one of them is painted *outside* its border box, so an
+  element shot makes "focused" look identical to "plain" and proves nothing. Use
+  a viewport or full-page shot, or a clip (see Magnifying).
 - **Don't reason about `:focus-visible` after a scripted `.focus()`.** Whether
   it matches is a Chrome input-modality heuristic, and it is *not* the clean
   mouse-vs-keyboard split it is usually described as — measured here, it matched
@@ -159,10 +154,6 @@ anything downstream.
   browser paints "another tab is already open". If a check goes strangely quiet,
   look for a stray tab (`browser_tabs` → `close`): a card's channel link opens
   one, being `target="_blank"`.
-- **`--virtual-time-budget` is unusable for this app** — IndexedDB callbacks
-  never run under virtual time, and CSS transitions do not advance, which once
-  produced a *passing* hit-test against an element that had not moved. It does
-  not arise under MCP, which runs in real time; recorded so nobody reintroduces it.
 
 ## Confirming a visual change
 
@@ -171,12 +162,44 @@ the conversation:
 
 1. `browser_take_screenshot` of the region as it stands.
 2. Make the edit; reload.
-3. `browser_take_screenshot` again — same viewport, same framing.
+3. **Prove the edit is live by reading a computed style** — never by looking at
+   the page — then `browser_take_screenshot` again, same viewport, same framing.
 
-Both images are evidence for *this* change and are finished with afterwards. Pin
-the viewport (`browser_resize`) whenever the answer depends on layout: 1280×800
-is the side-by-side two-pane layout, ≤900px the stacked one, and the two have
-genuinely different arrow-key rules.
+Step 3 is not ceremony: **a reload serves the OLD `styles.css` for minutes at a
+time**, and the tell is a full set of "after" measurements identical to the
+"before" ones, with a plausible diff sitting in the file. Cache-disabling takes
+**two** CDP calls on one session, in order — `Network.enable`, *then*
+`Network.setCacheDisabled({ cacheDisabled: true })`; the second alone is a no-op.
+
+Pin the viewport whenever the answer depends on layout: 1280×800 is the
+side-by-side two-pane layout, ≤900px the stacked one, and the two have genuinely
+different arrow-key rules.
+
+### Magnifying, and the override that then owns the viewport
+
+A 2px ring against a 36px avatar cannot be judged at 1×, and element shots crop
+rings. `browser_run_code_unsafe` — raw Playwright/CDP against the live page — is
+the way up:
+
+```js
+const s = await page.context().newCDPSession(page);
+await s.send('Emulation.setDeviceMetricsOverride',
+  { width: 1280, height: 800, deviceScaleFactor: 3, mobile: false });
+await page.screenshot({ clip: { x, y, width: 240, height: 140 }, scale: 'device' });
+```
+
+A `clip` beats an element target: you choose the margin. Same hatch for **dark
+mode**, which has no in-app toggle — the app is `prefers-color-scheme` only, so
+`page.emulateMedia({ colorScheme: 'dark' })` is the only route to a dark shot.
+
+- **The override then owns the viewport, and `browser_resize` goes silently
+  inert.** `page.setViewportSize` stops moving `innerWidth`, and clearing the
+  override from a *new* CDP session does not undo it; the tell is a responsive
+  sweep whose 900/600/360 rows all agree (all still 1280). Re-send the override
+  with the new size instead, and **assert `innerWidth` and
+  `matchMedia('(max-width: 900px)').matches` whenever width is the question.**
+- **Let the viewport settle before measuring.** A `getBoundingClientRect` read
+  straight after a size change was ~90px off; re-probe until two agree.
 
 ## Artifacts
 

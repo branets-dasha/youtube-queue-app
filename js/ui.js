@@ -59,14 +59,12 @@ function clear(node) {
 /**
  * The canonical youtube.com watch URL for a videoId, id percent-encoded.
  *
- * ONE builder for the whole module, because "the same URL shape" is a claim
- * three call sites make about each other and a string literal repeated three
- * times cannot keep: a card's title link and its thumbnail (buildQueueRow), the
- * now-playing title (renderPlayerTitle) and the description's chapter
- * timestamps (renderDescription, which appends `&t=NNNs` to this base). Private
- * to ui.js rather than exported from queue.js — it is not a domain derivation,
- * it is the href half of the DOM these functions build, and it belongs next to
- * them.
+ * ONE builder for the three sites that must agree on the URL shape: a card's
+ * title link and thumbnail (buildQueueRow), the now-playing title
+ * (renderPlayerTitle) and the description's chapter timestamps
+ * (renderDescription, which appends `&t=NNNs` to this base). Private to ui.js
+ * rather than exported from queue.js — it is the href half of the DOM these
+ * functions build, not a domain derivation.
  * @param {string} videoId
  * @returns {string}
  */
@@ -78,17 +76,11 @@ function watchUrl(videoId) {
 // Time formatting
 // ---------------------------------------------------------------------------
 
-// ONE formatter for the whole app, built once at module load. The options below
-// are fixed — formatAbsolute takes no options and every caller wants the same
-// shape — so there is nothing per-call to vary and nothing to key a cache on.
-// This is the hot path: it is called once per rendered card, and
-// Date#toLocaleString builds a fresh Intl.DateTimeFormat on EVERY call, which
-// measured ~100ms per 2000 cards against ~3ms through this one. The locale is
-// left undefined (the runtime's default) exactly as toLocaleString had it, so
-// the rendered string is unchanged. The one thing that moved: the locale and
-// time zone are resolved ONCE per page load rather than per call, so changing
-// either mid-session now needs a reload to take effect. (DST is unaffected —
-// a fixed zone still formats each instant at its own offset.)
+// ONE formatter for the whole app, built once at module load: this is a hot
+// path (once per rendered card) and Date#toLocaleString builds a fresh
+// Intl.DateTimeFormat on EVERY call — ~100ms per 2000 cards, against ~3ms
+// through this one. Consequence: the locale and time zone are resolved once per
+// page load, so changing either mid-session now needs a reload.
 const ABSOLUTE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
   month: 'short',
@@ -242,14 +234,10 @@ export function buildAvatar(info, decorative = false) {
   const avatarUrl = (info && info.avatarUrl) || '';
   if (!avatarUrl) return avatarPlaceholder(title);
 
-  // loading/decoding are set UNCONDITIONALLY, for every call site — the cards
-  // (thousands of them), the now-playing meta row, and channels.html — with no
-  // opt-in parameter, because neither hint has a per-site answer. `lazy` only
-  // ever defers a request the viewport does not need yet, and the two
-  // small-N sites are in or beside the viewport, so it fetches them at once
-  // anyway; `async` says "never block presentation on this decode", which is
-  // right for one image exactly as it is for two thousand. A flag would have to
-  // pick a value that is already correct everywhere.
+  // Both hints are set UNCONDITIONALLY, with no opt-in parameter: `lazy` only
+  // ever defers a request the viewport does not need yet, and `async` says
+  // "never block presentation on this decode" — already the right answer at
+  // every call site, from one avatar to two thousand.
   const img = el('img', {
     class: 'row__avatar',
     alt: decorative ? '' : title, // channel title (or nothing when inside the link)
@@ -316,26 +304,20 @@ function buildChannelBadge(rec, resolveChannel) {
  * aria-live region on both player pages), as a LINK to the video on YouTube.
  * Pass rec = null to clear it.
  *
- * It is a link because the player frame is deliberately out of the tab order
- * (detachIframeFromTabOrder in player.js), so YouTube's own in-frame title is
- * unreachable from the keyboard and there was no way at all to open the playing
- * video on youtube.com without a mouse.
+ * A link because the player frame is deliberately out of the tab order
+ * (detachIframeFromTabOrder in player.js), leaving no keyboard route at all to
+ * the video's page on youtube.com.
  *
- * It MIRRORS the card title rather than inventing a second convention: the same
- * `.row__title` class (which is what keeps it looking exactly as the plain <p>
- * text did — the class sets `color: var(--text)` and `text-decoration: none`,
- * beating the bare `a { color: var(--accent) }` rule, and brings its own
- * :focus-visible ring), the same watchUrl(), the same target/rel, the same
- * textContent-only title. The `row__` prefix is not a slip: renderPlayerMeta
- * below already reuses row__channel-link / row__channel / row__dot /
- * row__time-abs for exactly this reason — the player bar and a card must not be
- * able to drift apart.
+ * It reuses the card's `.row__title` — as renderPlayerMeta below reuses
+ * row__channel-link / row__channel / row__dot / row__time-abs, so the player bar
+ * and a card cannot drift apart — and that class is also what keeps it looking
+ * like the plain <p> text it replaced: it sets `color: var(--text)` and
+ * `text-decoration: none` over the bare `a { color: var(--accent) }` rule, and
+ * brings a :focus-visible ring.
  *
- * The <a> is a CHILD of the container rather than the container itself, so the
- * page's `<p id="player-title" class="player__title" aria-live="polite">` keeps
- * its tag, its id and its live region unchanged, an empty state is an empty
- * paragraph (no anchor, therefore no tab stop, therefore no href to remember to
- * strip), and the inline anchor changes the paragraph's box by nothing at all.
+ * The <a> is a CHILD of the container rather than the container itself: the
+ * page's <p> keeps its tag, its id and its live region, and an empty state is an
+ * empty paragraph — no anchor, so no tab stop and no stale href to strip.
  * @param {HTMLElement} container the #player-title element
  * @param {object|null} rec video record (uses rec.videoId, rec.title)
  */
@@ -663,13 +645,9 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   // and swap to mqdefault (320x180, 16:9, essentially always present). onerror
   // covers hard failures. img.src ONLY — no innerHTML, no background-image.
   //
-  // That probe is ENTIRELY event-driven and must stay that way: naturalWidth is
-  // read inside onload and NOWHERE else — never synchronously here, where a
-  // lazy image has not loaded and would measure 0 and swap every card to mq for
-  // nothing. Because it is, loading="lazy" merely DEFERS the whole dance: the
-  // deferred fetch fires onload when the card nears the viewport, and the swap
-  // (itself a fresh img.src, which lazy no longer gates once the element is in
-  // range) happens right then.
+  // The probe must stay ENTIRELY event-driven: naturalWidth is read inside
+  // onload and nowhere else. Read synchronously here it would measure 0 on a
+  // lazy image that has not loaded yet and swap every card to mq for nothing.
   const vid = rec.videoId ? encodeURIComponent(rec.videoId) : '';
   const maxresSrc = vid ? `https://i.ytimg.com/vi/${vid}/maxresdefault.jpg` : '';
   const mqSrc = vid ? `https://i.ytimg.com/vi/${vid}/mqdefault.jpg` : '';
@@ -904,17 +882,15 @@ export function renderQueue(listEl, queue, handlers, resolveChannel, more = null
     listEl.append(buildQueueRow(rec, handlers, resolveChannel, skipLabel));
   }
   // Optional "Show all (N)" button at the bottom (pure display windowing). It is
-  // NOT a .row — so none of the card shortcuts (x, t, 1/5/2) act on it and it is
-  // never what the arrows ENTER the list at — but it IS the last item of the
-  // ArrowUp/ArrowDown walk, which page-chrome's moveCard finds by this class.
-  // Text via textContent (XSS-safe).
+  // NOT a .row — so the card shortcuts (x, t, 1/5/2) never act on it — but it IS
+  // the last item of the ArrowUp/ArrowDown walk, which page-chrome's moveCard
+  // finds by this class. Text via textContent (XSS-safe).
   if (more && typeof more.onShowAll === 'function') {
     const idleLabel = `Show all (${more.total})`;
-    // Re-entry guard, per BUTTON: closure state, so it is born false with each
-    // rendered button and dies with it — nothing to reset, and a re-render
-    // during the wait cannot leave a stale flag behind. Deliberately NOT the
-    // `disabled` property: disabling the focused control drops focus to <body>,
-    // and this button is one a keyboard user arrows onto and presses Enter on.
+    // Re-entry guard, per BUTTON: closure state, born with each rendered button
+    // and dying with it, so a re-render cannot leave a stale flag behind.
+    // Deliberately NOT the `disabled` property — disabling the focused control
+    // drops focus to <body>, and a keyboard user arrows onto this button.
     let busy = false;
     const btn = el('button', {
       class: 'btn queue-more__btn',
@@ -924,25 +900,22 @@ export function renderQueue(listEl, queue, handlers, resolveChannel, more = null
         if (busy) return; // a second activation inside the wait does nothing
         busy = true;
         btn.textContent = 'Loading…';
-        // THE LABEL MUST BE PAINTED BEFORE THE EXPANSION STARTS. Style, layout
-        // and paint happen only once the current task ends, so setting the text
-        // and expanding in the same task shows nothing at all — the browser
-        // goes straight from the click to the frozen re-render (thousands of
-        // rows, on a real queue). requestAnimationFrame alone is no better: its
-        // callbacks run BEFORE that frame is painted. So the work goes in a
-        // setTimeout scheduled from INSIDE one — the frame carrying the label
-        // is painted when the rAF callbacks return, and this task is the first
-        // thing to run afterwards.
+        // THE LABEL MUST BE PAINTED BEFORE THE EXPANSION STARTS. Paint happens
+        // only once the current task ends, so setting the text and expanding in
+        // the same task shows nothing at all — the browser goes straight to the
+        // frozen re-render (thousands of rows, on a real queue). rAF alone is no
+        // better: its callbacks run BEFORE that frame is painted. Hence a
+        // setTimeout scheduled from INSIDE one — its task is the first thing to
+        // run after the frame carrying the label.
         requestAnimationFrame(() => {
           setTimeout(() => {
             try {
               more.onShowAll();
             } catch (err) {
-              // The expansion is what removes this button, so if it threw the
-              // button is still on screen: put its real label back and clear
-              // the guard, or it sits there saying "Loading…" for good. The
-              // throw itself is passed on untouched — an onShowAll that failed
-              // reported to window.onerror exactly as it did before deferral.
+              // The expansion is what removes this button, so on a throw it is
+              // still on screen: restore its label and clear the guard, or it
+              // sits there saying "Loading…" for good. The error is rethrown
+              // untouched, reaching window.onerror as it did before deferral.
               busy = false;
               btn.textContent = idleLabel;
               throw err;

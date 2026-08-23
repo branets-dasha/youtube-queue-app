@@ -528,18 +528,11 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  /* Clearance for the OPAQUE sticky .queue-header, which top:0 would otherwise
-     park a keyboard-focused card (ring and all) underneath: focus() scrolls the
-     card's scroll-margin BOX into view, so this pushes it out from under the
-     header. scroll-margin on the CARD rather than scroll-padding on the pane
-     because the scrollport changes with the layout — .workspace__queue above
-     900px, the document below it (see the media query) — and only the target
-     travels with it.
-     Measured .queue-header heights: 52px on one line; 92.8px wrapped to two, and
-     95px at the very narrowest. The two-pane queue is a FIXED 400px, so 52px is
-     exact there and this stays tight; the stacked layout gets the generous value
-     in the max-width:900px block, where the wrap point moves with the digits in
-     "Trim front (N)" and no breakpoint could be exact. */
+  /* Clears the OPAQUE sticky .queue-header: focus() scrolls a card's
+     scroll-margin box into view, so without this a keyboard-focused card parks
+     underneath it. On the CARD rather than scroll-padding on the pane because
+     the scrollport changes with the layout — .workspace__queue above 900px, the
+     document below it, which needs its own taller value (see the media query). */
   scroll-margin-top: 60px;
   /* No overflow:hidden here — corner-clipping lives on the thumbnail wrapper, so
      the card's own border / shadow / rings render fully uncut. */
@@ -555,27 +548,14 @@ main {
    box-shadow so it follows the card radius uniformly on all sides and never
    shifts layout. Distinct from the now-playing fill; the transparent outline
    keeps it visible in forced-colors mode.
-   PLAIN :focus, and the ONLY rule in this file that is — every other focus ring
-   here is :focus-visible, so do not "correct" this one back to match them. The
-   difference is what the element IS. A button or a link is a control you
-   ACTIVATE: the click that focused it already did the thing, so a ring left
-   behind afterwards is noise, and :focus-visible exists precisely to suppress
-   it. A .row is not activated by being focused — it is the CURSOR POSITION for
-   ArrowUp/ArrowDown (see initQueueFocus in page-chrome.js, plus x / t / 1 5 2,
-   all of which act on whichever card contains focus). Clicking a card's body
-   MOVES that cursor, so the queue is left in a state the next keypress depends
-   on; drawing nothing would hide where the arrows will resume, which is the one
-   thing the user needs to see. Where the cursor sits must be visible however
-   focus got there.
-   :focus matches only when the .row ITSELF is the active element, never a
-   descendant (that would be :focus-within) — so clicking Play, Skip, a speed
-   button or the card menu focuses that control and leaves the card unringed,
-   exactly as before.
-   Cascade note: this shares specificity 0,2,0 with .row:hover above, and both
-   set box-shadow. It wins on SOURCE ORDER alone, by sitting after it — which
-   matters because clicking a card necessarily hovers it, so a ring that lost to
-   hover would be invisible for the very gesture this rule is here for, and only
-   appear once the pointer moved away. Keep these two in this order. */
+   PLAIN :focus, the only rule here that is — do not "correct" it to
+   :focus-visible. A .row is not a control you activate; it is the cursor
+   position for ArrowUp/ArrowDown, x, t and 1/5/2 (see initQueueFocus in
+   page-chrome.js), and a click moves that cursor, so where it sits has to show
+   however focus got there. Not :focus-within either — clicking Play, Skip or
+   the card menu focuses that control and leaves the card unringed.
+   Must stay AFTER .row:hover: identical 0,2,0 specificity, both set box-shadow,
+   so source order alone decides, and clicking a card necessarily hovers it. */
 .row:focus {
   outline: 2px solid transparent;
   outline-offset: 2px;
@@ -689,17 +669,11 @@ main {
 .row__title:hover {
   color: var(--accent);
 }
-/* Same focus ring as .btn: a 2px --focus outline at a 1px offset, instead of
-   the UA default, which is a different colour and hugs the text. The small
-   radius softens the ring where a long title wraps — it shapes the outline only
-   (the link has no background or border of its own).
-   .row__channel-link below is the one control here that departs from the 1px
-   offset, for a reason particular to it — see the note there.
-   This rule serves the now-playing title too: renderPlayerTitle (js/ui.js)
-   renders #player-title's link with this very class, so the card and the player
-   bar cannot grow two different title treatments. That gives it the widest
-   reach of any ring in the file — 3px — inside .workspace__player, whose
-   scrollport is grown by 4px precisely to fit rings like it. */
+/* The house ring, in place of the UA default. The radius shapes the outline
+   only (the link has no background or border of its own), softening it where a
+   long title wraps. renderPlayerTitle (js/ui.js) gives the now-playing title
+   this same class so the card and the player bar cannot drift — which also puts
+   this ring inside .workspace__player, whose scrollport is grown to fit it. */
 .row__title:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
@@ -721,8 +695,12 @@ main {
    player), so clicking either navigates and it is a single tab stop. inline-flex
    + the same 6px gap reproduces what two separate flex items looked like. Keep
    the muted inline look — inherit the sub-line colour rather than the bright
-   accent link colour — and reveal the affordance with an underline on the name
-   on hover/focus (the avatar must not get underlined). */
+   accent link colour — and reveal the affordance the way .row__title does:
+   hover turns the NAME accent (the avatar has no colour to turn), focus draws a
+   ring, nothing underlines.
+   The PADDING exists only to hold that ring, and the equal negative MARGIN
+   cancels it so nothing this link contains moves a pixel — the two must stay in
+   step. 8px on the right is the extra room the ring needed on the text side. */
 .row__channel-link {
   display: inline-flex;
   align-items: center;
@@ -730,35 +708,32 @@ main {
   min-width: 0;
   color: inherit;
   text-decoration: none;
+  padding: 4px 8px 4px 4px;
+  margin: -4px -8px -4px -4px;
 }
-.row__channel-link:hover .row__channel,
-.row__channel-link:focus-visible .row__channel {
-  text-decoration: underline;
+.row__channel-link:hover .row__channel {
+  color: var(--accent);
 }
-/* A 2px --focus ring like every other control here, but with TWO deliberate
-   departures from the house 1px-offset / pill-radius pair, both of them about
-   the one thing that makes this link different: its box hugs a 36px round
-   avatar and a line of text EXACTLY, with no padding of its own.
-   RADIUS 12px, not 999px. A 999px radius on a box that tight makes the ring a
-   pill whose end caps curve back INTO the content — measured at ~3px of
-   horizontal intrusion at the text's cap height, which put the ring straight
-   through the last glyph of the channel name (and traced the avatar's own
-   circumference on the left). 12px rounds the corners in the empty band above
-   and below the text and leaves the glyphs alone.
-   OFFSET 2px, not 1px. 1px read as touching. 2px is as far as it can go: the
-   flex gap to the following "·" is 6px, so the ring's outer edge at +4px keeps
-   exactly 2px of clearance, and anything more would run into the dot. Widening
-   that gap would move the dot and the date, which is a layout change, not a
-   focus-ring change.
-   The ring reaches 4px outside the link, which is why .workspace__player grows
-   its scrollport by exactly that much — see the padding/margin pair there. */
+/* A PILL at the house radius, drawn INSET so it occupies the outermost 2px of
+   the padded box instead of sitting outside it. Both halves are load-bearing:
+   on an UNPADDED box the end caps curve back through the avatar and the last
+   glyph of the name, and an OUTSET ring here reaches 2px further on every side
+   than .workspace__player's clip band allows — that band is sized to this
+   ring's 4px left reach (see the padding/margin pair there). The 8px it reaches
+   to the right of the name is paid for by .row__dot's margin. */
 .row__channel-link:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
-  border-radius: 12px;
+  outline-offset: -2px;
+  border-radius: 999px;
 }
+/* Widens this separator's flex gaps to 12px, which is what buys the channel
+   ring the 8px it reaches to the right of the name. On the DOT rather than the
+   row's `gap` — which would give the same 12/12 — because buildChannelBadge
+   drops the avatar and the name straight into the row as bare flex items when a
+   record carries no channelId, and that fallback has no ring to clear. */
 .row__dot {
   opacity: 0.6;
+  margin: 0 6px;
 }
 
 /* Channel avatar (always present — image or letter placeholder — so the sub-row,
@@ -1084,78 +1059,39 @@ body.app-active #app-main.app[hidden] {
   min-height: 0;
   overflow-y: auto; /* if player + info exceed the pane, scroll here — never clip */
   /* THE SCROLLPORT IS 4px BIGGER THAN THE CONTENT ON EVERY SIDE, AND THE
-     CONTENT DOES NOT MOVE. padding pushes the content in, the equal negative
-     margin pulls the whole box back out, so .player — the video, the
-     now-playing bar and the description — lands on exactly the same pixel it
-     did before (verified: every box in the pane measures identically). The only
-     thing that moves is the CLIP EDGE.
-     Why it has to: overflow-y:auto makes this a scroll container, which clips
-     BOTH axes at the padding box (overflow-x computes to auto beside it, and
-     `clip` computes to `hidden` here, so overflow-clip-margin cannot help —
-     tried, it does nothing). #player-meta and #player-title sit flush against
-     the content-box left edge, so a focus ring drawn OUTSIDE those links —
-     which is where every ring in this file is drawn — was painted at x < 0 and
-     clipped away: the channel badge's ring showed up with its left side sliced
-     flat off. It is unfixable from the link's side, because a ring that does
-     not overlap its content must start left of that content, and the content
-     starts at the clip edge.
-     4px is what .row__channel-link:focus-visible reaches (2px offset + 2px
-     width) — exactly, with nothing spare, so that a ring which outgrows the
-     band fails the rig's "every ring fits inside the clip box" assertion rather
-     than quietly clipping again. It fits, growth plus the pane's own 2px ring:
-     .workspace's 20px grid gap to the left (14px still free), 12px to the right
-     and below, and 8px of clear air above, where the .shortcuts line ends — at
-     every width and in the stacked ≤900px layout too.
-     On the VERTICAL axis the same 4px is all that can be had, and it is only
-     headroom at the two ends of the scroll range: content can always be
-     hand-scrolled right up to a scrollport edge, so a ring on a control the
-     user scrolls off the top still loses its top segment. That is inherent to
-     every scroll container and is unchanged by any of this. `scroll-padding`
-     was tried for the focus-driven half of it and removed again: measured, this
-     pane's focus scrolls never park a control flush against an edge anyway
-     (there is always frame, gap or description padding around them), so it
-     changed nothing at all. */
+     CONTENT DOES NOT MOVE: the padding pushes it in, the equal negative margin
+     pulls the box back out, and only the CLIP EDGE moves — the two must cancel.
+     overflow-y:auto makes this a scroll container, which clips both axes at the
+     padding box, and #player-title / #player-meta sit flush against the content
+     edge, so their rings — drawn outside them, like every ring here — were
+     sliced off at x < 0. Not fixable from the link's side, nor by
+     overflow-clip-margin: beside overflow-y:auto, overflow-x `clip` computes to
+     `hidden` and the margin does nothing.
+     4px is .row__channel-link:focus-visible's left reach exactly, with nothing
+     spare and nothing checking it, so a ring given more clips silently — check
+     it in a browser. On the scrolling axis the 4px is headroom only at the ends
+     of the range: content hand-scrolled to an edge still loses a ring segment,
+     as in any scroll container, and scroll-padding does not help. */
   padding: 4px;
   margin: -4px;
-  /* Rounded like everything else here, and it exists FOR the ring below: an
-     outline traces its element's border-radius, so a square pane can only ever
-     grow a square ring — which is what made the first version look foreign
-     wrapped around a 10px-rounded video frame. Free when unfocused, because the
-     pane paints no background and no border of its own. The one side effect is
-     that a scroll container's rounded corner clips its own scrollbar: measured
-     at 4px shaved off the gutter's top row, square again 3 rows down. */
+  /* Exists FOR the ring below: an outline traces its element's border-radius,
+     so a square pane could only ever grow a square ring. Free when unfocused —
+     the pane paints no background and no border of its own. Side effect: a
+     scroll container's rounded corner clips the top of its own scrollbar. */
   border-radius: var(--radius);
 }
 /* The pane is focusable programmatically only (tabindex="-1" in the HTML), so
-   this ring appears for exactly one gesture: the '/' pane toggle. Restrained on
-   purpose — it says "the arrows scroll HERE now", it is not a control.
-   The offset is NON-NEGATIVE, putting the ring wholly OUTSIDE the pane's border
-   box, and that is the entire point: an element paints its outline BEFORE its
-   descendants, so the inset -2px ring this started as was painted over by
-   .player__frame — full-bleed, `background: #000`, flush to the pane's top and
-   left — which left barely a quarter of the left segment and a tenth of the top
-   one on screen, and on the right it ran through the outer 2px of the scrollbar.
-   Outside the border box, nothing the pane contains can reach it — scrollbar
-   included, since a scrollbar is painted inside that same box.
-   It is 0 rather than the 2px this shipped as ONLY because the border box has
-   since grown 4px on every side (see the padding/margin pair above): the ring
-   sits 4px from the video instead of 2px, and 0 is as tight as it can be drawn
-   while staying outside the box. Going back to a negative offset to recover
-   those 2px would put the right-hand segment back on the scrollbar, which now
-   rides 4px further out with the padding box — the padding band is NOT clear
-   air on that side.
-   It fits on every edge: 20px of .workspace grid gap to the left, 12px to the
-   right and below, and the 100dvh column always keeps that bottom padding, so
-   the pane is never flush with the viewport. Ring plus growth needs 6px and is
-   clipped by nothing at any width, the stacked ≤900px layout included.
-   Rejected: a permanently reserved `border: 2px solid transparent` — equally
-   uncoverable, but it insets the video by 2px forever and needs `outline: none`,
-   which this stylesheet has nowhere; and `padding: 2px` behind an inset outline —
-   same permanent 2px, and the scrollbar still shares those pixels. An outline
-   costs no layout at all, which is why this one wins. (The padding above is not
-   that rejected padding: it is cancelled by an equal negative margin, so it
-   insets the video by nothing, and the ring it makes room for is not this one —
-   it belongs to the pane's CONTENTS.) */
+   this ring appears for exactly one gesture: the '/' pane toggle.
+   The offset must stay NON-NEGATIVE, keeping the ring wholly OUTSIDE the border
+   box: an element paints its outline BEFORE its descendants, so an inset ring is
+   painted over by .player__frame (full-bleed, black, flush to the pane's top and
+   left corner) and on the right runs through the scrollbar, painted inside that
+   same box. 0 rather than 2px only because the box has since grown 4px on every
+   side (see the padding/margin pair above); going negative to win those back
+   puts the right-hand segment on the scrollbar again, which rides outward with
+   the padding box. Nothing clips it — 20px of .workspace grid gap to the left,
+   12px to the right and below, at every width. A reserved transparent border, or
+   padding behind an inset outline, would each cost 2px of pane permanently. */
 .workspace__player:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 0;
@@ -1343,29 +1279,17 @@ body.app-active #app-main.app[hidden] {
   padding: 4px 0 8px;
 }
 
-/* Now-playing card: a FILL, and nothing else. A ring means focus and only focus
-   — so playing must not be an outline of any kind, or the two compete for the
-   same reading. The old solid accent ring did exactly that (it looked like a
-   second focused card) AND lost outright to the card's focus rule, 0,2,0
-   beating 0,1,0, so focusing the playing card ERASED its marker. A left edge
-   bar was tried instead and rejected: it covered the thumbnail, and beside the
-   focus ring it stacked up into a thick blue left edge.
-   Because a fill and a ring are different PROPERTIES as well as different
-   readings, there is now nothing to out-specify: a focused playing card shows
-   its ring from .row:focus and its tint from here, cleanly and at the same
-   time. Deliberately the ONLY declaration — no border-color: the ordinary
-   --border keeps the card's perimeter neutral, which is the whole point, and it
-   leaves .row:hover's lift and tinted border to behave on this card exactly as
-   on every other.
-   16% is a compromise between the two themes, which carry the same mix very
-   differently: --surface is white in light, so the mix moves a long way (a clear
-   pale blue), while in dark a light --accent into a near-black --surface barely
-   shifts. Picked off a side-by-side sheet of 8/12/16/20% — 16 is the first value
-   that reads at a glance in DARK, and light is still calm there (20% starts to
-   look like a selected table row). One number for both, because this file's dark
-   story is redefining TOKENS at :root and nothing else; a per-theme override of
-   this rule would be the only one in the stylesheet. It is also the one number
-   to turn if the tint ever needs to shout louder or quieter. */
+/* Now-playing card: a FILL, never a ring — a ring reads as focus, and an accent
+   ring here also LOST to .row:focus (0,2,0 over 0,1,0), so focusing the playing
+   card erased its marker. Being a different PROPERTY, there is now nothing to
+   out-specify: a focused playing card shows ring and tint at once.
+   Deliberately the ONLY declaration — no border-color, so the perimeter stays
+   neutral and .row:hover's lift and tinted border behave as on any other card.
+   16% is a compromise across the themes, which carry the same mix very
+   differently: --surface is white in light, so the mix moves a long way, while a
+   light --accent into a near-black --surface barely shifts. One number for both,
+   because this file's dark story is redefining TOKENS at :root and nothing else;
+   it is also the one number to turn to make the tint louder or quieter. */
 .row--playing {
   background: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
@@ -1392,13 +1316,11 @@ body.app-active #app-main.app[hidden] {
     overflow: visible;
     padding-right: 0;
   }
-  /* The pane no longer scrolls — the DOCUMENT does — but .queue-header is still
-     sticky, now against the viewport, so a focused card still needs to clear it.
-     Here the header spans the viewport instead of a fixed 400px pane, so it can
-     wrap to two lines (92.8px, 95px at the narrowest) — and whether it wraps at
-     ~400px depends on how many digits "Trim front (N)" is showing, so no
-     breakpoint could be exact. Deliberately generous: clear the tallest header
-     always, rather than tuck a card under it sometimes. */
+  /* The DOCUMENT scrolls here, but .queue-header is still sticky — against the
+     viewport now — so a focused card still has to clear it. Taller than above
+     because the header can wrap to two lines, at a point that moves with the
+     digits in "Trim front (N)", so no breakpoint could be exact. Deliberately
+     generous: clear the tallest header always. */
   .row {
     scroll-margin-top: 104px;
   }
@@ -1494,7 +1416,9 @@ body.app-active #app-main.app[hidden] {
   box-shadow: var(--shadow);
 }
 /* Avatar + name in ONE anchor to the channel on YouTube, like a card's channel
-   badge: muted inline look, underline the name on hover/focus. */
+   badge: muted inline look, and the same idiom as .row__title and
+   .row__channel-link — hover turns the name accent, focus draws a ring, and
+   nothing underlines. */
 .chan__link {
   display: inline-flex;
   align-items: center;
@@ -1504,14 +1428,18 @@ body.app-active #app-main.app[hidden] {
   color: inherit;
   text-decoration: none;
 }
-.chan__link:hover .chan__title,
-.chan__link:focus-visible .chan__title {
-  text-decoration: underline;
+.chan__link:hover .chan__title {
+  color: var(--accent);
 }
+/* The house 1px offset, but NOT .row__channel-link's pill: .chan__title wraps,
+   so this box grows tall, and a 999px radius then makes end caps of half that
+   height — measured cutting through the last glyph of the first line at 400px.
+   A corner radius keeps the curve out of the text. The card's padded box is not
+   needed either: nothing clips this ring, .chan being no scroll container. */
 .chan__link:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
-  border-radius: 999px;
+  border-radius: var(--radius);
 }
 .chan__title {
   font-weight: 600;
