@@ -499,7 +499,7 @@ function rejectInput(message) {
 }
 
 // The add flow's single PROGRESS toast ("authorizing…", "looking up…"), updated
-// in place rather than stacked, and always dismissed in onAddSubmit's finally —
+// in place rather than stacked, and always dismissed in runAdd's finally —
 // the same pattern subscriptions-page.js uses around a refresh.
 let progressToast = null;
 /** Show or UPDATE the single progress toast in place (sticky until hidden). */
@@ -564,12 +564,39 @@ async function applyDuplicate({ records, changed, record }) {
   scrollToCard(record.videoId);
 }
 
+/**
+ * Submit handler: run the add, then put the caret back in the URL field.
+ *
+ * EVERY way an add ends wants the field rather than the button. Success clears
+ * it, so a second press could only do nothing; every other outcome leaves the
+ * pasted text sitting there to be fixed or replaced — a parse failure most of
+ * all, which marks the field aria-invalid and would otherwise leave the user's
+ * focus somewhere else entirely. One rule, no branch per outcome, which is why
+ * it wraps runAdd instead of living in its finally: half the exits return before
+ * that try is even entered.
+ *
+ * Gated on the button HOLDING focus, like every other hand-off on these pages:
+ * the Enter-in-the-field route is then a no-op, and an add that lands after the
+ * user has moved on does not yank them back.
+ */
 async function onAddSubmit(e) {
   e.preventDefault();
   // A second submit while one is in flight would hit auth.js's single callback
   // slot ("A token request is already in progress."), so it never starts.
   if (state.adding) return;
 
+  const takesFocus = dom.addBtn ? dom.addBtn.contains(document.activeElement) : false;
+  try {
+    await runAdd();
+  } finally {
+    // No focusFirst ladder: the field is never disabled or hidden, which is the
+    // same reason onCleanup already uses it as its guaranteed-live tail.
+    if (takesFocus && dom.urlInput) dom.urlInput.focus();
+  }
+}
+
+/** The add itself — parse, look up, stash. Every exit is a plain return. */
+async function runAdd() {
   const raw = dom.urlInput ? dom.urlInput.value : '';
   if (!raw.trim()) {
     rejectInput('Paste a YouTube link (or a bare video id) first.');
