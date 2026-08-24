@@ -141,12 +141,12 @@ anything downstream.
   focus rings** — every one of them is painted *outside* its border box, so an
   element shot makes "focused" look identical to "plain" and proves nothing. Use
   a viewport or full-page shot, or a clip (see Magnifying).
-- **Don't reason about `:focus-visible` after a scripted `.focus()`.** Whether
-  it matches is a Chrome input-modality heuristic, and it is *not* the clean
-  mouse-vs-keyboard split it is usually described as — measured here, it matched
-  even immediately after a real mouse click. **Drive focus with a real
-  `browser_press_key`** (`Tab`, or the app's own arrows) instead of calling
-  `.focus()`: that is unambiguous in every browser state.
+- **`:focus-visible` is the ring check.** The card ring draws on
+  `:focus-visible` OR `.row--pointed`, so `el.matches(':focus-visible')`
+  answers "is it ringed" without a screenshot. **Drive the gesture the user
+  would make** — a real click for a click, `browser_press_key` for a key —
+  because the input modality is what the property reports, and a bare
+  `.focus()` out of `browser_evaluate` stands for neither.
 - **`document.body.focus()` blurs nothing** — `<body>` carries no `tabindex`.
   Use `document.activeElement.blur()` to reproduce where `bindIframeFocusGuard`
   puts focus after a click on the video.
