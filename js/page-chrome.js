@@ -468,7 +468,8 @@ export function focusFirst(...candidates) {
  *   focusEdge: (dir:number) => boolean, togglePane: () => void,
  *   cardCount: () => number, focusCardAt: (index:number) => Element|null,
  *   rememberCard: (videoId:string|null|undefined) => void,
- *   renderKeepingAnchor: (rerender:() => void) => void}}
+ *   renderKeepingAnchor: (rerender:() => void) => void,
+ *   focusRemembered: () => Element|null}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
   // The videoId of the card the walk resumes at — an id, never a node, so it
@@ -792,6 +793,26 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   }
 
   /**
+   * Focus the card the walk would resume at — renderKeepingAnchor's companion,
+   * for the callers whose own control disables itself and so cannot keep focus
+   * (Clean up, Trim front). Deliberately NOT folded into renderKeepingAnchor:
+   * its first caller, the Hide-skipped toggle, must keep focus on the button it
+   * was pressed with, and one function that sometimes moves focus would be the
+   * wrong contract for both.
+   *
+   * preventScroll because the caller has just restored the scroll itself and
+   * focus() scrolls the card into view by default, which would fight it — the
+   * same reason stash-page.js's renderKeepingPlace passes it.
+   * @returns {Element|null} the card focused, or null when the list is empty,
+   *   which is the caller's cue to fall back to a control of its own
+   */
+  function focusRemembered() {
+    const target = rememberedCard(cards());
+    if (target) target.focus({ preventScroll: true });
+    return target;
+  }
+
+  /**
    * Throw focus between the two panes ('/'): out of the player and back to the
    * remembered card, or from anywhere else INTO the player. At every width — the
    * player pane is otherwise unreachable without tabbing through every control
@@ -810,5 +831,14 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     if (playerPane) playerPane.focus();
   }
 
-  return { moveCard, focusEdge, togglePane, cardCount, focusCardAt, rememberCard, renderKeepingAnchor };
+  return {
+    moveCard,
+    focusEdge,
+    togglePane,
+    cardCount,
+    focusCardAt,
+    rememberCard,
+    renderKeepingAnchor,
+    focusRemembered,
+  };
 }

@@ -846,11 +846,21 @@ async function sweepRemoved() {
 }
 
 /**
- * Clean up button: sweep, re-render, report. Then move focus DELIBERATELY — the
- * button disables itself at 0, and a disabled control drops focus to <body>,
- * which would strand the keyboard user. Focus goes to the first remaining card
- * (where ↑/↓ resume), else back to the URL field (where the stash restarts).
- * The twin of subscriptions-page.js's onCleanup.
+ * Clean up button: sweep, re-render, report. Two things have to be put back by
+ * hand afterwards.
+ *
+ * The re-render rebuilds the <ul>, so the pane's scroll goes with it and the
+ * user is dumped at the top of a list they were reading the middle of.
+ * renderKeepingAnchor is the right one of the two restores here because
+ * membership SHRINKS — stashToClean takes handled records from anywhere in the
+ * list, so the anchor itself can be one of the swept ones and needs a stand-in
+ * (renderKeepingPlace's absolute scrollTop is for the reconcile, where
+ * membership only grows).
+ *
+ * And the button disables itself at 0, which would drop focus to <body>: it
+ * goes to the card the walk resumes at — the same one the scroll was just
+ * anchored on, so the two cannot disagree — else the URL field, which is never
+ * disabled or hidden. The twin of subscriptions-page.js's onCleanup.
  */
 async function onCleanup() {
   // Read BEFORE the sweep, and only rescue focus this button actually holds:
@@ -859,11 +869,14 @@ async function onCleanup() {
   const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     const removed = await sweepRemoved();
-    render();
+    if (queueFocus) queueFocus.renderKeepingAnchor(render);
+    else render();
     if (removed > 0) {
       showToast(`Removed ${removed} video(s) from your stash.`, { type: 'success' });
     }
-    if (takesFocus) focusFirst(dom.queueList.querySelector('.row'), dom.urlInput);
+    if (takesFocus && !(queueFocus && queueFocus.focusRemembered())) {
+      focusFirst(dom.urlInput);
+    }
   } catch (err) {
     handleError(err);
   }

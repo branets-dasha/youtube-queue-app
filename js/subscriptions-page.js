@@ -1058,23 +1058,31 @@ async function cleanup() {
 
 /**
  * Cleanup button handler: run CLEANUP() then re-render. The only user-triggered
- * deletion of handled videos.
+ * deletion of handled videos. Two things have to be put back by hand afterwards.
+ *
+ * The re-render rebuilds the <ul>, so the pane's scrollTop clamps to 0 and a
+ * user reading the middle of a long queue is dumped at the top of it — measured
+ * at 5693px of jump. renderKeepingAnchor puts the place back; the deleted
+ * records being a contiguous PREFIX is what the delta absorbs, and the anchor
+ * only needs a stand-in when the user was standing inside that prefix.
+ *
+ * And the button disables itself at 0, which would drop focus to <body>: it
+ * goes to the card the walk resumes at — the same one the scroll was just
+ * anchored on, so the two cannot disagree — else #hide-marked-btn, the same
+ * honest landing setVideoState picks and the one header control never disabled.
+ * The twin of stash-page.js's onCleanup.
  */
 async function onCleanup() {
   if (state.refreshing) return;
   // Read BEFORE the trim: recompute() -> updateStats() -> updateCleanupUi()
   // disables this button at 0, and a disabled control drops focus to <body>.
-  // The twin of stash-page.js's onCleanup.
   const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     await cleanup();
-    recompute();
+    if (queueFocus) queueFocus.renderKeepingAnchor(recompute);
+    else recompute();
     showToast('Cleaned up handled videos.', { type: 'success' });
-    // The first remaining card — the oldest still-'new' video, exactly where the
-    // burn-down resumes (and focusCardAt updates the remembered card for free).
-    // With none, #hide-marked-btn: the same honest landing setVideoState picks,
-    // and the one header control that is never disabled.
-    if (takesFocus && !(queueFocus && queueFocus.focusCardAt(0))) {
+    if (takesFocus && !(queueFocus && queueFocus.focusRemembered())) {
       focusFirst(dom.hideMarkedBtn);
     }
   } catch (err) {
