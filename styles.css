@@ -314,7 +314,10 @@ main {
   border-color: var(--primary);
   color: var(--primary-text);
 }
-.btn--primary:hover:not(:disabled) {
+/* Must carry the base .btn:hover rule's :not([aria-disabled]) too, or that
+   rule outweighs this one and paints a hovered red button --surface-2 --
+   white --primary-text on near-white. */
+.btn--primary:hover:not(:disabled):not([aria-disabled='true']) {
   filter: brightness(1.05);
   background: var(--primary);
 }
