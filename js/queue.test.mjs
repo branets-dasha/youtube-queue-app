@@ -14,6 +14,7 @@ import {
   videosToClean,
   lastSkipped,
   nearestSurvivor,
+  paneCandidates,
   nextPlayable,
   firstPlayable,
   compareIso,
@@ -191,6 +192,58 @@ test('nearestSurvivor tolerates non-array input and mutates neither argument', (
   nearestSurvivor(order, 'a', alive);
   assert.deepEqual(order, ['a', 'b', 'c']);
   assert.deepEqual([...alive], ['c']);
+});
+
+// --- paneCandidates: the order the pane ring is tried in ---
+
+test('paneCandidates walks forward from the middle, wrapping past the end', () => {
+  assert.deepEqual(paneCandidates(5, 2, 1), [3, 4, 0, 1]);
+});
+
+test('paneCandidates walks backward from the middle, wrapping past the start', () => {
+  assert.deepEqual(paneCandidates(5, 2, -1), [1, 0, 4, 3]);
+});
+
+test('paneCandidates wraps at BOTH ends rather than clamping', () => {
+  // From the last pane forward, and from the first backward: the far end is the
+  // very first candidate, which is the whole difference from the card walk.
+  assert.deepEqual(paneCandidates(5, 4, 1), [0, 1, 2, 3]);
+  assert.deepEqual(paneCandidates(5, 0, -1), [4, 3, 2, 1]);
+});
+
+test('paneCandidates never offers the origin, so a ring of one is empty', () => {
+  assert.deepEqual(paneCandidates(1, 0, 1), []);
+  assert.deepEqual(paneCandidates(1, 0, -1), []);
+  // Every other pane exactly once, whichever way and wherever from.
+  for (const from of [0, 1, 2, 3, 4]) {
+    for (const dir of [1, -1]) {
+      const out = paneCandidates(5, from, dir);
+      assert.equal(out.length, 4);
+      assert.equal(new Set(out).size, 4);
+      assert.ok(!out.includes(from));
+    }
+  }
+});
+
+test('paneCandidates reads a nonsense length as an empty ring', () => {
+  assert.deepEqual(paneCandidates(0, 0, 1), []);
+  assert.deepEqual(paneCandidates(-3, 0, 1), []);
+  assert.deepEqual(paneCandidates(2.5, 0, 1), []);
+  assert.deepEqual(paneCandidates(undefined, 0, 1), []);
+});
+
+test('paneCandidates wraps an out-of-ring origin into it', () => {
+  // Both are index 2 of 5 — a stale lastPane index cannot produce a bad index.
+  assert.deepEqual(paneCandidates(5, 7, 1), paneCandidates(5, 2, 1));
+  assert.deepEqual(paneCandidates(5, -3, 1), paneCandidates(5, 2, 1));
+  // A non-integer origin reads as 0 rather than throwing.
+  assert.deepEqual(paneCandidates(3, undefined, 1), [1, 2]);
+});
+
+test('paneCandidates treats any dir <= -1 as backward and everything else as forward', () => {
+  // The pages only ever pass -1 / +1; 0 must still pick a direction, not stall.
+  assert.deepEqual(paneCandidates(3, 0, 0), [1, 2]);
+  assert.deepEqual(paneCandidates(3, 0, -2), [2, 1]);
 });
 
 // --- computeCutoff: contiguous handled-prefix marker, floor-bounded, tie-safe ---

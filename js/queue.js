@@ -268,6 +268,36 @@ export function nearestSurvivor(orderedIds, anchorId, survivingIds) {
 }
 
 /**
+ * The order in which to TRY the other panes when stepping the pane ring in
+ * `dir` (-1 = previous, +1 = next) from pane `from` of `len`. Every other pane
+ * exactly once, nearest first, WRAPPING past either end — so the caller can take
+ * the first one that will actually accept focus, and a pane whose controls are
+ * all hidden or disabled is skipped rather than swallowing the key.
+ *
+ * The origin is never a candidate, which is what makes a ring of one (and of
+ * none) an empty list: there is nowhere else to go, so the caller declines the
+ * key and it keeps whatever native meaning it had.
+ *
+ * Pure index arithmetic — it knows nothing about focus, which is the whole
+ * reason it can be tested. Tolerant of a nonsense `len` (anything but a positive
+ * integer reads as an empty ring) and of a `from` outside the ring, which wraps
+ * into it.
+ * @param {number} len how many panes the page has
+ * @param {number} from the index the step starts at
+ * @param {number} dir -1 = previous, +1 = next
+ * @returns {number[]} indices to try, in order, excluding `from`
+ */
+export function paneCandidates(len, from, dir) {
+  const n = Number.isInteger(len) && len > 0 ? len : 0;
+  if (n < 2) return [];
+  const step = dir < 0 ? -1 : 1;
+  const start = Number.isInteger(from) ? ((from % n) + n) % n : 0;
+  const out = [];
+  for (let k = 1; k < n; k++) out.push((((start + step * k) % n) + n) % n);
+  return out;
+}
+
+/**
  * Compute the live CUTOFF marker: the boundary of the contiguous handled prefix
  * among the currently-present videos — "everything up to here is handled; the
  * first UNMARKED video is just after it."

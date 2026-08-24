@@ -105,6 +105,7 @@ import {
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
+  initPaneNav,
   focusFirst,
   bindIframeFocusGuard,
 } from './page-chrome.js';
@@ -141,6 +142,11 @@ let curtain = null;
 // the remembered card, so `state` does not mirror that either. The keys that
 // drive it live in onGlobalKeydown below, as page-chrome binds none.
 let queueFocus = null;
+
+// Pane-to-pane focus movement ([, ] and /), from page-chrome.js's
+// initPaneNav(); it owns the last-pane note, so `state` does not mirror that
+// either. Same arrangement: the keys live in onGlobalKeydown below.
+let paneNav = null;
 
 // DOM references, populated in init().
 const dom = {};
@@ -282,6 +288,13 @@ function cacheDom() {
   dom.handledCount = byId('handled-count');
   dom.cutoffDisplay = byId('cutoff-display');
 
+  // Pane-ring containers. Nothing else references them: they exist so [ and ]
+  // can name a REGION rather than a control, each landing on its own first
+  // focusable one.
+  dom.topbarNav = document.querySelector('.topbar__nav');
+  dom.toolbar = document.querySelector('.toolbar');
+  dom.queueHeader = document.querySelector('.queue-header');
+
   // The queue PANE, not the list: it is the scroll container (selected by
   // class, there's no id) AND the region arrow-key card navigation is confined
   // to in the STACKED layout — wider than the list, taking in the sticky header
@@ -344,13 +357,32 @@ function bindEvents() {
   // defaults ('.workspace', <=900px, cover on wheel-down) are this page's.
   curtain = initCurtain({ node: dom.curtain });
 
-  // Arrow-key card navigation and the '/' pane toggle: page-chrome owns the
-  // remembered card and the focus moves, this page's keydown table owns the
-  // keys. Same call on the stash page, so the two tables cannot drift on it.
+  // Arrow-key card navigation: page-chrome owns the remembered card and the
+  // focus moves, this page's keydown table owns the keys. Same call on the stash
+  // page, so the two tables cannot drift on it.
   queueFocus = initQueueFocus({
     queueList: dom.queueList,
     queuePane: dom.queuePane,
     playerPane: dom.playerPane,
+  });
+
+  // The pane ring, IN DOM ORDER — the one place this page's regions are named.
+  // Only two override the default landing: the queue resumes at the remembered
+  // card (letting the scroll follow, unlike every other caller of
+  // focusRemembered, since arriving from another pane has no scroll to protect),
+  // and the player is focused WHOLE so its description scrolls natively.
+  paneNav = initPaneNav({
+    panes: [
+      { el: dom.topbarNav },
+      { el: dom.toolbar },
+      { el: dom.queueHeader },
+      {
+        el: dom.queueList,
+        role: 'queue',
+        focus: () => (queueFocus ? queueFocus.focusRemembered({ preventScroll: false }) : null),
+      },
+      { el: dom.playerPane, role: 'player', focus: () => focusFirst(dom.playerPane) },
+    ],
   });
 
   // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
@@ -1905,12 +1937,21 @@ function onGlobalKeydown(e) {
     // declines and Home/End keep their native meaning.
     if (queueFocus && queueFocus.focusEdge(key === 'home' ? -1 : 1)) e.preventDefault();
   } else if (key === '/') {
-    // '/' throws focus between the panes: out of the player back to the
-    // remembered card, from anywhere else into the player. ALWAYS prevented —
-    // Firefox opens Quick Find on '/' otherwise — and read off e.key, so a
+    // '/' is the absolute jump between the two BIG panes, with the queue as
+    // home: from the queue into the player, from anywhere else — the player, any
+    // of the small panes, <body> — back to the remembered card. ALWAYS prevented
+    // — Firefox opens Quick Find on '/' otherwise — and read off e.key, so a
     // layout that puts '/' behind Shift still reaches us (Shift is allowed).
     e.preventDefault();
-    if (queueFocus) queueFocus.togglePane();
+    if (paneNav) paneNav.togglePane();
+  } else if (key === '[' || key === ']') {
+    // [ / ] step the pane RING — nav, toolbar, queue actions, queue, player —
+    // wrapping at both ends, where '/' jumps straight between the two big ones.
+    // The skip past a pane that cannot take focus and the fallback to the last
+    // pane focus was in both live in page-chrome's movePane, which reports
+    // whether it took the key on moveCard's contract. Neither bracket has a
+    // native action to preserve, so prevented only on true costs nothing.
+    if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
   } else if (key === 'x') {
     // x = Skip: toggle the focused card between new and skipped.
     if (idx >= 0) {
