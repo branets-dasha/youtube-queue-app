@@ -480,7 +480,30 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   // outright through rememberCard, and no focusin fires for that.
   let rememberedId = null;
 
+  // The card a POINTER press just placed the cursor on, carrying `row--pointed`
+  // — which is half of what styles.css draws the card ring on, the other half
+  // being :focus-visible. Without it the ring rule would have to be a plain
+  // :focus, and every programmatic focus this module performs would draw a ring
+  // after a MOUSE gesture: Clean up, Trim front, "Show all (N)" and the removal
+  // rescue all move focus onto a card the user never chose. It marks the one
+  // pointer gesture that IS a placement rather than guessing at a modality, so
+  // a future focus site inherits the right behaviour without knowing this
+  // exists. A node, not an id: it lives only until the next focusin, and a
+  // re-render drops the class with the <ul> it was on.
+  let pointedCard = null;
+
   if (queueList) {
+    // pointerdown, not click: the mark has to be set BEFORE focus moves, and
+    // it marks the card even when the press lands on a control inside one —
+    // the focusin below is what then clears it, because that focus goes to the
+    // control, not to the card.
+    queueList.addEventListener('pointerdown', (e) => {
+      const card = e.target && e.target.closest ? e.target.closest('.row') : null;
+      if (pointedCard && pointedCard !== card) pointedCard.classList.remove('row--pointed');
+      pointedCard = card;
+      if (card) card.classList.add('row--pointed');
+    });
+
     // focusin (not focus) because it BUBBLES: the note must be taken whether
     // focus landed on the card itself or on ▶ Play, Skip, a speed button or a
     // card-menu item inside it — the same closest('.row') rule the card
@@ -493,6 +516,14 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       const card = e.target && e.target.closest ? e.target.closest('.row') : null;
       const id = card && card.dataset ? card.dataset.videoId : null;
       if (id) rememberedId = id;
+      // The mark survives only when focus landed on the marked card ITSELF. A
+      // press on a control inside a card marks the card on the way down, then
+      // lands here on the button — not the marked node — and clears it, so the
+      // card stays unringed exactly as :focus-within would have left it.
+      if (pointedCard && e.target !== pointedCard) {
+        pointedCard.classList.remove('row--pointed');
+        pointedCard = null;
+      }
     });
   }
 

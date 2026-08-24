@@ -556,15 +556,22 @@ main {
    box-shadow so it follows the card radius uniformly on all sides and never
    shifts layout. Distinct from the now-playing fill; the transparent outline
    keeps it visible in forced-colors mode.
-   PLAIN :focus, the only rule here that is — do not "correct" it to
-   :focus-visible. A .row is not a control you activate; it is the cursor
-   position for ArrowUp/ArrowDown, x, t and 1/5/2 (see initQueueFocus in
-   page-chrome.js), and a click moves that cursor, so where it sits has to show
-   however focus got there. Not :focus-within either — clicking Play, Skip or
-   the card menu focuses that control and leaves the card unringed.
-   Must stay AFTER .row:hover: identical 0,2,0 specificity, both set box-shadow,
-   so source order alone decides, and clicking a card necessarily hovers it. */
-.row:focus {
+   TWO selectors, because a .row is not a control you activate — it is the
+   cursor position for ArrowUp/ArrowDown, x, t and 1/5/2 (see initQueueFocus in
+   page-chrome.js) — and only SOME of the ways focus reaches one are the user
+   choosing a place. :focus-visible covers keyboard focus and the programmatic
+   focus Chrome propagates it to; .row--pointed covers the one pointer gesture
+   that IS a placement, a click on the card's own body. What plain :focus would
+   also have caught, and must not: the app rescuing focus onto a card after a
+   MOUSE press on a control that disabled itself (Clean up, Trim front, Show
+   all, the removal rescue) — a place the user never chose and does not need
+   shown. Not :focus-within either — clicking Play, Skip or the card menu
+   focuses that control and leaves the card unringed.
+   Must stay AFTER .row:hover: the :focus-visible half is an identical 0,2,0 and
+   both set box-shadow, so source order alone decides it, and clicking a card
+   necessarily hovers it. (The .row--pointed half is 0,3,0 and wins outright.) */
+.row:focus-visible,
+.row.row--pointed:focus {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus), var(--shadow);
