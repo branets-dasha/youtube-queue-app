@@ -492,6 +492,17 @@ function clearAddInvalid() {
   if (dom.urlInput) dom.urlInput.removeAttribute('aria-invalid');
 }
 
+/**
+ * Empty the URL field — for every outcome that ENDS WITH THE VIDEO IN THE STASH,
+ * whether this add put it there or found it already there. A second press could
+ * then only repeat a no-op, and the caret is back in the field (onAddSubmit) with
+ * nothing to delete before the next paste. The outcomes that do NOT reach here
+ * keep the text on purpose: the user is about to fix or replace it.
+ */
+function clearAddInput() {
+  if (dom.urlInput) dom.urlInput.value = '';
+}
+
 /** Mark the URL field invalid (parse failures only) and say why, in a toast. */
 function rejectInput(message) {
   if (dom.urlInput) dom.urlInput.setAttribute('aria-invalid', 'true');
@@ -546,6 +557,7 @@ function setAdding(adding) {
 async function applyDuplicate({ records, changed, record }) {
   if (!changed) {
     showToast('That video is already in your stash.', { type: 'info' });
+    clearAddInput();
     scrollToCard(record.videoId);
     return;
   }
@@ -561,6 +573,7 @@ async function applyDuplicate({ records, changed, record }) {
   state.records = sortStash(records); // the updated COPY, at its same place
   render();
   showToast('That video is already in your stash — updated it.', { type: 'success' });
+  clearAddInput();
   scrollToCard(record.videoId);
 }
 
@@ -665,7 +678,7 @@ async function runAdd() {
     await persistRecord(record);
     state.records = sortStash(records);
     render();
-    if (dom.urlInput) dom.urlInput.value = '';
+    clearAddInput();
     showToast(`Added “${record.title}” to your stash.`, { type: 'success' });
     scrollToCard(record.videoId);
   } catch (err) {
