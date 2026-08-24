@@ -97,7 +97,7 @@ function buildChannelRow(ch) {
       rel: 'noopener',
     },
     [
-      buildAvatar({ title: ch.title, avatarUrl: ch.avatarUrl }, true),
+      buildAvatar({ title: ch.title, avatarUrl: ch.avatarUrl }),
       el('span', { class: 'chan__title', text: ch.title }), // safe
     ]
   );

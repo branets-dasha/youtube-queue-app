@@ -694,63 +694,73 @@ main {
   outline-offset: 1px;
   border-radius: 4px;
 }
+/* ONE in-flow item — .row__subtext — over an avatar lifted OUT of the flow and
+   pinned to this box (see .row__sub .row__avatar). In flow the avatar sits on
+   the name's FIRST line, where it can neither centre against a name that has
+   wrapped nor leave the date room to follow that name on the same line. Out of
+   flow it stops contributing this row's height and left indent, so both are
+   restored by hand. align-items centres a one-line badge against the avatar;
+   a wrapped one is the taller of the two and the avatar centres against IT. */
 .row__sub {
+  position: relative;
   margin-top: 4px;
   color: var(--text-dim);
   font-size: 0.85rem;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  min-height: 36px; /* the avatar's own; nothing else sets it now */
+  padding-left: 42px; /* the 36px it vacated, plus the 6px gap after it */
 }
 .row__channel {
   font-weight: 500;
 }
-/* The avatar + channel name are wrapped in ONE anchor to the channel (card +
-   player), so clicking either navigates and it is a single tab stop. inline-flex
-   + the same 6px gap reproduces what two separate flex items looked like. Keep
-   the muted inline look — inherit the sub-line colour rather than the bright
-   accent link colour — and reveal the affordance the way .row__title does:
-   hover turns the NAME accent (the avatar has no colour to turn), focus draws a
-   ring, nothing underlines.
-   The PADDING exists only to hold that ring, and the equal negative MARGIN
-   cancels it so nothing this link contains moves a pixel — the two must stay in
-   step. 8px on the right is the extra room the ring needed on the text side. */
-.row__channel-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* Everything but the avatar — channel name, separator, date — as ONE block of
+   ordinary inline content, shared by a card and the now-playing bar. Inline is
+   the whole point: the name wraps to as many lines as it needs, each of them
+   indented past the avatar by the row's own padding, and the date follows the
+   last one instead of being pushed to a line of its own the way a flex item was. */
+.row__subtext {
+  flex: 1 1 auto;
   min-width: 0;
+}
+/* The anchor to the channel on YouTube (card + player) holds the avatar AND the
+   name, so clicking either navigates — but only the NAME is in flow inside it,
+   so the link is exactly as wide as its text and the empty space beside a short
+   name belongs to the card. Plain inline, with no box of its own, which is what
+   lets a long name wrap inside it.
+   Keep the muted inline look — inherit the sub-line colour rather than the
+   bright accent link colour — and reveal the affordance the way .row__title
+   does: hover turns the name accent, focus draws a ring, nothing underlines. */
+.row__channel-link {
   color: inherit;
   text-decoration: none;
-  padding: 4px 8px 4px 4px;
-  margin: -4px -8px -4px -4px;
 }
 .row__channel-link:hover .row__channel {
   color: var(--accent);
 }
-/* A PILL at the house radius, drawn INSET so it occupies the outermost 2px of
-   the padded box instead of sitting outside it. Both halves are load-bearing:
-   on an UNPADDED box the end caps curve back through the avatar and the last
-   glyph of the name, and an OUTSET ring — at the house 1px offset — would reach
-   3px beyond this link's padded box on every side, past .workspace__player's
-   4px clip band, which the box's own -4px margin already spends in full (that
-   band's constraint is stated where it is set). Inset, the ring reaches no
-   further than the margin does and so costs the band nothing. The 8px it reaches
-   to the right of the name is paid for by .row__dot's margin. */
+/* .row__title's ring exactly, on the link that behaves like it: OUTSET at the
+   house 1px offset, at the corner radius rather than a pill — this box goes tall
+   when the name wraps, and 999px would then make end caps of half that height,
+   curving back through the text. It fragments around the NAME's line boxes and
+   nothing else: an out-of-flow avatar contributes no geometry to them. */
 .row__channel-link:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: -2px;
-  border-radius: 999px;
+  outline-offset: 1px;
+  border-radius: 4px;
 }
-/* Widens this separator's flex gaps to 12px, which is what buys the channel
-   ring the 8px it reaches to the right of the name. On the DOT rather than the
-   row's `gap` — which would give the same 12/12 — because buildChannelBadge
-   drops the avatar and the name straight into the row as bare flex items when a
-   record carries no channelId, and that fallback has no ring to clear. */
+/* The separator already carries a space on each side (metaSeparator in js/ui.js,
+   which is where the reason for those is), so this margin is only the rest of
+   the 12px the name and the date were held apart by as flex items. */
 .row__dot {
   opacity: 0.6;
-  margin: 0 6px;
+  margin: 0 8px;
+}
+/* One unit: inline flow would otherwise break the date across its OWN spaces
+   ("24 Feb / 2026, 17:00") once a long channel name leaves it too little room.
+   The line is meant to break at the space BEFORE the separator instead, which
+   is why that is the only breakable one of the pair. */
+.row__time-abs {
+  white-space: nowrap;
 }
 
 /* Channel avatar (always present — image or letter placeholder — so the sub-row,
@@ -761,7 +771,7 @@ main {
   border-radius: 50%;
   object-fit: cover;
   background: var(--surface-2);
-  flex: 0 0 auto; /* never grow/shrink in the flex sub-row */
+  flex: 0 0 auto; /* never grow/shrink where it IS a flex item (.chan__link) */
 }
 .row__avatar--placeholder {
   display: inline-flex;
@@ -773,6 +783,20 @@ main {
   font-weight: 700;
   line-height: 1;
   text-transform: uppercase;
+}
+/* In a meta row — and ONLY there; on channels.html the same avatar is a plain
+   flex item of .chan__link — it is out of flow, pinned to the row's left edge
+   and centred on the row's FULL height, which is what centres it against a name
+   that has wrapped. It stays a DESCENDANT of .row__channel-link, so a click on
+   it still follows the link: out of flow is a geometry exemption, not a
+   hit-testing one. (position blockifies the placeholder's inline-flex to flex,
+   so its letter stays centred.) */
+.row__sub .row__avatar,
+.player__meta .row__avatar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .row__actions {
@@ -1084,13 +1108,12 @@ body.app-active #app-main.app[hidden] {
      sliced off at x < 0. Not fixable from the link's side, nor by
      overflow-clip-margin: beside overflow-y:auto, overflow-x `clip` computes to
      `hidden` and the margin does nothing.
-     The band must cover the WIDEST left reach in here, which is
-     .row__channel-link's 4px — and that is the link's own -4px margin, not its
-     ring: that one is INSET, painting the outermost 2px of the padded box and
-     reaching nothing beyond it. .row__title's ring IS outset (1px offset + 2px)
-     but sits flush, so it reaches 3px and has 1px to spare. Nothing checks
-     either bound, so widening that margin — or flipping that ring outset —
-     clips silently; check it in a browser.
+     The band must cover the WIDEST left reach in here, which is 3px:
+     .row__title's ring, outset at the house 1px offset over a 2px outline, on a
+     box flush against the content edge. (.player__meta's channel link is ringed
+     the same way but starts 42px in, clear of the edge.) That leaves 1px to
+     spare, and nothing checks the bound — so a wider offset, or a new control
+     further left, clips silently; check it in a browser.
      On the scrolling axis the 4px is headroom only at the ends
      of the range: content hand-scrolled to an edge still loses a ring segment,
      as in any scroll container, and scroll-padding does not help. */
@@ -1215,12 +1238,14 @@ body.app-active #app-main.app[hidden] {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-/* Player info meta row (avatar + channel + date), mirroring a card's meta row. */
+/* Player info meta row (avatar + channel + date), mirroring a card's meta row —
+   one in-flow block over an out-of-flow avatar, for the reasons in .row__sub. */
 .player__meta {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  min-height: 36px;
+  padding-left: 42px; /* as .row__sub */
   color: var(--text-dim);
   font-size: 0.9rem;
 }
@@ -1456,11 +1481,11 @@ body.app-active #app-main.app[hidden] {
 .chan__link:hover .chan__title {
   color: var(--accent);
 }
-/* The house 1px offset, but NOT .row__channel-link's pill: .chan__title wraps,
-   so this box grows tall, and a 999px radius then makes end caps of half that
-   height — measured cutting through the last glyph of the first line at 400px.
-   A corner radius keeps the curve out of the text. The card's padded box is not
-   needed either: nothing clips this ring, .chan being no scroll container. */
+/* The house 1px offset, and a corner radius rather than a pill: .chan__title
+   wraps, so this box grows tall, and a 999px radius then makes end caps of half
+   that height — measured cutting through the last glyph of the first line at
+   400px. var(--radius) rather than .row__channel-link's 4px because this box IS
+   the avatar + the name, not text alone. */
 .chan__link:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
