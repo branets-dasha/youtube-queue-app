@@ -218,15 +218,14 @@ export function avatarPlaceholder(title) {
  * (the record, the yqa_channels map, or both, and in which order) is the calling
  * page's business, settled by the pure resolvers in queue.js. Given no URL it
  * renders the neutral letter placeholder, so card height stays uniform.
- * img.src ONLY; alt = channel title, or '' when `decorative` (the avatar sits
- * inside the channel link next to the name, so the name alone is the link's
- * accessible name and the image must not repeat it).
+ * img.src ONLY; the avatar is ALWAYS decorative (alt=''): the resolved channel
+ * name is rendered as text right beside it, and in a meta row the two are one
+ * link — an alt would repeat that name, and name the link twice over.
  * @param {{title?:string,avatarUrl?:string}|null} info resolved channel display
  *        info, from subscriptionChannelInfo / stashChannelInfo (queue.js)
- * @param {boolean} [decorative] render with an empty alt
  * @returns {HTMLElement}
  */
-export function buildAvatar(info, decorative = false) {
+export function buildAvatar(info) {
   const title = (info && info.title) || '';
   const avatarUrl = (info && info.avatarUrl) || '';
   if (!avatarUrl) return avatarPlaceholder(title);
@@ -237,7 +236,7 @@ export function buildAvatar(info, decorative = false) {
   // every call site, from one avatar to two thousand.
   const img = el('img', {
     class: 'row__avatar',
-    alt: decorative ? '' : title, // channel title (or nothing when inside the link)
+    alt: '', // decorative; the name is rendered beside it
     loading: 'lazy',
     decoding: 'async',
     width: '36',
@@ -253,16 +252,49 @@ export function buildAvatar(info, decorative = false) {
 }
 
 /**
- * Build the channel badge: the avatar + the channel name. When the record
- * carries a channelId, BOTH sit inside a SINGLE anchor to that channel on
- * YouTube (new tab, noopener) — one link, one tab stop, so clicking the icon or
- * the name both navigate. The id is passed through encodeURIComponent and the
- * visible name via textContent (XSS-safe). A click is stopPropagation'd so it
- * opens the channel even if an ancestor has a click-to-play handler. With no
- * channelId, render the avatar + plain text, unlinked.
+ * The " · " between the channel name and the posted date, as the nodes to drop
+ * into a meta line. The spaces are REAL text nodes either side of the glyph and
+ * not margin, because that line is inline flow: without them the name's last
+ * word, the dot and the date would be one unbreakable run, and a space put
+ * inside the span would be aria-hidden along with it.
  *
- * Returns a DocumentFragment in the unlinked case so callers can spread it into
- * their flex row exactly as before.
+ * The trailing one is NON-BREAKING, so the only place the line may break is
+ * BEFORE the dot and the separator travels with the date it introduces — a
+ * wrapped name otherwise leaves a lone "·" dangling off the end of a line.
+ * @returns {Node[]}
+ */
+function metaSeparator() {
+  return [
+    document.createTextNode(' '),
+    el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
+    document.createTextNode('\u00a0'), // non-breaking; see above
+  ];
+}
+
+/**
+ * Build a meta line: ONE block holding the channel avatar, the channel name and
+ * then `trailing` — the separator + the posted date, at both call sites.
+ * Everything in it is ordinary inline content bar the avatar, which the caller's
+ * CSS lifts out of the flow (.row__sub .row__avatar); that is what lets a
+ * wrapped channel name's later lines sit beside the avatar rather than under it
+ * and the date ride along on the tail of the last one instead of being pushed to
+ * a line of its own.
+ *
+ * Avatar and name TOGETHER are the anchor to the channel on YouTube (new tab,
+ * noopener) when the record carries a channelId, so clicking either navigates —
+ * the avatar being out of flow costs it nothing, an absolutely positioned
+ * descendant still being hit-tested as part of its link. What it does cost is
+ * the ring, which fragments around the name's line boxes ALONE (out-of-flow
+ * descendants contribute no geometry to an inline box) — the point of the
+ * arrangement, along with a link no wider than its own text, so the empty space
+ * beside a short name belongs to the card. The id goes through
+ * encodeURIComponent and the visible name via textContent (XSS-safe); a click
+ * is stopPropagation'd so it opens the channel even if an ancestor has a
+ * click-to-play handler. With no channelId the two are dropped in unlinked, and
+ * the block around them is the same either way.
+ *
+ * Returns the block itself: it is the caller's flex row's ONLY in-flow child
+ * (a card's .row__sub, or #player-meta).
  *
  * The channel's title and avatar are NOT derived here: `resolveChannel` — the
  * calling page's policy, bound to that page's channels map — answers both, and
@@ -270,30 +302,30 @@ export function buildAvatar(info, decorative = false) {
  * never show two different answers for the same channel.
  * @param {object} rec video record (supplies channelId, for the link href)
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel
+ * @param {Node[]} [trailing] inline nodes to follow the name inside the block
  * @returns {Node}
  */
-function buildChannelBadge(rec, resolveChannel) {
+function buildChannelBadge(rec, resolveChannel, trailing = []) {
   const info = (typeof resolveChannel === 'function' && resolveChannel(rec)) || null;
   const title = (info && info.title) || '';
-  if (rec.channelId) {
-    return el(
-      'a',
-      {
-        class: 'row__channel-link',
-        href: 'https://www.youtube.com/channel/' + encodeURIComponent(rec.channelId),
-        target: '_blank',
-        rel: 'noopener',
-        onclick: (e) => e.stopPropagation(),
-      },
-      [
-        buildAvatar(info, true), // decorative: name below is the link text
-        el('span', { class: 'row__channel', text: title }), // safe
+  const avatar = buildAvatar(info);
+  const name = el('span', { class: 'row__channel', text: title }); // safe
+  const head = rec.channelId
+    ? [
+        el(
+          'a',
+          {
+            class: 'row__channel-link',
+            href: 'https://www.youtube.com/channel/' + encodeURIComponent(rec.channelId),
+            target: '_blank',
+            rel: 'noopener',
+            onclick: (e) => e.stopPropagation(),
+          },
+          [avatar, name]
+        ),
       ]
-    );
-  }
-  const frag = document.createDocumentFragment();
-  frag.append(buildAvatar(info), el('span', { class: 'row__channel', text: title }));
-  return frag;
+    : [avatar, name];
+  return el('div', { class: 'row__subtext' }, [...head, ...trailing]);
 }
 
 /**
@@ -306,11 +338,11 @@ function buildChannelBadge(rec, resolveChannel) {
  * the video's page on youtube.com.
  *
  * It reuses the card's `.row__title` — as renderPlayerMeta below reuses
- * row__channel-link / row__channel / row__dot / row__time-abs, so the player bar
- * and a card cannot drift apart — and that class is also what keeps it looking
- * like the plain <p> text it replaced: it sets `color: var(--text)` and
- * `text-decoration: none` over the bare `a { color: var(--accent) }` rule, and
- * brings a :focus-visible ring.
+ * row__subtext / row__channel-link / row__channel / row__dot / row__time-abs, so
+ * the player bar and a card cannot drift apart — and that class is also what
+ * keeps it looking like the plain <p> text it replaced: it sets
+ * `color: var(--text)` and `text-decoration: none` over the bare
+ * `a { color: var(--accent) }` rule, and brings a :focus-visible ring.
  *
  * The <a> is a CHILD of the container rather than the container itself: the
  * page's <p> keeps its tag, its id and its live region, and an empty state is an
@@ -350,14 +382,15 @@ export function renderPlayerMeta(container, rec, resolveChannel) {
   clear(container);
   if (!rec) return;
   container.append(
-    buildChannelBadge(rec, resolveChannel),
-    el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
-    el('time', {
-      class: 'row__time-abs',
-      datetime: rec.publishedAt,
-      text: formatAbsolute(rec.publishedAt),
-      title: rec.publishedAt,
-    })
+    buildChannelBadge(rec, resolveChannel, [
+      ...metaSeparator(),
+      el('time', {
+        class: 'row__time-abs',
+        datetime: rec.publishedAt,
+        text: formatAbsolute(rec.publishedAt),
+        title: rec.publishedAt,
+      }),
+    ])
   );
 }
 
@@ -773,21 +806,19 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     text: rec.title, // safe
   });
 
-  const channelBadge = buildChannelBadge(rec, resolveChannel);
-
   const timeAbs = el('time', {
     class: 'row__time-abs',
     datetime: rec.publishedAt,
     text: formatAbsolute(rec.publishedAt),
     title: rec.publishedAt,
   });
+  const channelBadge = buildChannelBadge(rec, resolveChannel, [
+    ...metaSeparator(),
+    timeAbs,
+  ]);
   const meta = el('div', { class: 'row__meta' }, [
     titleLink,
-    el('div', { class: 'row__sub' }, [
-      channelBadge,
-      el('span', { class: 'row__dot', text: '·', 'aria-hidden': 'true' }),
-      timeAbs,
-    ]),
+    el('div', { class: 'row__sub' }, [channelBadge]),
   ]);
 
   // The footer is plain source order — [▶ Play] · 1× 1.5× 2× · [Skip] — with Play
