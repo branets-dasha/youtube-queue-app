@@ -1071,10 +1071,24 @@ function nextRowAfter(card) {
   return i < rows.length - 1 ? rows[i + 1] : card;
 }
 
-/** Centre a card in the list, when it is rendered (outside the window: no-op). */
-function scrollToCard(videoId) {
+/**
+ * Centre a card in the list, when it is rendered (outside the window: no-op).
+ *
+ * `focus` is OPT-IN and belongs to the jump button alone. The other three
+ * callers are all add-flow endings, which put the caret back in the URL field on
+ * their way out: focusing a card here would fight that hand-off AND drag the
+ * walk cursor onto a card the user never travelled to.
+ * @returns {Element|null} the card, when one was rendered.
+ */
+function scrollToCard(videoId, { focus = false } = {}) {
   const card = findCard(videoId);
-  if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (!card) return null;
+  // preventScroll first, then the centering scroll — focus()'s own "nearest"
+  // scroll would otherwise land and be corrected a frame later, as a visible
+  // double jump. Same two-call idiom as moveCard's page branch.
+  if (focus) card.focus({ preventScroll: true });
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  return card;
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,10 +1275,16 @@ function updatePlayingControls() {
   }
 }
 
-/** Centre the currently-playing card (the button is disabled when there is none). */
+/**
+ * Centre the currently-playing card and put the walk cursor on it (the button is
+ * disabled when there is none). Focusing the card is enough on its own: the
+ * queue list's focusin writes the cursor.
+ * @returns {boolean} whether a card was actually focused — the `p` key's cue to
+ *   preventDefault, so a dead jump leaves the key its native meaning.
+ */
 function onScrollToPlaying() {
-  if (!state.playing) return;
-  scrollToCard(state.playing);
+  if (!state.playing) return false;
+  return Boolean(scrollToCard(state.playing, { focus: true }));
 }
 
 /** Move the .row--playing highlight to the card for `videoId` (or clear it). */
@@ -1652,6 +1672,16 @@ function onGlobalKeydown(e) {
     // Note the add field is an INPUT, so the typing guard above has already let
     // both through to it: that pane is entered with these keys but not left.
     if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'p') {
+    // p = jump to the now-playing card, the third of the absolute jumps and the
+    // only one with a target that can be absent. Deliberately NOT gated on the
+    // button's disabled property — the handler already reports whether it found
+    // a card, and a DOM property read would be a second answer to the same
+    // question, free to drift from the first. Nothing playing, or its card not
+    // rendered: no move, no preventDefault, and 'p' keeps its native meaning.
+    // Works from anywhere on the page, the player pane included. Identical to
+    // the subscriptions page.
+    if (onScrollToPlaying()) e.preventDefault();
   } else if (key === 'x') {
     // x = Remove: toggle the focused card between new and marked.
     if (idx >= 0) {

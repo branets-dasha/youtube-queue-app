@@ -1360,15 +1360,27 @@ function updatePlayingControls() {
 }
 
 /**
- * Scroll the queue so the currently-playing video's card is centered. The button
- * is disabled whenever the card isn't in the list, so this normally always finds
- * it; the guards are just defensive (no-op rather than throw).
+ * Centre the currently-playing video's card AND put the walk cursor on it. A
+ * jump that only scrolled would leave the next arrow press resuming from
+ * wherever focus still was — the user is looking at one card and the cursor sits
+ * on another. Focusing the card is enough on its own: the queue list's focusin
+ * writes the cursor, so there is no rememberCard call to keep in step.
+ *
+ * The button is disabled whenever the card isn't in the list, so the guards are
+ * defensive (no-op rather than throw).
+ * @returns {boolean} whether a card was actually focused — the `p` key's cue to
+ *   preventDefault, so a dead jump leaves the key its native meaning.
  */
 function onScrollToPlaying() {
-  if (!state.playing) return;
+  if (!state.playing) return false;
   const card = findCard(state.playing);
-  if (!card) return; // not in the rendered list: button is disabled anyway
+  if (!card) return false; // not in the rendered list: button is disabled anyway
+  // preventScroll first, then the centering scroll — focus()'s own "nearest"
+  // scroll would otherwise land and be corrected a frame later, as a visible
+  // double jump. Same two-call idiom as moveCard's page branch.
+  card.focus({ preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  return true;
 }
 
 /**
@@ -1383,11 +1395,13 @@ function updateSkippedControls(hasCards) {
 }
 
 /**
- * Scroll the queue so the LAST skipped video's card is centered — reusing the
- * same centering scroll as "scroll to playing". The target comes from the pure
- * lastSkipped() over the RENDERED records (Hide-skipped filter + display window
- * already applied), so the card always exists. With Hide-skipped on, nothing
- * rendered is skipped: fall back to the first rendered card.
+ * Centre the LAST skipped video's card and put the walk cursor on it — the same
+ * jump as "scroll to playing", target aside, and moving focus for the same
+ * reason: the two jump buttons must not disagree about whether a jump relocates
+ * the user. The target comes from the pure lastSkipped() over the RENDERED
+ * records (Hide-skipped filter + display window already applied), so the card
+ * always exists. With Hide-skipped on, nothing rendered is skipped: fall back to
+ * the first rendered card.
  */
 function onScrollToLastSkipped() {
   const list = windowedRecords(viewRecords());
@@ -1395,6 +1409,7 @@ function onScrollToLastSkipped() {
   if (!target) return; // empty list: button is disabled anyway
   const card = findCard(target.videoId);
   if (!card) return;
+  card.focus({ preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
@@ -1952,6 +1967,16 @@ function onGlobalKeydown(e) {
     // whether it took the key on moveCard's contract. Neither bracket has a
     // native action to preserve, so prevented only on true costs nothing.
     if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'p') {
+    // p = jump to the now-playing card, the third of the absolute jumps and the
+    // only one with a target that can be absent. Deliberately NOT gated on the
+    // button's disabled property — the handler already reports whether it found
+    // a card, and a DOM property read would be a second answer to the same
+    // question, free to drift from the first. Nothing playing, or its card not
+    // rendered: no move, no preventDefault, and 'p' keeps its native meaning.
+    // Works from anywhere on the page, the player pane included — watching a
+    // video and wanting its card back is the whole point.
+    if (onScrollToPlaying()) e.preventDefault();
   } else if (key === 'x') {
     // x = Skip: toggle the focused card between new and skipped.
     if (idx >= 0) {
