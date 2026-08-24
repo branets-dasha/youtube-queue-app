@@ -97,6 +97,7 @@ import {
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
+  focusFirst,
   bindIframeFocusGuard,
 } from './page-chrome.js';
 
@@ -444,8 +445,16 @@ function updateAuthUi() {
   const signed = hasSession();
   dom.authStatus.textContent = signed ? 'Signed in' : 'Not signed in';
   dom.authStatus.classList.toggle('is-signed-in', signed);
+  // The pair SWAPS: one hides as the other appears, so whichever is going away
+  // would drop focus to <body>. Note it before the swap and place it after —
+  // focus() on a still-hidden element is a no-op. Self-limiting: on every other
+  // call the outgoing button is already hidden and cannot be holding focus.
+  const outgoing = signed ? dom.signinBtn : dom.signoutBtn;
+  const incoming = signed ? dom.signoutBtn : dom.signinBtn;
+  const takesFocus = document.activeElement === outgoing;
   setVisible(dom.signinBtn, !signed);
   setVisible(dom.signoutBtn, signed);
+  if (takesFocus) focusFirst(incoming);
   updateLikeButton(); // re-evaluate: the label changed, though auth no longer gates it
 }
 
@@ -483,6 +492,17 @@ function clearAddInvalid() {
   if (dom.urlInput) dom.urlInput.removeAttribute('aria-invalid');
 }
 
+/**
+ * Empty the URL field — for every outcome that ENDS WITH THE VIDEO IN THE STASH,
+ * whether this add put it there or found it already there. A second press could
+ * then only repeat a no-op, and the caret is back in the field (onAddSubmit) with
+ * nothing to delete before the next paste. The outcomes that do NOT reach here
+ * keep the text on purpose: the user is about to fix or replace it.
+ */
+function clearAddInput() {
+  if (dom.urlInput) dom.urlInput.value = '';
+}
+
 /** Mark the URL field invalid (parse failures only) and say why, in a toast. */
 function rejectInput(message) {
   if (dom.urlInput) dom.urlInput.setAttribute('aria-invalid', 'true');
@@ -490,7 +510,7 @@ function rejectInput(message) {
 }
 
 // The add flow's single PROGRESS toast ("authorizing…", "looking up…"), updated
-// in place rather than stacked, and always dismissed in onAddSubmit's finally —
+// in place rather than stacked, and always dismissed in runAdd's finally —
 // the same pattern subscriptions-page.js uses around a refresh.
 let progressToast = null;
 /** Show or UPDATE the single progress toast in place (sticky until hidden). */
@@ -506,10 +526,20 @@ function hideProgress() {
   }
 }
 
-/** Reflect an in-flight add on the form (the button is the only visible part). */
+/**
+ * Reflect an in-flight add on the form (the button is the only visible part).
+ *
+ * aria-disabled, never the `disabled` property: the button returns a moment
+ * later and the click that started the add came from it, so disabling would drop
+ * focus to <body>. onAddSubmit's `if (state.adding) return` is the re-entry
+ * guard — aria-disabled does not block a submit, but that guard makes one inert.
+ * No busy LABEL either (unlike "Show all"): the progress toast is already a live
+ * region, and swapping "Add" for "Adding…" would resize the field beside it
+ * (.stash-add__input is `flex: 1 1 320px`) under the user's own caret.
+ */
 function setAdding(adding) {
   state.adding = adding;
-  if (dom.addBtn) dom.addBtn.disabled = adding;
+  if (dom.addBtn) dom.addBtn.setAttribute('aria-disabled', String(adding));
 }
 
 /**
@@ -527,6 +557,7 @@ function setAdding(adding) {
 async function applyDuplicate({ records, changed, record }) {
   if (!changed) {
     showToast('That video is already in your stash.', { type: 'info' });
+    clearAddInput();
     scrollToCard(record.videoId);
     return;
   }
@@ -542,15 +573,43 @@ async function applyDuplicate({ records, changed, record }) {
   state.records = sortStash(records); // the updated COPY, at its same place
   render();
   showToast('That video is already in your stash — updated it.', { type: 'success' });
+  clearAddInput();
   scrollToCard(record.videoId);
 }
 
+/**
+ * Submit handler: run the add, then put the caret back in the URL field.
+ *
+ * EVERY way an add ends wants the field rather than the button. Success clears
+ * it, so a second press could only do nothing; every other outcome leaves the
+ * pasted text sitting there to be fixed or replaced — a parse failure most of
+ * all, which marks the field aria-invalid and would otherwise leave the user's
+ * focus somewhere else entirely. One rule, no branch per outcome, which is why
+ * it wraps runAdd instead of living in its finally: half the exits return before
+ * that try is even entered.
+ *
+ * Gated on the button HOLDING focus, like every other hand-off on these pages:
+ * the Enter-in-the-field route is then a no-op, and an add that lands after the
+ * user has moved on does not yank them back.
+ */
 async function onAddSubmit(e) {
   e.preventDefault();
   // A second submit while one is in flight would hit auth.js's single callback
   // slot ("A token request is already in progress."), so it never starts.
   if (state.adding) return;
 
+  const takesFocus = dom.addBtn ? dom.addBtn.contains(document.activeElement) : false;
+  try {
+    await runAdd();
+  } finally {
+    // No focusFirst ladder: the field is never disabled or hidden, which is the
+    // same reason onCleanup already uses it as its guaranteed-live tail.
+    if (takesFocus && dom.urlInput) dom.urlInput.focus();
+  }
+}
+
+/** The add itself — parse, look up, stash. Every exit is a plain return. */
+async function runAdd() {
   const raw = dom.urlInput ? dom.urlInput.value : '';
   if (!raw.trim()) {
     rejectInput('Paste a YouTube link (or a bare video id) first.');
@@ -619,7 +678,7 @@ async function onAddSubmit(e) {
     await persistRecord(record);
     state.records = sortStash(records);
     render();
-    if (dom.urlInput) dom.urlInput.value = '';
+    clearAddInput();
     showToast(`Added “${record.title}” to your stash.`, { type: 'success' });
     scrollToCard(record.videoId);
   } catch (err) {
@@ -787,21 +846,39 @@ async function sweepRemoved() {
 }
 
 /**
- * Clean up button: sweep, re-render, report. Then move focus DELIBERATELY — the
- * button disables itself at 0, and a disabled control drops focus to <body>,
- * which would strand the keyboard user. Focus goes to the first remaining card
- * (where ↑/↓ resume), else back to the URL field (where the stash restarts).
+ * Clean up button: sweep, re-render, report. Two things have to be put back by
+ * hand afterwards.
+ *
+ * The re-render rebuilds the <ul>, so the pane's scroll goes with it and the
+ * user is dumped at the top of a list they were reading the middle of.
+ * renderKeepingAnchor is the right one of the two restores here because
+ * membership SHRINKS — stashToClean takes handled records from anywhere in the
+ * list, so the anchor itself can be one of the swept ones and needs a stand-in
+ * (renderKeepingPlace's absolute scrollTop is for the reconcile, where
+ * membership only grows).
+ *
+ * And the button disables itself at 0, which would drop focus to <body>: it
+ * goes to the card the walk resumes at — the same one the scroll was just
+ * anchored on, so the two cannot disagree — else the URL field, which is never
+ * disabled or hidden. The twin of subscriptions-page.js's onCleanup.
  */
 async function onCleanup() {
+  // Read BEFORE the sweep, and only rescue focus this button actually holds:
+  // a mouse click in Safari does not focus a <button>, and stealing focus from
+  // somewhere else entirely — the URL field — would be worse than doing nothing.
+  // Focus that was in the LIST is not this gate's business: the re-render below
+  // is what destroyed it and what puts it back.
+  const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     const removed = await sweepRemoved();
-    render();
+    if (queueFocus) queueFocus.renderKeepingAnchor(render);
+    else render();
     if (removed > 0) {
       showToast(`Removed ${removed} video(s) from your stash.`, { type: 'success' });
     }
-    const firstRow = dom.queueList.querySelector('.row');
-    if (firstRow) firstRow.focus();
-    else if (dom.urlInput) dom.urlInput.focus();
+    if (takesFocus && !(queueFocus && queueFocus.focusRemembered())) {
+      focusFirst(dom.urlInput);
+    }
   } catch (err) {
     handleError(err);
   }
@@ -893,8 +970,12 @@ async function syncFromStore() {
  * lives in the other pane and render() only rebuilds this list.
  */
 function renderKeepingPlace() {
-  const pane = dom.queuePane;
-  const scrollTop = pane ? pane.scrollTop : 0;
+  // Through page-chrome, which knows WHICH element scrolls at this width: the
+  // pane wide, the DOCUMENT stacked, where the pane is `overflow: visible` and
+  // its scrollTop is always 0 — read directly, the save returned 0 and the
+  // restore did nothing, leaving the refocused card ~6000px below the fold.
+  // The 900px breakpoint is a media query over there, never measured here.
+  const restoreScroll = queueFocus ? queueFocus.captureQueueScroll() : null;
 
   const active = document.activeElement;
   const card = active && dom.queueList.contains(active) ? active.closest('.row') : null;
@@ -912,7 +993,7 @@ function renderKeepingPlace() {
       (control || rebuilt).focus({ preventScroll: true });
     }
   }
-  if (pane) pane.scrollTop = scrollTop;
+  if (restoreScroll) restoreScroll();
 }
 
 /**
@@ -1017,7 +1098,14 @@ function onStartQueue() {
     updatePlayingControls();
     return;
   }
+  // This button is HIDDEN the moment playback starts (playVideo ->
+  // updatePlayingControls), so hand its focus off first. The card of the video
+  // just started, matching a card's own Play button, which leaves focus in the
+  // queue and keeps the arrow walk alive; the player pane when that card is not
+  // rendered (the record list is not the render window).
+  const takesFocus = dom.startQueueBtn.contains(document.activeElement);
   playVideo(first.videoId);
+  if (takesFocus) focusFirst(findCard(first.videoId), dom.playerPane);
 }
 
 function openOnYouTube(videoId) {
@@ -1074,6 +1162,16 @@ function setPlayerNowPlaying(rec) {
  * are both derived in updatePlayingControls().
  */
 function showPlayerEmpty(caughtUp) {
+  // EVERYTHING focusable in the now-playing region is about to be destroyed or
+  // hidden: Skip and Like (disabled, under a bar that hides), the title link, the
+  // channel-badge link and the description's timestamp/URL links. One gate for
+  // the lot — the two subtrees, NOT the whole player pane, so focus already on
+  // the pane itself is left where the user put it.
+  const active = document.activeElement;
+  const takesFocus =
+    (dom.playerBar && dom.playerBar.contains(active)) ||
+    (dom.playerDescription && dom.playerDescription.contains(active));
+
   state.playing = null;
   state.playerCaughtUp = !!caughtUp;
   renderPlayerTitle(dom.playerTitle, null);
@@ -1084,6 +1182,11 @@ function showPlayerEmpty(caughtUp) {
   updatePlayingControls();
   updateLikeButton();
   markPlayingCard(null);
+
+  // After updatePlayingControls, which is what reveals "Start the stash".
+  // Else the pane, always focusable (tabindex="-1") and one '/' from the queue.
+  // Never <body>.
+  if (takesFocus) focusFirst(dom.startQueueBtn, dom.playerPane);
 }
 
 /**
@@ -1226,7 +1329,13 @@ function updateLikeButton() {
     'aria-label',
     liked ? 'Remove like from this video' : 'Like this video'
   );
-  dom.likeBtn.disabled = !state.playing || state.liking;
+  // STRUCTURAL vs TRANSIENT. Nothing playing means the control is genuinely dead
+  // (and the bar is hidden over it), so `disabled` is right and keeps it out of
+  // the tab order. A like IN FLIGHT is transient — the button comes back a moment
+  // later — so aria-disabled, which leaves focus where the user put it; onLike's
+  // `if (state.liking) return` is what actually stops a second click.
+  dom.likeBtn.disabled = !state.playing;
+  dom.likeBtn.setAttribute('aria-disabled', String(state.liking));
 }
 
 /**
@@ -1240,6 +1349,8 @@ function updateLikeButton() {
 async function onLike() {
   const videoId = state.playing;
   if (state.liking) return; // state, not the DOM: the `l` shortcut calls this directly
+  // .disabled now means ONLY "nothing playing" (a like in flight is aria-disabled,
+  // so the button keeps focus) — which !videoId already covers. Kept as a belt.
   if (!videoId || !dom.likeBtn || dom.likeBtn.disabled) return;
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;

@@ -105,6 +105,7 @@ import {
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
+  focusFirst,
   bindIframeFocusGuard,
 } from './page-chrome.js';
 
@@ -518,10 +519,22 @@ function updateAuthUi() {
   const signed = hasSession();
   dom.authStatus.textContent = signed ? 'Signed in' : 'Not signed in';
   dom.authStatus.classList.toggle('is-signed-in', signed);
+  // The pair SWAPS: one hides as the other appears, so whichever is going away
+  // would drop focus to <body>. Note it before the swap and place it after —
+  // focus() on a still-hidden element is a no-op. Self-limiting: on every other
+  // call the outgoing button is already hidden and cannot be holding focus.
+  const outgoing = signed ? dom.signinBtn : dom.signoutBtn;
+  const incoming = signed ? dom.signoutBtn : dom.signinBtn;
+  const takesFocus = document.activeElement === outgoing;
   setVisible(dom.signinBtn, !signed);
   setVisible(dom.signoutBtn, signed);
-  dom.refreshBtn.disabled = state.refreshing;
-  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = state.refreshing;
+  if (takesFocus) focusFirst(incoming);
+  // aria-disabled, never the `disabled` property: a refresh runs for seconds and
+  // the click that started it came from one of these buttons, so disabling would
+  // drop the user's focus to <body> for the duration. runRefresh's own
+  // `if (state.refreshing) return` is the re-entry guard.
+  dom.refreshBtn.setAttribute('aria-disabled', String(state.refreshing));
+  if (dom.refreshNewBtn) dom.refreshNewBtn.setAttribute('aria-disabled', String(state.refreshing));
   updateCleanupUi();
   updateLikeButton();
 }
@@ -597,8 +610,9 @@ async function onRefreshNew() {
 async function runRefresh(bound, sweepSpeeds) {
   if (state.refreshing) return;
   state.refreshing = true;
-  dom.refreshBtn.disabled = true;
-  if (dom.refreshNewBtn) dom.refreshNewBtn.disabled = true;
+  // Kept alongside updateAuthUi's pair: nothing calls that on the way IN.
+  dom.refreshBtn.setAttribute('aria-disabled', 'true');
+  if (dom.refreshNewBtn) dom.refreshNewBtn.setAttribute('aria-disabled', 'true');
   hideProgress();
 
   try {
@@ -683,7 +697,7 @@ async function runRefresh(bound, sweepSpeeds) {
     // (covers newly fetched + backfill of older ones). Then the final render.
     showProgress('Fetching video details…');
     await backfillDetails();
-    recompute();
+    rerenderKeepingPlace(recompute);
 
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
     if (skipped > 0) parts.push(`${skipped} channel(s) skipped (deleted/unavailable).`);
@@ -711,7 +725,10 @@ async function runRefresh(bound, sweepSpeeds) {
 async function mergeAndPersist(incoming, prefs, sweepSpeeds) {
   state.records = mergeRefresh(state.records, incoming, prefs, { sweepSpeeds });
   await putVideos(state.records);
-  recompute();
+  // Nobody asked for this render — it lands mid-fetch, seconds after the click,
+  // on a user who may have gone on arrowing through the queue. Keeping the place
+  // is what stops it yanking them to the top and dropping focus to <body>.
+  rerenderKeepingPlace(recompute);
 }
 
 /**
@@ -1044,14 +1061,34 @@ async function cleanup() {
 
 /**
  * Cleanup button handler: run CLEANUP() then re-render. The only user-triggered
- * deletion of handled videos.
+ * deletion of handled videos. Two things have to be put back by hand afterwards.
+ *
+ * The re-render rebuilds the <ul>, so the pane's scrollTop clamps to 0 and a
+ * user reading the middle of a long queue is dumped at the top of it — measured
+ * at 5693px of jump. renderKeepingAnchor puts the place back; the deleted
+ * records being a contiguous PREFIX is what the delta absorbs, and the anchor
+ * only needs a stand-in when the user was standing inside that prefix.
+ *
+ * And the button disables itself at 0, which would drop focus to <body>: it
+ * goes to the card the walk resumes at — the same one the scroll was just
+ * anchored on, so the two cannot disagree — else #hide-marked-btn, the same
+ * honest landing setVideoState picks and the one header control never disabled.
+ * The twin of stash-page.js's onCleanup.
  */
 async function onCleanup() {
   if (state.refreshing) return;
+  // Read BEFORE the trim: recompute() -> updateStats() -> updateCleanupUi()
+  // disables this button at 0, and a disabled control drops focus to <body>.
+  // Only THIS BUTTON's focus is our problem here — focus that was in the list is
+  // put back by the re-render below, which is the half that used to be missed.
+  const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     await cleanup();
-    recompute();
+    rerenderKeepingPlace(recompute);
     showToast('Cleaned up handled videos.', { type: 'success' });
+    if (takesFocus && !(queueFocus && queueFocus.focusRemembered())) {
+      focusFirst(dom.hideMarkedBtn);
+    }
   } catch (err) {
     handleError(err);
   }
@@ -1146,7 +1183,14 @@ function onStartQueue() {
     updatePlayingControls(); // nothing to play after all: hide the stale button
     return;
   }
+  // This button is HIDDEN the moment playback starts (playVideo ->
+  // updatePlayingControls), so hand its focus off first. The card of the video
+  // just started, matching a card's own Play button, which leaves focus in the
+  // queue and keeps the arrow walk alive; the player pane when that card is not
+  // rendered (outside the window, or filtered out).
+  const takesFocus = dom.startQueueBtn.contains(document.activeElement);
   playVideo(first.videoId);
+  if (takesFocus) focusFirst(findCard(first.videoId), dom.playerPane);
 }
 
 function openOnYouTube(videoId) {
@@ -1211,6 +1255,16 @@ function setPlayerNowPlaying(rec) {
  * empty player that later gains a playable video updates itself.
  */
 function showPlayerEmpty(caughtUp) {
+  // EVERYTHING focusable in the now-playing region is about to be destroyed or
+  // hidden: Skip and Like (disabled, under a bar that hides), the title link, the
+  // channel-badge link and the description's timestamp/URL links. One gate for
+  // the lot — the two subtrees, NOT the whole player pane, so focus already on
+  // the pane itself is left where the user put it.
+  const active = document.activeElement;
+  const takesFocus =
+    (dom.playerBar && dom.playerBar.contains(active)) ||
+    (dom.playerDescription && dom.playerDescription.contains(active));
+
   state.playing = null;
   state.playerCaughtUp = !!caughtUp;
   renderPlayerTitle(dom.playerTitle, null);
@@ -1221,6 +1275,11 @@ function showPlayerEmpty(caughtUp) {
   updatePlayingControls(); // stopped -> disable the jump, show/hide "Start the queue"
   updateLikeButton(); // state.playing is null -> disabled, not liked
   markPlayingCard(null);
+
+  // After updatePlayingControls, which is what reveals "Start the queue".
+  // Else the pane, always focusable (tabindex="-1") and one '/' from the queue.
+  // Never <body>.
+  if (takesFocus) focusFirst(dom.startQueueBtn, dom.playerPane);
 }
 
 /**
@@ -1414,7 +1473,13 @@ function updateLikeButton() {
     'aria-label',
     liked ? 'Remove like from this video' : 'Like this video'
   );
-  dom.likeBtn.disabled = !state.playing || state.liking;
+  // STRUCTURAL vs TRANSIENT. Nothing playing means the control is genuinely dead
+  // (and the bar is hidden over it), so `disabled` is right and keeps it out of
+  // the tab order. A like IN FLIGHT is transient — the button comes back a moment
+  // later — so aria-disabled, which leaves focus where the user put it; onLike's
+  // `if (state.liking) return` is what actually stops a second click.
+  dom.likeBtn.disabled = !state.playing;
+  dom.likeBtn.setAttribute('aria-disabled', String(state.liking));
 }
 
 /**
@@ -1433,6 +1498,8 @@ function updateLikeButton() {
 async function onLike() {
   const videoId = state.playing;
   if (state.liking) return;
+  // .disabled now means ONLY "nothing playing" (a like in flight is aria-disabled,
+  // so the button keeps focus) — which !videoId already covers. Kept as a belt.
   if (!videoId || !dom.likeBtn || dom.likeBtn.disabled) return;
   const rec = state.records.find((r) => r.videoId === videoId);
   if (!rec) return;
@@ -1591,15 +1658,20 @@ function render() {
 }
 
 /**
- * render(), keeping the user's place across it — for the re-renders that change
- * which records are rendered at all, where a bare render() leaves the pane
- * scrolled to a different card and the arrow walk back at card 1. Restores the
- * scroll and the walk cursor, never focus: the control that triggered it keeps
- * that. Falls back to a plain render before initQueueFocus has run.
+ * Re-render keeping the user's place across it — THE ROUTE EVERY RE-RENDER THIS
+ * PAGE MAKES ON ITS OWN TAKES. A bare render() leaves the pane scrolled to a
+ * different card, the arrow walk back at card 1, and focus on <body> if it was
+ * in the list; renderKeepingAnchor puts back all three, moving focus only when
+ * the rebuild is what destroyed it.
+ *
+ * `rerender` is recompute() where the record SET changed (a refresh, a trim) and
+ * the default render() where only the view did (the Hide-skipped filter).
+ * Falls back to a plain call before initQueueFocus has run.
+ * @param {() => void} [rerender]
  */
-function rerenderKeepingPlace() {
-  if (queueFocus) queueFocus.renderKeepingAnchor(render);
-  else render();
+function rerenderKeepingPlace(rerender = render) {
+  if (queueFocus) queueFocus.renderKeepingAnchor(rerender);
+  else rerender();
 }
 
 /**

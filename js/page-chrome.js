@@ -394,6 +394,27 @@ export function bindIframeFocusGuard(getIframe) {
   });
 }
 
+/**
+ * Focus the first candidate that will actually TAKE it, and report which did.
+ * For handing focus off a control that is about to be disabled or hidden — the
+ * browser drops that focus to <body>, which is the whole defect.
+ *
+ * The ladders are two or three deep because the obvious landing is often itself
+ * hidden, disabled or inside the subtree that just went away, and focusing one
+ * of those re-drops focus to <body>. Verifying activeElement afterwards catches
+ * every reason a focus() can fail without enumerating them.
+ * @param {...(Element|null|undefined)} candidates in order of preference
+ * @returns {Element|null} the one that took focus, or null if none did
+ */
+export function focusFirst(...candidates) {
+  for (const el of candidates) {
+    if (!el) continue;
+    el.focus();
+    if (document.activeElement === el) return el;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Two-pane focus navigation
 //
@@ -447,7 +468,9 @@ export function bindIframeFocusGuard(getIframe) {
  *   focusEdge: (dir:number) => boolean, togglePane: () => void,
  *   cardCount: () => number, focusCardAt: (index:number) => Element|null,
  *   rememberCard: (videoId:string|null|undefined) => void,
- *   renderKeepingAnchor: (rerender:() => void) => void}}
+ *   renderKeepingAnchor: (rerender:() => void) => Element|null,
+ *   focusRemembered: () => Element|null,
+ *   captureQueueScroll: () => () => void}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
   // The videoId of the card the walk resumes at — an id, never a node, so it
@@ -457,7 +480,30 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   // outright through rememberCard, and no focusin fires for that.
   let rememberedId = null;
 
+  // The card a POINTER press just placed the cursor on, carrying `row--pointed`
+  // — which is half of what styles.css draws the card ring on, the other half
+  // being :focus-visible. Without it the ring rule would have to be a plain
+  // :focus, and every programmatic focus this module performs would draw a ring
+  // after a MOUSE gesture: Clean up, Trim front, "Show all (N)" and the removal
+  // rescue all move focus onto a card the user never chose. It marks the one
+  // pointer gesture that IS a placement rather than guessing at a modality, so
+  // a future focus site inherits the right behaviour without knowing this
+  // exists. A node, not an id: it lives only until the next focusin, and a
+  // re-render drops the class with the <ul> it was on.
+  let pointedCard = null;
+
   if (queueList) {
+    // pointerdown, not click: the mark has to be set BEFORE focus moves, and
+    // it marks the card even when the press lands on a control inside one —
+    // the focusin below is what then clears it, because that focus goes to the
+    // control, not to the card.
+    queueList.addEventListener('pointerdown', (e) => {
+      const card = e.target && e.target.closest ? e.target.closest('.row') : null;
+      if (pointedCard && pointedCard !== card) pointedCard.classList.remove('row--pointed');
+      pointedCard = card;
+      if (card) card.classList.add('row--pointed');
+    });
+
     // focusin (not focus) because it BUBBLES: the note must be taken whether
     // focus landed on the card itself or on ▶ Play, Skip, a speed button or a
     // card-menu item inside it — the same closest('.row') rule the card
@@ -470,6 +516,14 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       const card = e.target && e.target.closest ? e.target.closest('.row') : null;
       const id = card && card.dataset ? card.dataset.videoId : null;
       if (id) rememberedId = id;
+      // The mark survives only when focus landed on the marked card ITSELF. A
+      // press on a control inside a card marks the card on the way down, then
+      // lands here on the button — not the marked node — and clears it, so the
+      // card stays unringed exactly as :focus-within would have left it.
+      if (pointedCard && e.target !== pointedCard) {
+        pointedCard.classList.remove('row--pointed');
+        pointedCard = null;
+      }
     });
   }
 
@@ -702,6 +756,38 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   }
 
   /**
+   * WHICH ELEMENT SCROLLS THE QUEUE — asked here and nowhere else, because the
+   * answer changes with the layout: the pane wide, the DOCUMENT stacked, where
+   * `.workspace__queue` is `overflow: visible` and its scrollTop is permanently
+   * 0. Read the wrong one and the save returns 0 and the restore does nothing.
+   * By media query, following initCurtain, never by measuring.
+   */
+  function queueScrollTop() {
+    if (window.matchMedia(narrowQuery).matches) return window.scrollY;
+    return queuePane ? queuePane.scrollTop : 0;
+  }
+
+  /** Move that same scroller to `top`. Over-scroll clamps on its own. */
+  function setQueueScrollTop(top) {
+    if (window.matchMedia(narrowQuery).matches) window.scrollTo(0, top);
+    else if (queuePane) queuePane.scrollTop = top;
+  }
+
+  /**
+   * Take the queue's scroll offset now and hand back a function that puts it
+   * back — for a re-render that keeps the same cards, where an absolute restore
+   * is exact (stash-page.js's renderKeepingPlace). Captured as a closure so the
+   * caller never has to know which element it came from, and so the layout is
+   * settled once: a window resized between the two halves is not a case worth a
+   * branch, and re-asking would restore the wrong scroller.
+   * @returns {() => void}
+   */
+  function captureQueueScroll() {
+    const top = queueScrollTop();
+    return () => setQueueScrollTop(top);
+  }
+
+  /**
    * The videoId of the card the user's PLACE is at — what a re-render that
    * changes the list's membership has to preserve. First hit wins:
    *   1. the card containing focus;
@@ -733,10 +819,17 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * changes which records are rendered at all (the Hide-skipped toggle), where
    * the anchor itself can be one of the cards going into hiding.
    *
-   * Restores THE SCROLL AND THE WALK CURSOR, never focus: the caller's own
-   * control (the toggle button) holds focus and must keep it, or toggling
-   * straight back would be impossible. One anchor drives both, so the pane and
-   * the next arrow press can never disagree about where the user is.
+   * Restores THE SCROLL, THE WALK CURSOR, AND FOCUS — the last one only when
+   * focus was inside the list, which is exactly when the rebuild destroyed it.
+   * That gate is what protects the caller whose own control holds focus (the
+   * Hide-skipped toggle, which must keep it or toggling straight back would be
+   * impossible): its button is not in the list, so nothing here touches it. The
+   * protection is structural rather than a blanket refusal, which is why every
+   * caller can share one gesture — a re-render that forgets to put focus back
+   * is the defect this had at four call sites.
+   *
+   * One anchor drives all three, so the pane, the next arrow press and the ring
+   * can never disagree about where the user is.
    *
    * The scroll is restored as a DELTA in viewport coordinates — put the
    * surviving card back at the screen y the anchor occupied — not as a raw
@@ -749,6 +842,9 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * where membership only grows so the anchor cannot vanish and focus never left
    * the list. Keep the two separate.
    * @param {() => void} rerender the page's own render, called exactly once
+   * @returns {Element|null} the card focus was restored to, or null — focus was
+   *   not in the list, or no card is left to hold it. A caller whose own control
+   *   disables itself tells those apart by its own gate, not by this.
    */
   function renderKeepingAnchor(rerender) {
     const rowsBefore = cards();
@@ -756,18 +852,44 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     const id = anchorId();
     const before = id ? rowsBefore.find((c) => c.dataset.videoId === id) : null;
     const anchorTop = before ? before.getBoundingClientRect().top : null;
+    // Read BEFORE the rerender: renderQueue empties the <ul>, so by the time we
+    // could ask, focus has already fallen to <body> and the answer is lost.
+    const heldFocus = !!(queueList && queueList.contains(document.activeElement));
     rerender();
     const after = cards();
     const survivor = nearestSurvivor(beforeIds, id, after.map((c) => c.dataset.videoId));
-    if (!survivor) return;
-    const target = after.find((c) => c.dataset.videoId === survivor);
-    if (!target) return;
-    rememberedId = survivor;
-    if (anchorTop == null) return;
-    const delta = target.getBoundingClientRect().top - anchorTop;
-    if (!delta) return;
-    if (window.matchMedia(narrowQuery).matches) window.scrollBy(0, delta);
-    else if (queuePane) queuePane.scrollTop += delta;
+    const target = survivor ? after.find((c) => c.dataset.videoId === survivor) : null;
+    if (target) {
+      rememberedId = survivor;
+      if (anchorTop != null) {
+        const delta = target.getBoundingClientRect().top - anchorTop;
+        if (delta) setQueueScrollTop(queueScrollTop() + delta);
+      }
+    }
+    // Last, so the scroll it must not disturb is already settled. Not gated on
+    // `target`: with nothing recognisable left (a refresh can replace the whole
+    // window) rememberedCard falls back to the first card, which still beats
+    // <body>.
+    return heldFocus ? focusRemembered() : null;
+  }
+
+  /**
+   * Focus the card the walk would resume at. Two callers, for two different
+   * reasons: renderKeepingAnchor uses it to put back focus the rebuild
+   * destroyed, and Clean up / Trim front call it directly because their own
+   * button disables itself under the user's focus and so cannot keep it —
+   * a case no re-render can detect, since the button is not in the list.
+   *
+   * preventScroll because the caller has just restored the scroll itself and
+   * focus() scrolls the card into view by default, which would fight it — the
+   * same reason stash-page.js's renderKeepingPlace passes it.
+   * @returns {Element|null} the card focused, or null when the list is empty,
+   *   which is the caller's cue to fall back to a control of its own
+   */
+  function focusRemembered() {
+    const target = rememberedCard(cards());
+    if (target) target.focus({ preventScroll: true });
+    return target;
   }
 
   /**
@@ -789,5 +911,15 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     if (playerPane) playerPane.focus();
   }
 
-  return { moveCard, focusEdge, togglePane, cardCount, focusCardAt, rememberCard, renderKeepingAnchor };
+  return {
+    moveCard,
+    focusEdge,
+    togglePane,
+    cardCount,
+    focusCardAt,
+    rememberCard,
+    renderKeepingAnchor,
+    focusRemembered,
+    captureQueueScroll,
+  };
 }
