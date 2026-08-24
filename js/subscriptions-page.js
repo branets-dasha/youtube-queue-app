@@ -697,7 +697,7 @@ async function runRefresh(bound, sweepSpeeds) {
     // (covers newly fetched + backfill of older ones). Then the final render.
     showProgress('Fetching video details…');
     await backfillDetails();
-    recompute();
+    rerenderKeepingPlace(recompute);
 
     const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
     if (skipped > 0) parts.push(`${skipped} channel(s) skipped (deleted/unavailable).`);
@@ -725,7 +725,10 @@ async function runRefresh(bound, sweepSpeeds) {
 async function mergeAndPersist(incoming, prefs, sweepSpeeds) {
   state.records = mergeRefresh(state.records, incoming, prefs, { sweepSpeeds });
   await putVideos(state.records);
-  recompute();
+  // Nobody asked for this render — it lands mid-fetch, seconds after the click,
+  // on a user who may have gone on arrowing through the queue. Keeping the place
+  // is what stops it yanking them to the top and dropping focus to <body>.
+  rerenderKeepingPlace(recompute);
 }
 
 /**
@@ -1076,11 +1079,12 @@ async function onCleanup() {
   if (state.refreshing) return;
   // Read BEFORE the trim: recompute() -> updateStats() -> updateCleanupUi()
   // disables this button at 0, and a disabled control drops focus to <body>.
+  // Only THIS BUTTON's focus is our problem here — focus that was in the list is
+  // put back by the re-render below, which is the half that used to be missed.
   const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     await cleanup();
-    if (queueFocus) queueFocus.renderKeepingAnchor(recompute);
-    else recompute();
+    rerenderKeepingPlace(recompute);
     showToast('Cleaned up handled videos.', { type: 'success' });
     if (takesFocus && !(queueFocus && queueFocus.focusRemembered())) {
       focusFirst(dom.hideMarkedBtn);
@@ -1654,15 +1658,20 @@ function render() {
 }
 
 /**
- * render(), keeping the user's place across it — for the re-renders that change
- * which records are rendered at all, where a bare render() leaves the pane
- * scrolled to a different card and the arrow walk back at card 1. Restores the
- * scroll and the walk cursor, never focus: the control that triggered it keeps
- * that. Falls back to a plain render before initQueueFocus has run.
+ * Re-render keeping the user's place across it — THE ROUTE EVERY RE-RENDER THIS
+ * PAGE MAKES ON ITS OWN TAKES. A bare render() leaves the pane scrolled to a
+ * different card, the arrow walk back at card 1, and focus on <body> if it was
+ * in the list; renderKeepingAnchor puts back all three, moving focus only when
+ * the rebuild is what destroyed it.
+ *
+ * `rerender` is recompute() where the record SET changed (a refresh, a trim) and
+ * the default render() where only the view did (the Hide-skipped filter).
+ * Falls back to a plain call before initQueueFocus has run.
+ * @param {() => void} [rerender]
  */
-function rerenderKeepingPlace() {
-  if (queueFocus) queueFocus.renderKeepingAnchor(render);
-  else render();
+function rerenderKeepingPlace(rerender = render) {
+  if (queueFocus) queueFocus.renderKeepingAnchor(rerender);
+  else rerender();
 }
 
 /**

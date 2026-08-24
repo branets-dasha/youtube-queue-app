@@ -865,7 +865,9 @@ async function sweepRemoved() {
 async function onCleanup() {
   // Read BEFORE the sweep, and only rescue focus this button actually holds:
   // a mouse click in Safari does not focus a <button>, and stealing focus from
-  // wherever the user really is would be worse than doing nothing.
+  // somewhere else entirely — the URL field — would be worse than doing nothing.
+  // Focus that was in the LIST is not this gate's business: the re-render below
+  // is what destroyed it and what puts it back.
   const takesFocus = dom.cleanupBtn.contains(document.activeElement);
   try {
     const removed = await sweepRemoved();
@@ -968,8 +970,12 @@ async function syncFromStore() {
  * lives in the other pane and render() only rebuilds this list.
  */
 function renderKeepingPlace() {
-  const pane = dom.queuePane;
-  const scrollTop = pane ? pane.scrollTop : 0;
+  // Through page-chrome, which knows WHICH element scrolls at this width: the
+  // pane wide, the DOCUMENT stacked, where the pane is `overflow: visible` and
+  // its scrollTop is always 0 — read directly, the save returned 0 and the
+  // restore did nothing, leaving the refocused card ~6000px below the fold.
+  // The 900px breakpoint is a media query over there, never measured here.
+  const restoreScroll = queueFocus ? queueFocus.captureQueueScroll() : null;
 
   const active = document.activeElement;
   const card = active && dom.queueList.contains(active) ? active.closest('.row') : null;
@@ -987,7 +993,7 @@ function renderKeepingPlace() {
       (control || rebuilt).focus({ preventScroll: true });
     }
   }
-  if (pane) pane.scrollTop = scrollTop;
+  if (restoreScroll) restoreScroll();
 }
 
 /**
