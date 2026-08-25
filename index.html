@@ -33,6 +33,7 @@
   </head>
   <body>
     <a class="skip-link" href="#queue-list">Skip to queue</a>
+    <a class="skip-link" href="#player-pane">Skip to player</a>
 
     <!-- Top-right toast notifications (progress, success, errors, info). -->
     <div id="toast-container" class="toasts" aria-live="polite"></div>
@@ -299,7 +300,7 @@
                key throws focus here, and once focused it scrolls with the
                arrows / PageUp / PageDown — otherwise a long description is
                unreachable without tabbing through every control of every card. -->
-          <aside class="workspace__player" aria-label="Player" tabindex="-1">
+          <aside id="player-pane" class="workspace__player" aria-label="Player" tabindex="-1">
             <div class="player">
               <div class="player__frame">
                 <div id="player-mount"></div>
