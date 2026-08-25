@@ -494,15 +494,26 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   let pointedCard = null;
 
   if (queueList) {
-    // pointerdown, not click: the mark has to be set BEFORE focus moves, and
-    // it marks the card even when the press lands on a control inside one —
-    // the focusin below is what then clears it, because that focus goes to the
-    // control, not to the card.
+    // pointerdown, not click: the mark has to be set BEFORE focus moves.
+    //
+    // A press that lands on a CONTROL inside the card is not a placement — it
+    // is an action — so it does not mark. For ▶ Play, Skip, the speed buttons
+    // and the menu that is only a shortcut: they land focus on the control
+    // rather than the card, so the focusin below would have cleared the mark
+    // anyway. It is load-bearing for exactly one press, the THUMBNAIL, which is
+    // aria-hidden and hands its focus to the row (see ui.js) — landing on the
+    // marked card ITSELF, which is the one shape focusin keeps. Without this it
+    // rang, making a mouse click paint a keyboard cursor. Asking what was
+    // pressed is the honest question; `did focus land on the card` was only ever
+    // a proxy for it, and the thumbnail is where the proxy broke.
     queueList.addEventListener('pointerdown', (e) => {
-      const card = e.target && e.target.closest ? e.target.closest('.row') : null;
-      if (pointedCard && pointedCard !== card) pointedCard.classList.remove('row--pointed');
-      pointedCard = card;
-      if (card) card.classList.add('row--pointed');
+      const target = e.target && e.target.closest ? e.target : null;
+      const card = target ? target.closest('.row') : null;
+      const control = target ? target.closest('a, button') : null;
+      const placed = control && card && card.contains(control) ? null : card;
+      if (pointedCard && pointedCard !== placed) pointedCard.classList.remove('row--pointed');
+      pointedCard = placed;
+      if (placed) placed.classList.add('row--pointed');
     });
 
     // focusin (not focus) because it BUBBLES: the note must be taken whether
@@ -517,10 +528,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       const card = e.target && e.target.closest ? e.target.closest('.row') : null;
       const id = card && card.dataset ? card.dataset.videoId : null;
       if (id) rememberedId = id;
-      // The mark survives only when focus landed on the marked card ITSELF. A
-      // press on a control inside a card marks the card on the way down, then
-      // lands here on the button — not the marked node — and clears it, so the
-      // card stays unringed exactly as :focus-within would have left it.
+      // The mark survives only while focus is on the marked card ITSELF, and is
+      // retired the moment focus moves anywhere else — a walk on to the next
+      // card, or a control reached inside this one. Presses on controls no
+      // longer mark at all (see pointerdown), so this is the tail that drops a
+      // mark once the user moves on, not the thing that unrings a button press.
       if (pointedCard && e.target !== pointedCard) {
         pointedCard.classList.remove('row--pointed');
         pointedCard = null;

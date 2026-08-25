@@ -311,6 +311,10 @@ function cacheDom() {
   dom.toolbar = document.querySelector('.toolbar');
   dom.queueHeader = document.querySelector('.queue-header');
 
+  // The first skip link, by its target rather than an id: it is the only
+  // .skip-link pointing at the queue, and "Skip to player" needs no handler.
+  dom.skipToQueue = document.querySelector('.skip-link[href="#queue-list"]');
+
   // The queue PANE, not the list: the pane is the scroll container (selected by
   // class, there's no id), so a re-render nobody asked for can put its scrollTop
   // back — see renderKeepingPlace. It is also the region arrow-key card
@@ -386,6 +390,23 @@ function bindEvents() {
     queuePane: dom.queuePane,
     playerPane: dom.playerPane,
   });
+
+  // "Skip to queue" lands on the FIRST CARD, not on the <ul>. It is a keyboard
+  // gesture, and focus arriving on an invisible container reads as nothing
+  // having happened. preventDefault first: the fragment navigation scrolls its
+  // target into view on its own, which nudged the queue even when it was already
+  // at the top — focusCardAt(0) then lets .row's scroll-margin-top clear the
+  // sticky header instead. With an EMPTY queue there is no card to land on, and
+  // the <ul> is `hidden` in exactly that state — focusing it is a silent no-op —
+  // so the ladder falls to #empty-state, which is what actually occupies the
+  // queue region and carries the "caught up" text. focusFirst verifies each
+  // candidate really took focus, so the <ul> behind it costs nothing.
+  if (dom.skipToQueue) {
+    dom.skipToQueue.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!(queueFocus && queueFocus.focusCardAt(0))) focusFirst(dom.emptyState, dom.queueList);
+    });
+  }
 
   // The pane ring, IN DOM ORDER — the subscriptions ring with the add form
   // inserted after the toolbar. Only two override the default landing: the queue

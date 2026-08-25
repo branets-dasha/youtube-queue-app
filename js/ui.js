@@ -774,31 +774,31 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   // reader announces nothing and the next Tab continues from a place it never
   // reported. Hence preventDefault on mousedown, which suppresses the focus a
   // link takes on press while leaving click, the href and the context menu
-  // untouched — and focus is handed to the card’s TITLE link instead. The
-  // title, not ▶ Play: every card has a title, where Play exists only on
-  // embeddable ones and would have needed a variant branch; the title is the
-  // FIRST tab stop in the card, so the next Tab carries on through channel and
-  // actions instead of silently skipping both; and it carries the very same
-  // watchHref — the thumbnail is its visual duplicate, so this is the
-  // accessible twin of the link actually clicked. Focus landing inside the card
-  // also leaves the walk cursor to the queue list's focusin, exactly as every
-  // other control in the card does.
+  // untouched — and focus is handed to the CARD ROW instead. The row, not a
+  // control inside it: the row is the tab stop the card's own controls follow,
+  // so the next Tab is the TITLE and the one after it the channel link. Handing
+  // focus to the title looked equivalent and was not — it put the next Tab on
+  // the channel, silently skipping the title the user had just clicked the
+  // picture of. Focus landing inside the card also leaves the walk cursor to the
+  // queue list's focusin, exactly as every other control in the card does.
   // Shared by both variants. The row is resolved from the event target at press
   // time, not threaded through construction order, so it cannot go stale; with
-  // no title to hand to, focus is left where it is rather than invented.
-  // focusVisible: false is load-bearing, not decoration. Chrome decides a
+  // no row to hand to, focus is left where it is rather than invented.
+  //
+  // NO RING, and it takes both halves of the card's ring rule to get there.
+  // focusVisible: false answers `.row:focus-visible`: Chrome decides a
   // programmatic focus's indicator by PROPAGATION — it inherits from whatever
   // held focus before — and the preventDefault above removes the very
-  // predecessor that would have said "mouse". With nothing to inherit from,
-  // Chrome rings it, and the thumbnail became the one click in the queue that
-  // paints a keyboard cursor. Measured: the option is honoured, and a keyboard
-  // Tab onto the same title still rings, so this suppresses one call and not
-  // the title's indicator.
+  // predecessor that would have said "mouse", so without the option Chrome
+  // rings it and the thumbnail becomes the one click in the queue that paints a
+  // keyboard cursor. The other half, `.row--pointed:focus`, is a plain :focus
+  // no option can suppress; page-chrome's pointerdown is what declines to mark
+  // a press that lands on a control. Measured: a keyboard Tab onto a card still
+  // rings, so this suppresses one call and not the card's indicator.
   const suppressThumbFocus = (e) => {
     e.preventDefault();
     const row = e.currentTarget.closest('.row');
-    const title = row && row.querySelector('.row__title');
-    if (title) title.focus({ focusVisible: false });
+    if (row) row.focus({ focusVisible: false });
   };
   const thumbBtn = el(
     'a',

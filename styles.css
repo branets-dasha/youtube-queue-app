@@ -529,7 +529,8 @@ main {
    the whole list, which runs thousands of pixels tall and is clipped by the
    pane, so it reads as a rendering fault rather than a position. Nothing is
    lost: the very next Tab or ArrowDown lands on a card, which rings normally. */
-.queue:focus {
+.queue:focus,
+.empty:focus {
   outline: none;
 }
 /* An author `display` beats the UA [hidden] rule, so anything hideable needs
