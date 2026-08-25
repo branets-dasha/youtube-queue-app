@@ -97,6 +97,7 @@ import {
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
+  initPaneNav,
   focusFirst,
   bindIframeFocusGuard,
 } from './page-chrome.js';
@@ -127,6 +128,11 @@ let curtain = null;
 // the remembered card, so `state` does not mirror that either. The keys that
 // drive it live in onGlobalKeydown below, as page-chrome binds none.
 let queueFocus = null;
+
+// Pane-to-pane focus movement ([, ] and /), from page-chrome.js's
+// initPaneNav(); it owns the last-pane note, so `state` does not mirror that
+// either. Same arrangement: the keys live in onGlobalKeydown below.
+let paneNav = null;
 
 // DOM references, populated in init().
 const dom = {};
@@ -297,6 +303,14 @@ function cacheDom() {
   dom.cleanupBtn = byId('cleanup-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
 
+  // Pane-ring containers. Nothing else references them: they exist so [ and ]
+  // can name a REGION rather than a control, each landing on its own first
+  // focusable one. The add form is a pane of this page's own — the one region
+  // the subscriptions ring has no counterpart for.
+  dom.topbarNav = document.querySelector('.topbar__nav');
+  dom.toolbar = document.querySelector('.toolbar');
+  dom.queueHeader = document.querySelector('.queue-header');
+
   // The queue PANE, not the list: the pane is the scroll container (selected by
   // class, there's no id), so a re-render nobody asked for can put its scrollTop
   // back — see renderKeepingPlace. It is also the region arrow-key card
@@ -364,14 +378,37 @@ function bindEvents() {
   // page: it IS the 100dvh `app-active` two-pane layout.
   curtain = initCurtain({ node: dom.curtain });
 
-  // Arrow-key card navigation and the '/' pane toggle: page-chrome owns the
-  // remembered card and the focus moves, this page's keydown table owns the
-  // keys. Same call on the subscriptions page, so the two tables cannot drift
-  // on it.
+  // Arrow-key card navigation: page-chrome owns the remembered card and the
+  // focus moves, this page's keydown table owns the keys. Same call on the
+  // subscriptions page, so the two tables cannot drift on it.
   queueFocus = initQueueFocus({
     queueList: dom.queueList,
     queuePane: dom.queuePane,
     playerPane: dom.playerPane,
+  });
+
+  // The pane ring, IN DOM ORDER — the subscriptions ring with the add form
+  // inserted after the toolbar. Only two override the default landing: the queue
+  // resumes at the remembered card (letting the scroll follow, unlike every
+  // other caller of focusRemembered, since arriving from another pane has no
+  // scroll to protect), and the player is focused WHOLE so its description
+  // scrolls natively. The add form takes the default and so lands on the URL
+  // field — a ONE-WAY door, since the typing guard in onGlobalKeydown swallows
+  // [ and ] there; Tab or a click is the way back out, and that is accepted
+  // rather than carving a two-key exception into a blanket guard.
+  paneNav = initPaneNav({
+    panes: [
+      { el: dom.topbarNav },
+      { el: dom.toolbar },
+      { el: dom.addForm },
+      { el: dom.queueHeader },
+      {
+        el: dom.queueList,
+        role: 'queue',
+        focus: () => (queueFocus ? queueFocus.focusRemembered({ preventScroll: false }) : null),
+      },
+      { el: dom.playerPane, role: 'player', focus: () => focusFirst(dom.playerPane) },
+    ],
   });
 
   // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
@@ -1034,10 +1071,24 @@ function nextRowAfter(card) {
   return i < rows.length - 1 ? rows[i + 1] : card;
 }
 
-/** Centre a card in the list, when it is rendered (outside the window: no-op). */
-function scrollToCard(videoId) {
+/**
+ * Centre a card in the list, when it is rendered (outside the window: no-op).
+ *
+ * `focus` is OPT-IN and belongs to the jump button alone. The other three
+ * callers are all add-flow endings, which put the caret back in the URL field on
+ * their way out: focusing a card here would fight that hand-off AND drag the
+ * walk cursor onto a card the user never travelled to.
+ * @returns {Element|null} the card, when one was rendered.
+ */
+function scrollToCard(videoId, { focus = false } = {}) {
   const card = findCard(videoId);
-  if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (!card) return null;
+  // preventScroll first, then the centering scroll — focus()'s own "nearest"
+  // scroll would otherwise land and be corrected a frame later, as a visible
+  // double jump. Same two-call idiom as moveCard's page branch.
+  if (focus) card.focus({ preventScroll: true });
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  return card;
 }
 
 // ---------------------------------------------------------------------------
@@ -1224,10 +1275,16 @@ function updatePlayingControls() {
   }
 }
 
-/** Centre the currently-playing card (the button is disabled when there is none). */
+/**
+ * Centre the currently-playing card and put the walk cursor on it (the button is
+ * disabled when there is none). Focusing the card is enough on its own: the
+ * queue list's focusin writes the cursor.
+ * @returns {boolean} whether a card was actually focused — the `p` key's cue to
+ *   preventDefault, so a dead jump leaves the key its native meaning.
+ */
 function onScrollToPlaying() {
-  if (!state.playing) return;
-  scrollToCard(state.playing);
+  if (!state.playing) return false;
+  return Boolean(scrollToCard(state.playing, { focus: true }));
 }
 
 /** Move the .row--playing highlight to the card for `videoId` (or clear it). */
@@ -1598,12 +1655,33 @@ function onGlobalKeydown(e) {
     // INPUT, so the typing guard above has already let Home/End through to it.
     if (queueFocus && queueFocus.focusEdge(key === 'home' ? -1 : 1)) e.preventDefault();
   } else if (key === '/') {
-    // '/' throws focus between the panes: out of the player back to the
-    // remembered card, from anywhere else into the player. ALWAYS prevented —
-    // Firefox opens Quick Find on '/' otherwise — and read off e.key, so a
+    // '/' is the absolute jump between the two BIG panes, with the queue as
+    // home: from the queue into the player, from anywhere else — the player, any
+    // of the small panes, <body> — back to the remembered card. ALWAYS prevented
+    // — Firefox opens Quick Find on '/' otherwise — and read off e.key, so a
     // layout that puts '/' behind Shift still reaches us (Shift is allowed).
     e.preventDefault();
-    if (queueFocus) queueFocus.togglePane();
+    if (paneNav) paneNav.togglePane();
+  } else if (key === '[' || key === ']') {
+    // [ / ] step the pane RING — nav, toolbar, add form, queue actions, queue,
+    // player — wrapping at both ends, where '/' jumps straight between the two
+    // big ones. The skip past a pane that cannot take focus and the fallback to
+    // the last pane focus was in both live in page-chrome's movePane, which
+    // reports whether it took the key on moveCard's contract. Neither bracket
+    // has a native action to preserve, so prevented only on true costs nothing.
+    // Note the add field is an INPUT, so the typing guard above has already let
+    // both through to it: that pane is entered with these keys but not left.
+    if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'p') {
+    // p = jump to the now-playing card, the third of the absolute jumps and the
+    // only one with a target that can be absent. Deliberately NOT gated on the
+    // button's disabled property — the handler already reports whether it found
+    // a card, and a DOM property read would be a second answer to the same
+    // question, free to drift from the first. Nothing playing, or its card not
+    // rendered: no move, no preventDefault, and 'p' keeps its native meaning.
+    // Works from anywhere on the page, the player pane included. Identical to
+    // the subscriptions page.
+    if (onScrollToPlaying()) e.preventDefault();
   } else if (key === 'x') {
     // x = Remove: toggle the focused card between new and marked.
     if (idx >= 0) {

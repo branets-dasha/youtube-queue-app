@@ -15,7 +15,7 @@
 // navigation is exposed as functions each page's own keydown table calls.
 
 import { QUEUE_PAGE_STEP } from './config.js';
-import { nearestSurvivor } from './queue.js';
+import { nearestSurvivor, paneCandidates } from './queue.js';
 import { el, setVisible, stepCardMenu } from './ui.js';
 import { showToast } from './toast.js';
 import { DbBlockedError, DbUnavailableError } from './store.js';
@@ -416,15 +416,16 @@ export function focusFirst(...candidates) {
 }
 
 // ---------------------------------------------------------------------------
-// Two-pane focus navigation
+// Queue focus navigation
 //
 // Both player pages are the same two-pane workspace and need the same moves:
 // walk the queue with ArrowUp/ArrowDown, page through it with PageUp/PageDown,
-// reach either end with Home/End, get back INTO the list after focus has
-// wandered off it, and throw focus from one pane to the other. It lives here
-// because the two pages' keydown tables have drifted apart before. Everything
-// that varies — the pane nodes, the media query — is a parameter, and each page
-// writes its OWN table entries calling in: this module binds no key.
+// reach either end with Home/End, and get back INTO the list after focus has
+// wandered off it. Moving BETWEEN panes is initPaneNav, at the foot of this
+// file. It lives here because the two pages' keydown tables have drifted apart
+// before. Everything that varies — the pane nodes, the media query — is a
+// parameter, and each page writes its OWN table entries calling in: this module
+// binds no key.
 //
 // WHAT THE KEYS WALK is [card1 … cardN, "Show all (N)"?] (walkItems below). The
 // footer button is a walk ITEM, never a card, because the two things a card is —
@@ -445,7 +446,7 @@ export function focusFirst(...candidates) {
 // ---------------------------------------------------------------------------
 
 /**
- * Wire up the queue/player focus moves for a two-pane page and hand back the
+ * Wire up the WITHIN-QUEUE focus moves for a two-pane page and hand back the
  * gestures its keydown table needs. Installs exactly one listener — a `focusin`
  * on the queue list, which is how the remembered card is kept up to date — and
  * binds no keys of its own.
@@ -465,11 +466,11 @@ export function focusFirst(...candidates) {
  *   the document scrolls rather than the panes — the question initCurtain asks,
  *   asked the same way.
  * @returns {{moveCard: (dir:number, opts?:{page?:boolean}) => boolean,
- *   focusEdge: (dir:number) => boolean, togglePane: () => void,
+ *   focusEdge: (dir:number) => boolean,
  *   cardCount: () => number, focusCardAt: (index:number) => Element|null,
  *   rememberCard: (videoId:string|null|undefined) => void,
  *   renderKeepingAnchor: (rerender:() => void) => Element|null,
- *   focusRemembered: () => Element|null,
+ *   focusRemembered: (opts?:{preventScroll?:boolean}) => Element|null,
  *   captureQueueScroll: () => () => void}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
@@ -880,41 +881,27 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * button disables itself under the user's focus and so cannot keep it —
    * a case no re-render can detect, since the button is not in the list.
    *
-   * preventScroll because the caller has just restored the scroll itself and
-   * focus() scrolls the card into view by default, which would fight it — the
-   * same reason stash-page.js's renderKeepingPlace passes it.
+   * preventScroll BY DEFAULT because both of those callers have just restored
+   * the scroll themselves and focus() scrolls the card into view, which would
+   * fight it — the same reason stash-page.js's renderKeepingPlace passes it.
+   * The pane ring is the one caller that turns it off: arriving from another
+   * pane there is no scroll to protect, and a remembered card off screen has to
+   * be brought to it.
+   * @param {object} [opts]
+   * @param {boolean} [opts.preventScroll] false = let the focus scroll the card
+   *   into view, for a caller that has NOT just positioned the list itself
    * @returns {Element|null} the card focused, or null when the list is empty,
    *   which is the caller's cue to fall back to a control of its own
    */
-  function focusRemembered() {
+  function focusRemembered({ preventScroll = true } = {}) {
     const target = rememberedCard(cards());
-    if (target) target.focus({ preventScroll: true });
+    if (target) target.focus({ preventScroll });
     return target;
-  }
-
-  /**
-   * Throw focus between the two panes ('/'): out of the player and back to the
-   * remembered card, or from anywhere else INTO the player. At every width — the
-   * player pane is otherwise unreachable without tabbing through every control
-   * of every card, stacked as well as side by side.
-   *
-   * With no cards at all, leaving the player does NOTHING and focus stays put:
-   * there is no honest target, and blurring to <body> would be a silent loss.
-   */
-  function togglePane() {
-    const active = document.activeElement;
-    if (playerPane && active && playerPane.contains(active)) {
-      const target = rememberedCard(cards());
-      if (target) target.focus();
-      return;
-    }
-    if (playerPane) playerPane.focus();
   }
 
   return {
     moveCard,
     focusEdge,
-    togglePane,
     cardCount,
     focusCardAt,
     rememberCard,
@@ -922,4 +909,151 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     focusRemembered,
     captureQueueScroll,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Pane navigation
+//
+// A RING of the page's regions — the nav strip, the toolbar, the queue actions,
+// the queue, the player (and the stash's add form) — stepped by [ and ] and
+// wrapping at both ends, plus / as the one absolute jump between the two big
+// panes. It is the keyboard's answer to a queue long enough that tabbing out of
+// it is not a gesture anyone will make twice.
+//
+// WHAT A PANE IS is entirely the page's business: an ordered array of
+// descriptors, each naming its container and, where the default is wrong, how it
+// takes focus. This module never names a selector, so a new region is one entry
+// in one array and nothing here changes. Panes are DISJOINT — never nested in
+// one another — which is what lets el.contains(activeElement) decide the origin
+// with no innermost-wins rule to get wrong.
+//
+// THE LANDING IS A CONTROL, not a container, everywhere but the player: a region
+// focused as a whole is a tab stop the user then has to escape, and focusFirst
+// already skips the hidden and the disabled by verifying activeElement. The
+// player is the exception because being focusable AS A PANE is the entire point
+// — it scrolls natively, and a long description is otherwise unreachable. The
+// queue lands on the remembered card, so arriving resumes the walk where it left
+// off rather than at card 1.
+//
+// A PANE THAT CANNOT TAKE FOCUS IS SKIPPED, the step continuing in the same
+// direction (paneCandidates in queue.js supplies the order). Not tidiness: a
+// fresh stash has BOTH its queue-action buttons disabled at once, and an empty
+// queue has no card to land on, so without the skip the key would die against a
+// region the user cannot see is unreachable.
+//
+// THE ORIGIN FALLS BACK TO THE LAST PANE FOCUS WAS IN, because focus is on
+// <body> constantly — bindIframeFocusGuard puts it there on every click of the
+// video. Reading that as "the queue" would send [ backwards PAST the queue to
+// the queue actions right after a click on the player, the one moment the user
+// is unambiguously standing in the player. Same principle as the remembered
+// card: focus landing outside every pane leaves the note standing.
+// ---------------------------------------------------------------------------
+
+/** Everything inside `el` that could plausibly take focus, in DOM order. */
+function paneFocusables(el) {
+  return Array.from(
+    el.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+  );
+}
+
+/**
+ * Wire up pane-to-pane focus movement for one page and hand back the two
+ * gestures its keydown table calls. Installs exactly one listener — a document
+ * `focusin`, which is how the fallback origin is kept up to date — and binds no
+ * keys of its own, like everything else in this module.
+ *
+ * @param {object} opts
+ * @param {Array<{el:HTMLElement|null, focus?:() => Element|null, role?:string}>} opts.panes
+ *   the page's regions IN DOM ORDER. `el` is the container; an entry whose `el`
+ *   is missing is dropped, so a page may hand over a selector that found
+ *   nothing. `focus` defaults to the first focusable descendant that will
+ *   actually take it — override it only where that is wrong (the queue, which
+ *   resumes at the remembered card, and the player, which is focused whole) —
+ *   and MUST report what it landed on, or null, since that is what "skip this
+ *   pane" is decided by. `role` is read by togglePane alone: exactly one
+ *   'queue' and one 'player', or / is inert (channels.html has neither).
+ * @returns {{movePane: (dir:number) => boolean, togglePane: () => boolean}}
+ */
+export function initPaneNav({ panes = [] } = {}) {
+  const ring = (Array.isArray(panes) ? panes : []).filter((p) => p && p.el);
+  const roleAt = (role) => ring.findIndex((p) => p.role === role);
+  const queueAt = roleAt('queue');
+  const playerAt = roleAt('player');
+
+  // Where a step starts from when focus is not in any pane — see the banner. The
+  // queue is the honest default: it is the page, and it is where a fresh load's
+  // <body> focus conceptually sits.
+  let lastPaneIndex = queueAt >= 0 ? queueAt : 0;
+
+  /** The index of the pane containing `node`, or -1. */
+  function paneOf(node) {
+    if (!node) return -1;
+    return ring.findIndex((p) => p.el.contains(node));
+  }
+
+  // focusin (not focus) because it BUBBLES: the note has to be taken wherever
+  // inside a pane focus landed. Written only on a hit — focus outside every pane
+  // (the skip link, <body> itself) leaves the previous note standing, because
+  // the note answers "which pane was the user last in", and those are not panes.
+  document.addEventListener('focusin', (e) => {
+    const i = paneOf(e.target);
+    if (i >= 0) lastPaneIndex = i;
+  });
+
+  /** The pane a step starts from: where focus actually is, else the note. */
+  function originIndex() {
+    const at = paneOf(document.activeElement);
+    return at >= 0 ? at : lastPaneIndex;
+  }
+
+  /**
+   * Try to put focus in pane `i`, and report what took it. The note moves only
+   * on success, so a failed landing never leaves the fallback pointing at a pane
+   * the user was never in.
+   */
+  function enterPane(i) {
+    const pane = ring[i];
+    if (!pane) return null;
+    const landed = pane.focus ? pane.focus() : focusFirst(...paneFocusables(pane.el));
+    if (landed) lastPaneIndex = i;
+    return landed;
+  }
+
+  /**
+   * Step to the next pane in `dir` (-1 = previous, +1 = next), skipping any that
+   * cannot take focus, and report whether the key was HANDLED — the caller
+   * preventDefaults on true and only on true, on moveCard's contract.
+   *
+   * NOT gated by walkApplies: pane navigation is the one move that has to work at
+   * every width and from inside the player, since leaving the player is exactly
+   * what it is for.
+   * @param {number} dir
+   * @returns {boolean}
+   */
+  function movePane(dir) {
+    for (const i of paneCandidates(ring.length, originIndex(), dir)) {
+      if (enterPane(i)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The absolute jump between the two big panes, with THE QUEUE AS HOME: from
+   * the queue into the player, from anywhere else (the player, any of the small
+   * panes, or the <body> fallback) back to the remembered card. At every width;
+   * the player pane is otherwise unreachable without tabbing through every
+   * control of every card, stacked as well as side by side.
+   *
+   * A page with no queue or no player pane declines outright, which is the whole
+   * reason channels.html can share this module and still have no / key. With no
+   * cards at all, leaving the player does NOTHING and focus stays put: there is
+   * no honest target, and blurring to <body> would be a silent loss.
+   * @returns {boolean} whether focus moved
+   */
+  function togglePane() {
+    if (queueAt < 0 || playerAt < 0) return false;
+    return Boolean(enterPane(originIndex() === queueAt ? playerAt : queueAt));
+  }
+
+  return { movePane, togglePane };
 }

@@ -33,6 +33,7 @@
   </head>
   <body>
     <a class="skip-link" href="#queue-list">Skip to queue</a>
+    <a class="skip-link" href="#player-pane">Skip to player</a>
 
     <!-- Top-right toast notifications (progress, success, errors, info). -->
     <div id="toast-container" class="toasts" aria-live="polite"></div>
@@ -216,13 +217,14 @@
           <strong>Queue:</strong> <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> move &middot;
           <kbd>x</kbd> skip &middot; <kbd>Enter</kbd> play &middot;
           <kbd>1</kbd>&middot;<kbd>5</kbd>&middot;<kbd>2</kbd> speed &middot;
-          <kbd>t</kbd> stash &nbsp;&middot;&nbsp;
+          <kbd>t</kbd> stash &middot; <kbd>p</kbd> now playing &nbsp;&middot;&nbsp;
           <strong>Player:</strong> <kbd>Space</kbd> play/pause &middot;
           <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> seek &middot;
           <kbd>&minus;</kbd>/<kbd>+</kbd> speed &middot; <kbd>n</kbd> next &middot;
           <kbd>l</kbd> like &middot; <kbd>m</kbd> mute &middot; <kbd>f</kbd> fullscreen
           &nbsp;&middot;&nbsp;
           <strong>Other:</strong> <kbd>/</kbd> switch pane &middot;
+          <kbd>[</kbd>&middot;<kbd>]</kbd> prev/next pane &middot;
           <kbd>Esc</kbd> curtain
         </p>
 
@@ -298,7 +300,7 @@
                key throws focus here, and once focused it scrolls with the
                arrows / PageUp / PageDown — otherwise a long description is
                unreachable without tabbing through every control of every card. -->
-          <aside class="workspace__player" aria-label="Player" tabindex="-1">
+          <aside id="player-pane" class="workspace__player" aria-label="Player" tabindex="-1">
             <div class="player">
               <div class="player__frame">
                 <div id="player-mount"></div>

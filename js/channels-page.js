@@ -19,13 +19,18 @@ import {
   channelPreferredSpeed,
 } from './queue.js';
 import { el, buildAvatar, setCardSpeed, setVisible } from './ui.js';
-import { initCurtain } from './page-chrome.js';
+import { initCurtain, initPaneNav } from './page-chrome.js';
 
 let prefs = {};
 
 // Privacy curtain controls, from page-chrome.js's initCurtain(); it owns the
 // covering flag, this page only wires Esc to it.
 let curtain = null;
+
+// Pane-to-pane focus movement, from page-chrome.js's initPaneNav(). Two panes
+// here and NEITHER role, so [ and ] work and '/' is inert — this page has no
+// queue and no player for it to jump between.
+let paneNav = null;
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -59,19 +64,43 @@ function init() {
     exemptSelector: '.channels-main',
     coverOnWheelDown: false,
   });
+
+  // The pane ring, IN DOM ORDER: the nav strip and the channel list, both taking
+  // the default landing (first focusable — a nav link, the first channel's
+  // link). Worth having on a page with only two: the list is long enough that
+  // getting back to the nav from inside it is otherwise a run of Shift+Tab.
+  paneNav = initPaneNav({
+    panes: [{ el: document.querySelector('.topbar__nav') }, { el: listEl }],
+  });
+
   document.addEventListener('keydown', onKeydown);
 }
 
 /**
- * The page's only shortcut. Esc is the PANIC key, so — matching
- * subscriptions-page.js — it is handled before any typing/modifier guard;
- * modifier combos are still left to the browser.
+ * This page's keydown table — the same shape as the two player pages', with the
+ * gestures it has no counterpart for left out. Esc is the PANIC key, so it is
+ * handled BEFORE any typing/modifier guard; modifier combos are still left to
+ * the browser. There is no `appMain` here to gate on: this page has no
+ * onboarding to be inert throughout.
  * @param {KeyboardEvent} e
  */
 function onKeydown(e) {
   if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     curtain.toggle();
+    return;
+  }
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  const key = e.key.toLowerCase();
+  if (key === '[' || key === ']') {
+    // [ / ] step the pane ring — here just the nav strip and the channel list.
+    // page-chrome's movePane owns the wrap, the skip past a pane that cannot
+    // take focus and the fallback to the last pane focus was in, and reports
+    // whether it took the key; neither bracket has a native action to preserve.
+    if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
   }
 }
 
