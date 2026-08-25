@@ -311,6 +311,10 @@ function cacheDom() {
   dom.toolbar = document.querySelector('.toolbar');
   dom.queueHeader = document.querySelector('.queue-header');
 
+  // The first skip link, by its target rather than an id: it is the only
+  // .skip-link pointing at the queue, and "Skip to player" needs no handler.
+  dom.skipToQueue = document.querySelector('.skip-link[href="#queue-list"]');
+
   // The queue PANE, not the list: the pane is the scroll container (selected by
   // class, there's no id), so a re-render nobody asked for can put its scrollTop
   // back — see renderKeepingPlace. It is also the region arrow-key card
@@ -386,6 +390,23 @@ function bindEvents() {
     queuePane: dom.queuePane,
     playerPane: dom.playerPane,
   });
+
+  // "Skip to queue" lands on the FIRST CARD, not on the <ul>. It is a keyboard
+  // gesture, and focus arriving on an invisible container reads as nothing
+  // having happened. preventDefault first: the fragment navigation scrolls its
+  // target into view on its own, which nudged the queue even when it was already
+  // at the top — focusCardAt(0) then lets .row's scroll-margin-top clear the
+  // sticky header instead. With an EMPTY queue there is no card to land on, and
+  // the <ul> is `hidden` in exactly that state — focusing it is a silent no-op —
+  // so the ladder falls to #empty-state, which is what actually occupies the
+  // queue region and carries the "caught up" text. focusFirst verifies each
+  // candidate really took focus, so the <ul> behind it costs nothing.
+  if (dom.skipToQueue) {
+    dom.skipToQueue.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!(queueFocus && queueFocus.focusCardAt(0))) focusFirst(dom.emptyState, dom.queueList);
+    });
+  }
 
   // The pane ring, IN DOM ORDER — the subscriptions ring with the add form
   // inserted after the toolbar. Only two override the default landing: the queue
@@ -1040,10 +1061,17 @@ function renderKeepingPlace() {
  * any that was, so restoring "the third button" onto an item in there would
  * silently drop focus to <body>. Filtering on the way IN and the way OUT keeps
  * the index meaning the same thing both times.
+ * The thumbnail link is excluded by the same test: it is an <a href> but
+ * carries tabindex="-1" and aria-hidden, so it is not a place the user can
+ * be, and restoring onto it would put focus back on a node the accessibility
+ * tree cannot see. tabIndex is read as a PROPERTY, which is what actually
+ * governs reachability. Anything not in the set yields indexOf -1, and -1
+ * already means "focus the card itself" — the same safe landing a focused
+ * .row has always produced.
  */
 function cardControls(card) {
   return Array.from(card.querySelectorAll('a[href], button')).filter(
-    (control) => !control.closest('[hidden]')
+    (control) => control.tabIndex >= 0 && !control.closest('[hidden]')
   );
 }
 
