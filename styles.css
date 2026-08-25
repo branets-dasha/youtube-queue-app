@@ -522,6 +522,16 @@ main {
   flex-direction: column;
   gap: 16px;
 }
+/* The ONE place in the app where focus draws no ring, and deliberately. The
+   list carries tabindex="-1" purely so "Skip to queue" can move focus (and
+   with it a screen reader's cursor) onto the labelled region — it is a
+   landing, not a control, and never a tab stop. The UA outline would frame
+   the whole list, which runs thousands of pixels tall and is clipped by the
+   pane, so it reads as a rendering fault rather than a position. Nothing is
+   lost: the very next Tab or ArrowDown lands on a card, which rings normally. */
+.queue:focus {
+  outline: none;
+}
 /* An author `display` beats the UA [hidden] rule, so anything hideable needs
    its own [hidden] { display: none } — without this the empty state leaves a
    padding box and an empty list in the accessibility tree. */

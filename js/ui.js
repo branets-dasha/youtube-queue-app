@@ -768,6 +768,38 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   // An <a> (not a <button>) so a right-click offers the browser's LINK context
   // menu (Open in new tab, Copy link address, …) like the title link, instead of
   // the image-only menu. href is the same safe youtube.com/watch URL as the title.
+  //
+  // A CLICK MUST NOT FOCUS IT. aria-hidden and focusable is a contradiction:
+  // focus would sit on a node the accessibility tree cannot see, so a screen
+  // reader announces nothing and the next Tab continues from a place it never
+  // reported. Hence preventDefault on mousedown, which suppresses the focus a
+  // link takes on press while leaving click, the href and the context menu
+  // untouched — and focus is handed to the card’s TITLE link instead. The
+  // title, not ▶ Play: every card has a title, where Play exists only on
+  // embeddable ones and would have needed a variant branch; the title is the
+  // FIRST tab stop in the card, so the next Tab carries on through channel and
+  // actions instead of silently skipping both; and it carries the very same
+  // watchHref — the thumbnail is its visual duplicate, so this is the
+  // accessible twin of the link actually clicked. Focus landing inside the card
+  // also leaves the walk cursor to the queue list's focusin, exactly as every
+  // other control in the card does.
+  // Shared by both variants. The row is resolved from the event target at press
+  // time, not threaded through construction order, so it cannot go stale; with
+  // no title to hand to, focus is left where it is rather than invented.
+  // focusVisible: false is load-bearing, not decoration. Chrome decides a
+  // programmatic focus's indicator by PROPAGATION — it inherits from whatever
+  // held focus before — and the preventDefault above removes the very
+  // predecessor that would have said "mouse". With nothing to inherit from,
+  // Chrome rings it, and the thumbnail became the one click in the queue that
+  // paints a keyboard cursor. Measured: the option is honoured, and a keyboard
+  // Tab onto the same title still rings, so this suppresses one call and not
+  // the title's indicator.
+  const suppressThumbFocus = (e) => {
+    e.preventDefault();
+    const row = e.currentTarget.closest('.row');
+    const title = row && row.querySelector('.row__title');
+    if (title) title.focus({ focusVisible: false });
+  };
   const thumbBtn = el(
     'a',
     noEmbed
@@ -780,6 +812,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
           rel: 'noopener',
           tabindex: '-1',
           'aria-hidden': 'true',
+          onmousedown: suppressThumbFocus,
         }
       : {
           // Embeddable: plain left-click plays in-app; any modified click (or a
@@ -789,6 +822,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
           href: watchHref,
           tabindex: '-1',
           'aria-hidden': 'true',
+          onmousedown: suppressThumbFocus,
           onclick: (e) => {
             if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
             e.preventDefault();

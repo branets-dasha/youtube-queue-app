@@ -1040,10 +1040,17 @@ function renderKeepingPlace() {
  * any that was, so restoring "the third button" onto an item in there would
  * silently drop focus to <body>. Filtering on the way IN and the way OUT keeps
  * the index meaning the same thing both times.
+ * The thumbnail link is excluded by the same test: it is an <a href> but
+ * carries tabindex="-1" and aria-hidden, so it is not a place the user can
+ * be, and restoring onto it would put focus back on a node the accessibility
+ * tree cannot see. tabIndex is read as a PROPERTY, which is what actually
+ * governs reachability. Anything not in the set yields indexOf -1, and -1
+ * already means "focus the card itself" — the same safe landing a focused
+ * .row has always produced.
  */
 function cardControls(card) {
   return Array.from(card.querySelectorAll('a[href], button')).filter(
-    (control) => !control.closest('[hidden]')
+    (control) => control.tabIndex >= 0 && !control.closest('[hidden]')
   );
 }
 
