@@ -459,9 +459,9 @@ export function focusFirst(...candidates) {
  *   wider than the list: it takes in the sticky header buttons, from which a
  *   press enters the list rather than doing nothing.
  * @param {HTMLElement|null} opts.playerPane the `.workspace__player` aside. It
- *   carries `tabindex="-1"` in the HTML so it can be focused programmatically
- *   without becoming a tab stop; once focused it scrolls natively, the only way
- *   to read a long description without tabbing through every card's controls.
+ *   carries `tabindex="0"` in the HTML, so Tab out of the queue lands on it and
+ *   so does '/'; once focused it scrolls natively, the only way to read a long
+ *   description without tabbing through every card's controls.
  * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
  *   the document scrolls rather than the panes — the question initCurtain asks,
  *   asked the same way.
@@ -841,8 +841,8 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * caller can share one gesture — a re-render that forgets to put focus back
    * is the defect this had at four call sites.
    *
-   * One anchor drives all three, so the pane, the next arrow press and the ring
-   * can never disagree about where the user is.
+   * One anchor drives all three, so the pane, the next arrow press and the
+   * pane cycle can never disagree about where the user is.
    *
    * The scroll is restored as a DELTA in viewport coordinates — put the
    * surviving card back at the screen y the anchor occupied — not as a raw
@@ -896,7 +896,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * preventScroll BY DEFAULT because both of those callers have just restored
    * the scroll themselves and focus() scrolls the card into view, which would
    * fight it — the same reason stash-page.js's renderKeepingPlace passes it.
-   * The pane ring is the one caller that turns it off: arriving from another
+   * The pane cycle is the one caller that turns it off: arriving from another
    * pane there is no scroll to protect, and a remembered card off screen has to
    * be brought to it.
    * @param {object} [opts]
@@ -926,7 +926,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
 // ---------------------------------------------------------------------------
 // Pane navigation
 //
-// A RING of the page's regions — the nav strip, the toolbar, the queue actions,
+// A CYCLE of the page's regions — the nav strip, the toolbar, the queue actions,
 // the queue, the player (and the stash's add form) — stepped by [ and ] and
 // wrapping at both ends, plus / as the one absolute jump between the two big
 // panes. It is the keyboard's answer to a queue long enough that tabbing out of
@@ -943,9 +943,10 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
 // focused as a whole is a tab stop the user then has to escape, and focusFirst
 // already skips the hidden and the disabled by verifying activeElement. The
 // player is the exception because being focusable AS A PANE is the entire point
-// — it scrolls natively, and a long description is otherwise unreachable. The
-// queue lands on the remembered card, so arriving resumes the walk where it left
-// off rather than at card 1.
+// — it scrolls natively, and a long description is otherwise unreachable; it
+// carries tabindex="0" and takes the escape cost deliberately. The queue lands
+// on the remembered card, so arriving resumes the walk where it left off rather
+// than at card 1.
 //
 // A PANE THAT CANNOT TAKE FOCUS IS SKIPPED, the step continuing in the same
 // direction (paneCandidates in queue.js supplies the order). Not tidiness: a
@@ -980,15 +981,17 @@ function paneFocusables(el) {
  *   is missing is dropped, so a page may hand over a selector that found
  *   nothing. `focus` defaults to the first focusable descendant that will
  *   actually take it — override it only where that is wrong (the queue, which
- *   resumes at the remembered card, and the player, which is focused whole) —
- *   and MUST report what it landed on, or null, since that is what "skip this
+ *   resumes at the remembered card, and the player and the stash's add form,
+ *   which are focused WHOLE; note paneFocusables is a querySelectorAll and so
+ *   never matches `el` itself, which is why those two need the override at all)
+ *   — and MUST report what it landed on, or null, since that is what "skip this
  *   pane" is decided by. `role` is read by togglePane alone: exactly one
  *   'queue' and one 'player', or / is inert (channels.html has neither).
  * @returns {{movePane: (dir:number) => boolean, togglePane: () => boolean}}
  */
 export function initPaneNav({ panes = [] } = {}) {
-  const ring = (Array.isArray(panes) ? panes : []).filter((p) => p && p.el);
-  const roleAt = (role) => ring.findIndex((p) => p.role === role);
+  const cycle = (Array.isArray(panes) ? panes : []).filter((p) => p && p.el);
+  const roleAt = (role) => cycle.findIndex((p) => p.role === role);
   const queueAt = roleAt('queue');
   const playerAt = roleAt('player');
 
@@ -1000,7 +1003,7 @@ export function initPaneNav({ panes = [] } = {}) {
   /** The index of the pane containing `node`, or -1. */
   function paneOf(node) {
     if (!node) return -1;
-    return ring.findIndex((p) => p.el.contains(node));
+    return cycle.findIndex((p) => p.el.contains(node));
   }
 
   // focusin (not focus) because it BUBBLES: the note has to be taken wherever
@@ -1024,7 +1027,7 @@ export function initPaneNav({ panes = [] } = {}) {
    * the user was never in.
    */
   function enterPane(i) {
-    const pane = ring[i];
+    const pane = cycle[i];
     if (!pane) return null;
     const landed = pane.focus ? pane.focus() : focusFirst(...paneFocusables(pane.el));
     if (landed) lastPaneIndex = i;
@@ -1043,7 +1046,7 @@ export function initPaneNav({ panes = [] } = {}) {
    * @returns {boolean}
    */
   function movePane(dir) {
-    for (const i of paneCandidates(ring.length, originIndex(), dir)) {
+    for (const i of paneCandidates(cycle.length, originIndex(), dir)) {
       if (enterPane(i)) return true;
     }
     return false;

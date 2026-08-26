@@ -268,20 +268,20 @@ export function nearestSurvivor(orderedIds, anchorId, survivingIds) {
 }
 
 /**
- * The order in which to TRY the other panes when stepping the pane ring in
+ * The order in which to TRY the other panes when stepping the pane cycle in
  * `dir` (-1 = previous, +1 = next) from pane `from` of `len`. Every other pane
  * exactly once, nearest first, WRAPPING past either end — so the caller can take
  * the first one that will actually accept focus, and a pane whose controls are
  * all hidden or disabled is skipped rather than swallowing the key.
  *
- * The origin is never a candidate, which is what makes a ring of one (and of
+ * The origin is never a candidate, which is what makes a cycle of one (and of
  * none) an empty list: there is nowhere else to go, so the caller declines the
  * key and it keeps whatever native meaning it had.
  *
  * Pure index arithmetic — it knows nothing about focus, which is the whole
- * reason it can be tested. Tolerant of a nonsense `len` (anything but a positive
- * integer reads as an empty ring) and of a `from` outside the ring, which wraps
- * into it.
+ * reason it can be tested. Tolerant of a nonsense `len` (anything but a
+ * positive integer reads as an empty cycle) and of a `from` outside the cycle,
+ * which wraps into it.
  * @param {number} len how many panes the page has
  * @param {number} from the index the step starts at
  * @param {number} dir -1 = previous, +1 = next
