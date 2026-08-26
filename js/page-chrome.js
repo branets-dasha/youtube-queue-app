@@ -981,8 +981,10 @@ function paneFocusables(el) {
  *   is missing is dropped, so a page may hand over a selector that found
  *   nothing. `focus` defaults to the first focusable descendant that will
  *   actually take it — override it only where that is wrong (the queue, which
- *   resumes at the remembered card, and the player, which is focused whole) —
- *   and MUST report what it landed on, or null, since that is what "skip this
+ *   resumes at the remembered card, and the player and the stash's add form,
+ *   which are focused WHOLE; note paneFocusables is a querySelectorAll and so
+ *   never matches `el` itself, which is why those two need the override at all)
+ *   — and MUST report what it landed on, or null, since that is what "skip this
  *   pane" is decided by. `role` is read by togglePane alone: exactly one
  *   'queue' and one 'player', or / is inert (channels.html has neither).
  * @returns {{movePane: (dir:number) => boolean, togglePane: () => boolean}}

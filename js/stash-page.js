@@ -409,19 +409,21 @@ function bindEvents() {
   }
 
   // The pane cycle, IN DOM ORDER — the subscriptions cycle with the add form
-  // inserted after the toolbar. Only two override the default landing: the queue
+  // inserted after the toolbar. THREE override the default landing: the queue
   // resumes at the remembered card (letting the scroll follow, unlike every
   // other caller of focusRemembered, since arriving from another pane has no
-  // scroll to protect), and the player is focused WHOLE so its description
-  // scrolls natively. The add form takes the default and so lands on the URL
-  // field — a ONE-WAY door, since the typing guard in onGlobalKeydown swallows
-  // [ and ] there; Tab or a click is the way back out, and that is accepted
-  // rather than carving a two-key exception into a blanket guard.
+  // scroll to protect), the player is focused WHOLE so its description scrolls
+  // natively, and the add form is focused whole because its only controls are a
+  // text field the typing guard in onGlobalKeydown would swallow [ ] and / in —
+  // landing there would take the cycle's own keys away. The override is required,
+  // not decorative: paneFocusables is a querySelectorAll, which never matches the
+  // element itself, so the default path would land on the input regardless of the
+  // form's tabindex.
   paneNav = initPaneNav({
     panes: [
       { el: dom.topbarNav },
       { el: dom.toolbar },
-      { el: dom.addForm },
+      { el: dom.addForm, focus: () => focusFirst(dom.addForm) },
       { el: dom.queueHeader },
       {
         el: dom.queueList,
@@ -1697,8 +1699,11 @@ function onGlobalKeydown(e) {
     // the last pane focus was in both live in page-chrome's movePane, which
     // reports whether it took the key on moveCard's contract. Neither bracket
     // has a native action to preserve, so prevented only on true costs nothing.
-    // Note the add field is an INPUT, so the typing guard above has already let
-    // both through to it: that pane is entered with these keys but not left.
+    // The add-form pane lands on the FORM, not the field inside it, so the cycle
+    // never deposits focus where the typing guard above swallows these keys.
+    // Hoisting these two above that guard instead was considered and rejected —
+    // '/' is a pane key too and IS a legitimate URL character, so it can never
+    // be — see CLAUDE.md's pane-cycle gotcha.
     if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
   } else if (key === 'p') {
     // p = jump to the now-playing card, the third of the absolute jumps and the

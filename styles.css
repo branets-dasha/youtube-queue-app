@@ -1571,6 +1571,20 @@ body.app-active #app-main.app[hidden] {
   max-width: var(--maxw);
   margin: 0 0 12px;
 }
+/* The form is a tab stop (tabindex="0" in the HTML) because the [ / ] pane cycle
+   lands on it rather than on the field inside it, so it needs the house ring.
+   :focus-visible, so the cycle and Tab draw one while a pointer press landing on
+   the form focuses it silently. The radius shapes the outline ALONE — the form
+   paints no background and no border — and is var(--radius), not the meta links'
+   4px: this box is the label plus the whole input row, not a run of text.
+   Nothing clips the 3px reach: .stash-add-block sets only max-width, every
+   ancestor up to <body> is overflow: visible, and the nearest edge is the 12px
+   side padding on `body.app-active main`. */
+.stash-add:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--radius);
+}
 .stash-add__label {
   display: block;
   font-weight: 600;

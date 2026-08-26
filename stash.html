@@ -155,10 +155,23 @@
              reflowing the page on every add, while toasts float above the layout
              and cost no vertical space. The <label> is the field's whole
              description — no placeholder, no aria-describedby — and the only
-             thing the field itself carries is aria-invalid on a parse failure. -->
+             thing the field itself carries is aria-invalid on a parse failure.
+             tabindex="0" because the [ / ] pane cycle lands on the FORM, not on
+             the field inside it: focus in a text input is swallowed by the
+             typing guard in onGlobalKeydown, so a landing there would take the
+             cycle's own keys away. A real tab stop, never -1 — a thing the
+             keyboard can reach one way but not the other is incoherent — and
+             aria-labelledby on the visible label makes it a NAMED form landmark,
+             so arriving announces the region instead of nothing. -->
         <div class="stash-add-block">
-          <form id="stash-add-form" class="stash-add" autocomplete="off">
-            <label class="stash-add__label" for="stash-url-input">Add a video by YouTube link</label>
+          <form
+            id="stash-add-form"
+            class="stash-add"
+            autocomplete="off"
+            tabindex="0"
+            aria-labelledby="stash-add-label"
+          >
+            <label id="stash-add-label" class="stash-add__label" for="stash-url-input">Add a video by YouTube link</label>
             <div class="stash-add__row">
               <input id="stash-url-input" class="field__input stash-add__input" type="text"
                      inputmode="url" autocomplete="off" spellcheck="false" />
