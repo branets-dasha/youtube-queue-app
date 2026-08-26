@@ -820,10 +820,19 @@ main {
   transform: translateY(-50%);
 }
 
+/* STRETCH, not center: nothing here agrees on its own height. The base .btn
+   computes `line-height: normal` — the UA's `font` shorthand on <button> beats
+   the body's 1.5 — so even Play and Skip differ by whichever fallback font draws
+   ▶ or ↗, and .btn--cardspeed / .btn--menu each add their own smaller padding and
+   line-height on top. Left to size themselves the six came out 26.16–38px and
+   every hover fill and focus ring traced a different box. Stretching hands all of
+   them the tallest one's height, and the footer is exactly as tall as before,
+   since that item already set it. .row__speeds and .row__menu are containers, so
+   each has to pass the stretch on to its own children. */
 .row__actions {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   padding: 8px 14px 14px;
 }
@@ -874,14 +883,18 @@ main {
 .row__speeds {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  /* Stretched by the footer, and stretching in turn, so the three buttons are
+     the footer's height too. The divider is this box's border, so it now spans
+     the footer's full content height. */
+  align-items: stretch;
   gap: 2px;
   padding-right: 6px;
   margin-right: 2px;
   border-right: 1px solid var(--border);
 }
 /* One fixed width for all three, so they stay equal and the widest label ("1.5×")
-   never clips. The width sets the box; the padding only sets the height. */
+   never clips. The width sets the box; the HEIGHT comes from the footer's stretch,
+   so the padding only holds a floor under it. */
 .btn--cardspeed {
   flex: 0 0 auto;
   width: 36px;
@@ -909,10 +922,16 @@ main {
    (hence no close-on-scroll anywhere). */
 .row__menu {
   position: relative;
+  /* A flex container purely so the trigger fills the height the footer stretches
+     this wrapper to. The panel is out of flow, so it is no flex item and its
+     bottom/right offsets are untouched. */
+  display: flex;
   flex: 0 0 auto;
 }
-/* Compact square trigger, sized like the speed buttons so the footer keeps one
-   rhythm. Its ghost look comes from the `.row__actions .btn` rule above. No
+/* Compact trigger. This sets its WIDTH only — the height arrives from the
+   footer's stretch, so the padding is just a floor under it and the base .btn
+   centres the glyph in whatever height it gets. Its ghost look comes from the
+   `.row__actions .btn` rule above. No
    font-family: U+00B7 is Latin-1 and present in every font a button can fall
    back to, Arial included, so the trigger renders in the same default face as
    ▶ Play and ↗ YouTube instead of being the one control that names its own. */
@@ -1092,7 +1111,10 @@ body.app-active #app-main.app[hidden] {
 }
 /* Cleanup control pinned at the top of the scrolling queue pane. Full-width,
    OPAQUE background (matches the pane/page via --bg, in light AND dark) so
-   scrolled cards never show through/around it; stacks above the cards. */
+   scrolled cards never show through/around it; stacks above the cards. STRETCH so
+   Trim front / Hide skipped and the two .btn--icon jump buttons are one height
+   (see the .btn height gotcha in CLAUDE.md); it wraps, so each LINE stretches to
+   its own tallest and the header's height is unchanged either way. */
 .queue-header {
   position: sticky;
   top: 0;
@@ -1100,7 +1122,7 @@ body.app-active #app-main.app[hidden] {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
   padding: 8px 12px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
@@ -1272,9 +1294,13 @@ body.app-active #app-main.app[hidden] {
   color: var(--text-dim);
   font-size: 0.9rem;
 }
+/* STRETCH, so the row is one height: .btn--icon (❤ / ⏭) and .btn--speed size
+   themselves differently, and a base .btn's height is font-dependent besides.
+   .player__speeds sets no align-items of its own, so the stretch reaches the
+   three speed buttons through it — do not give that group one. */
 .player__controls {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   flex: 0 0 auto;
 }
@@ -1523,9 +1549,12 @@ body.app-active #app-main.app[hidden] {
   opacity: 0.5;
   filter: grayscale(0.7);
 }
+/* STRETCH, so the 1× / 1.5× / 2× group and Ignore are one height: they size
+   themselves differently, and a base .btn's height is font-dependent besides.
+   .chan__speeds is a container, so it has to pass the stretch on. */
 .chan__controls {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   flex: 0 0 auto;
   margin-left: auto;
@@ -1543,7 +1572,9 @@ body.app-active #app-main.app[hidden] {
 }
 .chan__speeds {
   display: flex;
-  align-items: center;
+  /* Stretched by the row, and stretching in turn, so the three buttons are the
+     row's height. The divider is this box's border, so it spans that height. */
+  align-items: stretch;
   gap: 2px;
   padding-right: 6px;
   margin-right: 2px;
@@ -1601,11 +1632,15 @@ body.app-active #app-main.app[hidden] {
   font-size: 0.9rem;
 }
 /* flex-wrap is the whole narrow-width story: the Add button drops under the
-   input on its own, and the @media below then widens it to a real touch target. */
+   input on its own, and the @media below then widens it to a real touch target.
+   STRETCH because a .btn and a .field__input size from unrelated recipes (see the
+   .btn height gotcha in CLAUDE.md) — the button was 5px shorter than the field
+   beside it. It wraps, so once the button is on its OWN line it stretches to
+   nothing but itself and keeps its natural height. */
 .stash-add__row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
 }
 /* Reuses .field__input for colours/radius/focus ring; ONLY the sizing is
