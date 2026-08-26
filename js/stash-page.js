@@ -303,10 +303,10 @@ function cacheDom() {
   dom.cleanupBtn = byId('cleanup-btn');
   dom.scrollPlayingBtn = byId('scroll-playing-btn');
 
-  // Pane-ring containers. Nothing else references them: they exist so [ and ]
+  // Pane-cycle containers. Nothing else references them: they exist so [ and ]
   // can name a REGION rather than a control, each landing on its own first
   // focusable one. The add form is a pane of this page's own — the one region
-  // the subscriptions ring has no counterpart for.
+  // the subscriptions cycle has no counterpart for.
   dom.topbarNav = document.querySelector('.topbar__nav');
   dom.toolbar = document.querySelector('.toolbar');
   dom.queueHeader = document.querySelector('.queue-header');
@@ -408,7 +408,7 @@ function bindEvents() {
     });
   }
 
-  // The pane ring, IN DOM ORDER — the subscriptions ring with the add form
+  // The pane cycle, IN DOM ORDER — the subscriptions cycle with the add form
   // inserted after the toolbar. Only two override the default landing: the queue
   // resumes at the remembered card (letting the scroll follow, unlike every
   // other caller of focusRemembered, since arriving from another pane has no
@@ -1691,7 +1691,7 @@ function onGlobalKeydown(e) {
     e.preventDefault();
     if (paneNav) paneNav.togglePane();
   } else if (key === '[' || key === ']') {
-    // [ / ] step the pane RING — nav, toolbar, add form, queue actions, queue,
+    // [ / ] step the pane CYCLE — nav, toolbar, add form, queue actions, queue,
     // player — wrapping at both ends, where '/' jumps straight between the two
     // big ones. The skip past a pane that cannot take focus and the fallback to
     // the last pane focus was in both live in page-chrome's movePane, which

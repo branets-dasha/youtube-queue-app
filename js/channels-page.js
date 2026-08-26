@@ -65,10 +65,11 @@ function init() {
     coverOnWheelDown: false,
   });
 
-  // The pane ring, IN DOM ORDER: the nav strip and the channel list, both taking
-  // the default landing (first focusable — a nav link, the first channel's
-  // link). Worth having on a page with only two: the list is long enough that
-  // getting back to the nav from inside it is otherwise a run of Shift+Tab.
+  // The pane cycle, IN DOM ORDER: the nav strip and the channel list, both
+  // taking the default landing (first focusable — a nav link, the first
+  // channel's link). Worth having on a page with only two: the list is long
+  // enough that getting back to the nav from inside it is otherwise a run of
+  // Shift+Tab.
   paneNav = initPaneNav({
     panes: [{ el: document.querySelector('.topbar__nav') }, { el: listEl }],
   });
@@ -96,7 +97,7 @@ function onKeydown(e) {
 
   const key = e.key.toLowerCase();
   if (key === '[' || key === ']') {
-    // [ / ] step the pane ring — here just the nav strip and the channel list.
+    // [ / ] step the pane cycle — here just the nav strip and the channel list.
     // page-chrome's movePane owns the wrap, the skip past a pane that cannot
     // take focus and the fallback to the last pane focus was in, and reports
     // whether it took the key; neither bracket has a native action to preserve.

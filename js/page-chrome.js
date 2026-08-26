@@ -841,8 +841,8 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * caller can share one gesture — a re-render that forgets to put focus back
    * is the defect this had at four call sites.
    *
-   * One anchor drives all three, so the pane, the next arrow press and the ring
-   * can never disagree about where the user is.
+   * One anchor drives all three, so the pane, the next arrow press and the
+   * pane cycle can never disagree about where the user is.
    *
    * The scroll is restored as a DELTA in viewport coordinates — put the
    * surviving card back at the screen y the anchor occupied — not as a raw
@@ -896,7 +896,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * preventScroll BY DEFAULT because both of those callers have just restored
    * the scroll themselves and focus() scrolls the card into view, which would
    * fight it — the same reason stash-page.js's renderKeepingPlace passes it.
-   * The pane ring is the one caller that turns it off: arriving from another
+   * The pane cycle is the one caller that turns it off: arriving from another
    * pane there is no scroll to protect, and a remembered card off screen has to
    * be brought to it.
    * @param {object} [opts]
@@ -926,7 +926,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
 // ---------------------------------------------------------------------------
 // Pane navigation
 //
-// A RING of the page's regions — the nav strip, the toolbar, the queue actions,
+// A CYCLE of the page's regions — the nav strip, the toolbar, the queue actions,
 // the queue, the player (and the stash's add form) — stepped by [ and ] and
 // wrapping at both ends, plus / as the one absolute jump between the two big
 // panes. It is the keyboard's answer to a queue long enough that tabbing out of
@@ -988,8 +988,8 @@ function paneFocusables(el) {
  * @returns {{movePane: (dir:number) => boolean, togglePane: () => boolean}}
  */
 export function initPaneNav({ panes = [] } = {}) {
-  const ring = (Array.isArray(panes) ? panes : []).filter((p) => p && p.el);
-  const roleAt = (role) => ring.findIndex((p) => p.role === role);
+  const cycle = (Array.isArray(panes) ? panes : []).filter((p) => p && p.el);
+  const roleAt = (role) => cycle.findIndex((p) => p.role === role);
   const queueAt = roleAt('queue');
   const playerAt = roleAt('player');
 
@@ -1001,7 +1001,7 @@ export function initPaneNav({ panes = [] } = {}) {
   /** The index of the pane containing `node`, or -1. */
   function paneOf(node) {
     if (!node) return -1;
-    return ring.findIndex((p) => p.el.contains(node));
+    return cycle.findIndex((p) => p.el.contains(node));
   }
 
   // focusin (not focus) because it BUBBLES: the note has to be taken wherever
@@ -1025,7 +1025,7 @@ export function initPaneNav({ panes = [] } = {}) {
    * the user was never in.
    */
   function enterPane(i) {
-    const pane = ring[i];
+    const pane = cycle[i];
     if (!pane) return null;
     const landed = pane.focus ? pane.focus() : focusFirst(...paneFocusables(pane.el));
     if (landed) lastPaneIndex = i;
@@ -1044,7 +1044,7 @@ export function initPaneNav({ panes = [] } = {}) {
    * @returns {boolean}
    */
   function movePane(dir) {
-    for (const i of paneCandidates(ring.length, originIndex(), dir)) {
+    for (const i of paneCandidates(cycle.length, originIndex(), dir)) {
       if (enterPane(i)) return true;
     }
     return false;

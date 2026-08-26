@@ -288,7 +288,7 @@ function cacheDom() {
   dom.handledCount = byId('handled-count');
   dom.cutoffDisplay = byId('cutoff-display');
 
-  // Pane-ring containers. Nothing else references them: they exist so [ and ]
+  // Pane-cycle containers. Nothing else references them: they exist so [ and ]
   // can name a REGION rather than a control, each landing on its own first
   // focusable one.
   dom.topbarNav = document.querySelector('.topbar__nav');
@@ -387,7 +387,7 @@ function bindEvents() {
     });
   }
 
-  // The pane ring, IN DOM ORDER — the one place this page's regions are named.
+  // The pane cycle, IN DOM ORDER — the one place this page's regions are named.
   // Only two override the default landing: the queue resumes at the remembered
   // card (letting the scroll follow, unlike every other caller of
   // focusRemembered, since arriving from another pane has no scroll to protect),
@@ -1981,7 +1981,7 @@ function onGlobalKeydown(e) {
     e.preventDefault();
     if (paneNav) paneNav.togglePane();
   } else if (key === '[' || key === ']') {
-    // [ / ] step the pane RING — nav, toolbar, queue actions, queue, player —
+    // [ / ] step the pane CYCLE — nav, toolbar, queue actions, queue, player —
     // wrapping at both ends, where '/' jumps straight between the two big ones.
     // The skip past a pane that cannot take focus and the fallback to the last
     // pane focus was in both live in page-chrome's movePane, which reports

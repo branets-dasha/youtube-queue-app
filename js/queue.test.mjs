@@ -194,7 +194,7 @@ test('nearestSurvivor tolerates non-array input and mutates neither argument', (
   assert.deepEqual([...alive], ['c']);
 });
 
-// --- paneCandidates: the order the pane ring is tried in ---
+// --- paneCandidates: the order the pane cycle is tried in ---
 
 test('paneCandidates walks forward from the middle, wrapping past the end', () => {
   assert.deepEqual(paneCandidates(5, 2, 1), [3, 4, 0, 1]);
@@ -211,7 +211,7 @@ test('paneCandidates wraps at BOTH ends rather than clamping', () => {
   assert.deepEqual(paneCandidates(5, 0, -1), [4, 3, 2, 1]);
 });
 
-test('paneCandidates never offers the origin, so a ring of one is empty', () => {
+test('paneCandidates never offers the origin, so a cycle of one is empty', () => {
   assert.deepEqual(paneCandidates(1, 0, 1), []);
   assert.deepEqual(paneCandidates(1, 0, -1), []);
   // Every other pane exactly once, whichever way and wherever from.
@@ -225,14 +225,14 @@ test('paneCandidates never offers the origin, so a ring of one is empty', () => 
   }
 });
 
-test('paneCandidates reads a nonsense length as an empty ring', () => {
+test('paneCandidates reads a nonsense length as an empty cycle', () => {
   assert.deepEqual(paneCandidates(0, 0, 1), []);
   assert.deepEqual(paneCandidates(-3, 0, 1), []);
   assert.deepEqual(paneCandidates(2.5, 0, 1), []);
   assert.deepEqual(paneCandidates(undefined, 0, 1), []);
 });
 
-test('paneCandidates wraps an out-of-ring origin into it', () => {
+test('paneCandidates wraps an out-of-cycle origin into it', () => {
   // Both are index 2 of 5 — a stale lastPane index cannot produce a bad index.
   assert.deepEqual(paneCandidates(5, 7, 1), paneCandidates(5, 2, 1));
   assert.deepEqual(paneCandidates(5, -3, 1), paneCandidates(5, 2, 1));
