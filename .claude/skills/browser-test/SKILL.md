@@ -178,6 +178,9 @@ Pin the viewport whenever the answer depends on layout: 1280×800 is the
 side-by-side two-pane layout, ≤900px the stacked one, and the two have genuinely
 different arrow-key rules.
 
+**`page.goto` resets `page.setViewportSize`** back to 1280×800, so resize
+*after* navigating, never before.
+
 ### Magnifying, and the override that then owns the viewport
 
 A 2px ring against a 36px avatar cannot be judged at 1×, and element shots crop
@@ -201,8 +204,23 @@ mode**, which has no in-app toggle — the app is `prefers-color-scheme` only, s
   sweep whose 900/600/360 rows all agree (all still 1280). Re-send the override
   with the new size instead, and **assert `innerWidth` and
   `matchMedia('(max-width: 900px)').matches` whenever width is the question.**
+- **A resize through the override desyncs the screenshot raster from the layout
+  viewport.** `getBoundingClientRect` reports the new layout while
+  `page.screenshot({ clip })` keeps capturing the old one, so the clip comes back
+  as blank page background and reads as a missing element. Keep the override for
+  pure `getBoundingClientRect` work; for anything you photograph, send
+  `Emulation.clearDeviceMetricsOverride` and size the page with
+  `page.setViewportSize`.
 - **Let the viewport settle before measuring.** A `getBoundingClientRect` read
   straight after a size change was ~90px off; re-probe until two agree.
+- **For a close-up the clip cannot reach, magnify the NODE, not the raster.**
+  Element shots and a bigger `deviceScaleFactor` both stop short; a temporary
+  `transform: scale(6)` on the node scales border, gap and ring together, so the
+  proportions stay faithful. It only works **outside a clipping container** —
+  inside a scrollport (`.workspace__queue`, `.workspace__player`) the scaled node
+  is clipped and the shot proves nothing. Probe the pixels there instead:
+  screenshot → `createImageBitmap` → `getImageData`, reading the colours
+  off the raster itself.
 
 ## Artifacts
 
