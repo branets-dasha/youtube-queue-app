@@ -54,11 +54,11 @@ export function initPlayer({ mountId, onEnded, onReady, onProgress }) {
  * Keep the player iframe OUT of the sequential tab order. It lives here because
  * this module CREATES the element and is the only one that knows when it exists.
  *
- * `.workspace__player` carries tabindex="-1", so a Tab from the focused pane
- * continues into this frame; bindIframeFocusGuard blurs it back to <body>, but
- * Chrome's sequential-focus starting point STAYS on the iframe, so the next Tab
- * re-enters and bounces again — a loop that kills forward Tab for the rest of
- * the session and strands every control after the frame.
+ * Tab from anywhere inside the player pane continues into this frame;
+ * bindIframeFocusGuard blurs it back to <body>, but Chrome's sequential-focus
+ * starting point STAYS on the iframe, so the next Tab re-enters and bounces
+ * again — a loop that kills forward Tab for the rest of the session and strands
+ * every control after the frame.
  *
  * Deliberate cost: YouTube's own in-frame controls are no longer Tab-reachable,
  * and that is not to be "fixed" — a focused cross-origin frame swallows keydown

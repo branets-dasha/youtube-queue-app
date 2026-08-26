@@ -459,9 +459,9 @@ export function focusFirst(...candidates) {
  *   wider than the list: it takes in the sticky header buttons, from which a
  *   press enters the list rather than doing nothing.
  * @param {HTMLElement|null} opts.playerPane the `.workspace__player` aside. It
- *   carries `tabindex="-1"` in the HTML so it can be focused programmatically
- *   without becoming a tab stop; once focused it scrolls natively, the only way
- *   to read a long description without tabbing through every card's controls.
+ *   carries `tabindex="0"` in the HTML, so Tab out of the queue lands on it and
+ *   so does '/'; once focused it scrolls natively, the only way to read a long
+ *   description without tabbing through every card's controls.
  * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
  *   the document scrolls rather than the panes — the question initCurtain asks,
  *   asked the same way.
@@ -943,9 +943,10 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
 // focused as a whole is a tab stop the user then has to escape, and focusFirst
 // already skips the hidden and the disabled by verifying activeElement. The
 // player is the exception because being focusable AS A PANE is the entire point
-// — it scrolls natively, and a long description is otherwise unreachable. The
-// queue lands on the remembered card, so arriving resumes the walk where it left
-// off rather than at card 1.
+// — it scrolls natively, and a long description is otherwise unreachable; it
+// carries tabindex="0" and takes the escape cost deliberately. The queue lands
+// on the remembered card, so arriving resumes the walk where it left off rather
+// than at card 1.
 //
 // A PANE THAT CANNOT TAKE FOCUS IS SKIPPED, the step continuing in the same
 // direction (paneCandidates in queue.js supplies the order). Not tidiness: a

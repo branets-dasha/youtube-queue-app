@@ -1330,7 +1330,7 @@ function showPlayerEmpty(caughtUp) {
   markPlayingCard(null);
 
   // After updatePlayingControls, which is what reveals "Start the queue".
-  // Else the pane, always focusable (tabindex="-1") and one '/' from the queue.
+  // Else the pane, always focusable (tabindex="0") and one '/' from the queue.
   // Never <body>.
   if (takesFocus) focusFirst(dom.startQueueBtn, dom.playerPane);
 }

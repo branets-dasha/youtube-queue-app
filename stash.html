@@ -220,12 +220,12 @@
             </div>
           </div>
 
-          <!-- RIGHT: the always-visible player. tabindex="-1" makes the pane
-               focusable PROGRAMMATICALLY only (never a new tab stop): the '/'
-               key throws focus here, and once focused it scrolls with the
-               arrows / PageUp / PageDown — otherwise a long description is
+          <!-- RIGHT: the always-visible player. tabindex="0" makes the pane a
+               focus target in its own right — Tab out of the queue lands on it,
+               and so does the '/' key — and once focused it scrolls with the
+               arrows / PageUp / PageDown, otherwise a long description is
                unreachable without tabbing through every control of every card. -->
-          <aside id="player-pane" class="workspace__player" aria-label="Player" tabindex="-1">
+          <aside id="player-pane" class="workspace__player" aria-label="Player" tabindex="0">
             <div class="player">
               <div class="player__frame">
                 <div id="player-mount"></div>
