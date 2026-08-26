@@ -293,9 +293,16 @@ main {
 .btn:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--surface-2);
 }
+/* 2px, not the 1px the text links (.row__title, .row__channel-link, .chan__link)
+   ring at: those trace a run of glyphs, where a wider gap detaches the ring from
+   its word, while a .btn is a filled box with its own border, and a ring 1px off
+   that edge reads as a second border rather than a ring — worst on .btn--primary,
+   where focus-blue sits 1px from a saturated red fill. Total reach is therefore
+   4px, inside the 6px of headroom .workspace__player reserves for the controls
+   in it; read the padding/margin pair there before widening this further. */
 .btn:focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 .btn:disabled {
   opacity: 0.5;
@@ -753,10 +760,10 @@ main {
   color: var(--accent);
 }
 /* .row__title's ring exactly, on the link that behaves like it: OUTSET at the
-   house 1px offset, at the corner radius rather than a pill — this box goes tall
-   when the name wraps, and 999px would then make end caps of half that height,
-   curving back through the text. It fragments around the NAME's line boxes and
-   nothing else: an out-of-flow avatar contributes no geometry to them. */
+   text links' 1px offset, at the corner radius rather than a pill — this box
+   goes tall when the name wraps, and 999px would then make end caps of half that
+   height, curving back through the text. It fragments around the NAME's line
+   boxes and nothing else: an out-of-flow avatar contributes no geometry to them. */
 .row__channel-link:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
@@ -1113,7 +1120,7 @@ body.app-active #app-main.app[hidden] {
 .workspace__player {
   min-height: 0;
   overflow-y: auto; /* if player + info exceed the pane, scroll here — never clip */
-  /* THE SCROLLPORT IS 4px BIGGER THAN THE CONTENT ON EVERY SIDE, AND THE
+  /* THE SCROLLPORT IS 6px BIGGER THAN THE CONTENT ON EVERY SIDE, AND THE
      CONTENT DOES NOT MOVE: the padding pushes it in, the equal negative margin
      pulls the box back out, and only the CLIP EDGE moves — the two must cancel.
      overflow-y:auto makes this a scroll container, which clips both axes at the
@@ -1122,17 +1129,19 @@ body.app-active #app-main.app[hidden] {
      sliced off at x < 0. Not fixable from the link's side, nor by
      overflow-clip-margin: beside overflow-y:auto, overflow-x `clip` computes to
      `hidden` and the margin does nothing.
-     The band must cover the WIDEST left reach in here, which is 3px:
-     .row__title's ring, outset at the house 1px offset over a 2px outline, on a
-     box flush against the content edge. (.player__meta's channel link is ringed
-     the same way but starts 42px in, clear of the edge.) That leaves 1px to
-     spare, and nothing checks the bound — so a wider offset, or a new control
-     further left, clips silently; check it in a browser.
-     On the scrolling axis the 4px is headroom only at the ends
-     of the range: content hand-scrolled to an edge still loses a ring segment,
-     as in any scroll container, and scroll-padding does not help. */
-  padding: 4px;
-  margin: -4px;
+     The band must cover the WIDEST reach in here — a .btn's 4px, 2px outset over
+     a 2px outline — and holds 2px over it. Three of the four edges are live:
+     #player-title / #player-meta sit flush at the left, and .player__controls
+     reaches the right whenever .player is 100% of the pane (a tall viewport) and
+     the left as well once the @container query stacks the bar and the control
+     row stretches. Nothing checks the bound — spend that 2px on a wider offset,
+     a wider outline, or a new control nearer an edge and the ring clips
+     silently; check it in a browser.
+     On the scrolling axis the band is headroom only at the ends of the range:
+     content hand-scrolled to an edge still loses a ring segment, as in any
+     scroll container, and scroll-padding does not help. */
+  padding: 6px;
+  margin: -6px;
   /* Exists FOR the ring below: an outline traces its element's border-radius,
      so a square pane could only ever grow a square ring. Free when unfocused —
      the pane paints no background and no border of its own. Side effect: a
@@ -1148,7 +1157,7 @@ body.app-active #app-main.app[hidden] {
    box: an element paints its outline BEFORE its descendants, so an inset ring is
    painted over by .player__frame (full-bleed, black, flush to the pane's top and
    left corner) and on the right runs through the scrollbar, painted inside that
-   same box. 0 rather than 2px only because the box has since grown 4px on every
+   same box. 0 rather than 2px only because the box has since grown 6px on every
    side (see the padding/margin pair above); going negative to win those back
    puts the right-hand segment on the scrollbar again, which rides outward with
    the padding box. Nothing clips it — 20px of .workspace grid gap to the left,
@@ -1495,11 +1504,11 @@ body.app-active #app-main.app[hidden] {
 .chan__link:hover .chan__title {
   color: var(--accent);
 }
-/* The house 1px offset, and a corner radius rather than a pill: .chan__title
-   wraps, so this box grows tall, and a 999px radius then makes end caps of half
-   that height — measured cutting through the last glyph of the first line at
-   400px. var(--radius) rather than .row__channel-link's 4px because this box IS
-   the avatar + the name, not text alone. */
+/* The text links' 1px offset, and a corner radius rather than a pill:
+   .chan__title wraps, so this box grows tall, and a 999px radius then makes end
+   caps of half that height — measured cutting through the last glyph of the first
+   line at 400px. var(--radius) rather than .row__channel-link's 4px because this
+   box IS the avatar + the name, not text alone. */
 .chan__link:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
