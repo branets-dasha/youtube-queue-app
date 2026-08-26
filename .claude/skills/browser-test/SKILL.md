@@ -143,7 +143,10 @@ anything downstream.
   a viewport or full-page shot, or a clip (see Magnifying).
 - **`:focus-visible` is the ring check.** The card ring draws on
   `:focus-visible` OR `.row--pointed`, so `el.matches(':focus-visible')`
-  answers "is it ringed" without a screenshot. **Drive the gesture the user
+  answers "is it ringed" without a screenshot. It does **not** answer *whose*
+  ring — a match can be painted by the UA rather than by the app's `--focus`
+  rule, and the two are identical to that assertion; read `outline-color`, or
+  magnify a clip (below), when that is the question. **Drive the gesture the user
   would make** — a real click for a click, `browser_press_key` for a key —
   because the input modality is what the property reports, and a bare
   `.focus()` out of `browser_evaluate` stands for neither.
