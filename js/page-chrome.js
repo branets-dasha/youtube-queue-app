@@ -1,8 +1,9 @@
 // js/page-chrome.js
 //
 // Leaf page chrome shared by every entry point — the single-tab lock, the
-// fatal-storage halt screens, the privacy curtain, and the two-pane focus
-// navigation both player pages drive from their arrow keys. No app state and no
+// fatal-storage halt screens, the privacy curtain, the two-pane focus
+// navigation both player pages drive from their arrow keys, and the plain
+// single-column walk the Channels page drives from the same keys. No app state and no
 // queue logic: it imports only ui.js, toast.js, the two error classes from
 // store.js, one tunable from config.js (the constants file, not a layer) and
 // one pure helper from queue.js — no cycle, since queue.js imports nothing but
@@ -921,6 +922,234 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     focusRemembered,
     captureQueueScroll,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Single-column list walk
+//
+// THE SECOND WALK, for a page whose list is not the queue: one column of rows,
+// each a tab stop, stepped by the same six keys on the same contract.
+//
+// initQueueFocus above deliberately does NOT serve it, and is not made to. That
+// one is built around .row cards, a videoId identity, the "Show all (N)" footer
+// item, the card menu's arrow pre-step and a place anchor for re-renders that
+// change which records exist — none of which a page that builds its list once
+// and updates rows IN PLACE has anything for. Threading six more parameters
+// through the app's most load-bearing keyboard function, to reach roughly a
+// third of it, would put the queue's walk at risk to save this much code.
+//
+// Nor is the reverse wanted — initQueueFocus composing these primitives and
+// layering its extras back on top. It is the tidier shape on paper, and it buys
+// this page nothing: the cost is reworking the app's most load-bearing keyboard
+// path, which every card gesture on both player pages runs through, to serve a
+// settings screen visited occasionally.
+//
+// What is genuinely shared stays shared: the step contract (clamp, never wrap;
+// a clamp still moves focus but reports NOT-handled, handing the scroll back)
+// and QUEUE_PAGE_STEP, so the two walks cannot drift on how far a page key goes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire up the walk along a single-column list of focusable rows and hand back
+ * the gestures its keydown table needs. Installs two listeners on `list` — a
+ * `focusin` keeping the remembered row up to date and a `pointerdown` marking a
+ * placement — and binds no keys of its own, like everything else here.
+ *
+ * IT NAMES NOTHING ITSELF: the row selector, the identity key and the ring class
+ * are all parameters, following initPaneNav's discipline rather than
+ * initQueueFocus's baked-in `.row`.
+ *
+ * @param {object} opts
+ * @param {HTMLElement|null} opts.list the container the rows live in.
+ * @param {string} opts.itemSelector selector for one row. Resolved with
+ *   closest() as well as querySelectorAll, so a row still answers while focus
+ *   sits on a control inside it.
+ * @param {string} opts.idKey the `dataset` key carrying a row's stable identity.
+ *   The cursor is remembered by that id, never by element.
+ * @param {string} [opts.pointedClass] class marking the row a POINTER press
+ *   placed the cursor on — half of what the stylesheet draws the ring on, the
+ *   other half being :focus-visible. Omit it and a pointer placement never rings.
+ * @param {number} [opts.pageStep] rows one PageUp/PageDown covers.
+ * @returns {{moveItem: (dir:number, opts?:{page?:boolean}) => boolean,
+ *   focusEdge: (dir:number) => boolean,
+ *   focusRemembered: (opts?:{preventScroll?:boolean}) => Element|null}}
+ */
+export function initListWalk({
+  list,
+  itemSelector,
+  idKey,
+  pointedClass,
+  pageStep = QUEUE_PAGE_STEP,
+} = {}) {
+  // The id of the row the walk resumes at — an id, never a node. focusin is its
+  // ONLY writer here: unlike the queue there is no move that changes the user's
+  // place while focus is elsewhere, so there is no rememberCard counterpart.
+  let rememberedId = null;
+
+  // The row a POINTER press placed the cursor on. Same reason as the queue's
+  // row--pointed: the ring cannot be a plain :focus, or the pane cycle landing
+  // here would ring a row after a keystroke aimed at another region entirely.
+  let pointedRow = null;
+
+  const rowOf = (node) => (node && node.closest ? node.closest(itemSelector) : null);
+  const mark = (row) => row && pointedClass && row.classList.add(pointedClass);
+  const unmark = (row) => row && pointedClass && row.classList.remove(pointedClass);
+
+  if (list) {
+    // pointerdown, not click: the mark has to be set BEFORE focus moves. A press
+    // landing on a control inside the row is an ACTION, not a placement, so it
+    // does not mark — those take focus themselves and the focusin below would
+    // clear the mark anyway. What it is load-bearing for is a press on the row's
+    // own body, which focuses the row itself and must ring.
+    list.addEventListener('pointerdown', (e) => {
+      const row = rowOf(e.target);
+      const control = e.target && e.target.closest ? e.target.closest('a, button') : null;
+      const placed = control && row && row.contains(control) ? null : row;
+      if (pointedRow !== placed) unmark(pointedRow);
+      pointedRow = placed;
+      mark(placed);
+    });
+
+    // focusin (not focus) because it BUBBLES: the note must be taken whether
+    // focus landed on the row itself or on a link or button inside it — the same
+    // closest() rule the per-row keys resolve by.
+    list.addEventListener('focusin', (e) => {
+      const row = rowOf(e.target);
+      const id = row && row.dataset ? row.dataset[idKey] : null;
+      if (id) rememberedId = id;
+      // The mark survives only while focus is on the marked row ITSELF, and is
+      // retired the moment focus moves anywhere else — the next row, or a
+      // control reached inside this one.
+      if (pointedRow && e.target !== pointedRow) {
+        unmark(pointedRow);
+        pointedRow = null;
+      }
+    });
+  }
+
+  /** This list's rows, in DOM order. Re-queried every time, never cached. */
+  function rows() {
+    return list ? Array.from(list.querySelectorAll(itemSelector)) : [];
+  }
+
+  /**
+   * The row to resume at: the remembered id if it is still rendered, else the
+   * first row, else null (an empty list). Matched by comparing the dataset value
+   * rather than through an attribute selector, so an id needs no escaping.
+   */
+  function rememberedRow(items) {
+    if (rememberedId) {
+      for (const row of items) {
+        if (row.dataset[idKey] === rememberedId) return row;
+      }
+    }
+    return items[0] || null;
+  }
+
+  /**
+   * Does the walk apply to the key being handled right now? THE ONE GATE — every
+   * move asks it, so there is one answer.
+   *
+   * Only focus genuinely INSIDE the list. That is the queue's stacked-layout
+   * branch, and it is the only branch here because it is the only layout this
+   * kind of page has: one column, no second pane, and the DOCUMENT scrolling at
+   * every width. So each of these keys has a native scroll to belong to
+   * everywhere outside the list, and taking them would leave the page
+   * unscrollable from anywhere the walk had not been entered.
+   * @returns {boolean} false = decline the key entirely, changing nothing
+   */
+  function walkApplies() {
+    const active = document.activeElement;
+    return Boolean(list && active && list.contains(active));
+  }
+
+  /**
+   * Step focus along the list in `dir` (-1 = up/previous, +1 = down/next) and
+   * report whether the key was HANDLED — the caller preventDefaults on true and
+   * only on true, so everything this declines keeps its native scrolling.
+   *
+   * ONE FUNCTION FOR BOTH RELATIVE KEYS: the arrows step 1, PageUp/PageDown pass
+   * `{ page: true }` and step `pageStep`. A page jump lands its destination at
+   * the top, a single step keeps the browser's default "nearest", and both ends
+   * CLAMP rather than wrap — the clamp still placing focus while reporting
+   * NOT-handled, so the document gets its native scroll back there. See moveCard
+   * for why each of those three is what it is; they are the same decisions.
+   *
+   * The rows need a `scroll-margin-top` for the top landing to clear whatever
+   * sits above the list, or a jump near the top scrolls the page DOWN to reach
+   * it (styles.css, .chan).
+   *
+   * NO ENTRY-FROM-OUTSIDE RULE, unlike the queue's moveCard: the gate above
+   * already means focus is in the list, so there is no outside to enter from.
+   * Arriving from another pane is initPaneNav's landing, not a key press here.
+   * @param {number} dir
+   * @param {object} [opts]
+   * @param {boolean} [opts.page] true = one page key's worth of rows, landed at
+   *   the top of the viewport, instead of a single step.
+   * @returns {boolean} true only when focus moved to a DIFFERENT row
+   */
+  function moveItem(dir, { page = false } = {}) {
+    if (!walkApplies()) return false;
+    const items = rows();
+    if (!items.length) return false;
+    const i = items.indexOf(rowOf(document.activeElement));
+    if (i === -1) return false; // in the list but not in a row: nothing to step from
+    const step = page ? pageStep : 1;
+    const next = Math.min(items.length - 1, Math.max(0, i + dir * step));
+    const target = items[next];
+    if (page) {
+      // Two calls because focus() takes no `block` option, and in THIS order so
+      // the default "nearest" scroll never happens and then gets corrected —
+      // which would show as a visible double jump.
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'start' });
+    } else {
+      target.focus();
+    }
+    return next !== i; // clamped: focus placed, key NOT taken — see above
+  }
+
+  /**
+   * Home / End: focus one END of the list — dir -1 = the first row, +1 = the
+   * last — on moveItem's took-the-key contract.
+   *
+   * ABSOLUTE where moveItem's keys are relative, so there is no position to step
+   * from and nothing to clamp. An ordinary focus() lets the scroll follow, which
+   * for the first and last rows is the top and the bottom of the document
+   * anyway. An EMPTY list declines and the keys keep their native meaning.
+   * @param {number} dir
+   * @returns {boolean}
+   */
+  function focusEdge(dir) {
+    if (!walkApplies()) return false;
+    const items = rows();
+    if (!items.length) return false;
+    (dir < 0 ? items[0] : items[items.length - 1]).focus();
+    return true;
+  }
+
+  /**
+   * Focus the row the walk would resume at. ONE caller today, the pane cycle's
+   * landing on this list, which is exactly why it exists: the moment a row
+   * becomes focusable, initPaneNav's default landing (the first focusable
+   * DESCENDANT) silently changes from the first row's link to the first row, and
+   * either way it restarts at the top instead of resuming where the user was.
+   *
+   * preventScroll defaults to true, matching initQueueFocus, for a caller that
+   * has just positioned the list itself; the pane cycle turns it off, having no
+   * scroll of its own to protect and a possibly off-screen row to bring into view.
+   * @param {object} [opts]
+   * @param {boolean} [opts.preventScroll]
+   * @returns {Element|null} the row focused, or null when the list is empty —
+   *   the pane cycle's cue to skip this pane
+   */
+  function focusRemembered({ preventScroll = true } = {}) {
+    const target = rememberedRow(rows());
+    if (target) target.focus({ preventScroll });
+    return target;
+  }
+
+  return { moveItem, focusEdge, focusRemembered };
 }
 
 // ---------------------------------------------------------------------------

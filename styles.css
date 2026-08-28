@@ -1550,6 +1550,13 @@ body.app-active #app-main.app[hidden] {
   flex-direction: column;
   gap: 8px;
 }
+/* An author `display` beats the UA [hidden] rule, so anything hideable needs its
+   own [hidden] { display: none } — the same rule .queue carries. Without it the
+   empty list keeps its padding box and stays in the accessibility tree behind
+   the "no channels" state. */
+.channels[hidden] {
+  display: none;
+}
 /* flex-wrap lets the controls drop under the title on very narrow widths, so
    the stacked layout just works with no dedicated breakpoint. */
 .chan {
@@ -1562,6 +1569,49 @@ body.app-active #app-main.app[hidden] {
   border-radius: var(--radius);
   padding: 8px 14px;
   box-shadow: var(--shadow);
+  /* Clears everything ABOVE the list, because the scroller here is the DOCUMENT
+     and nothing on this page is sticky. A page key lands its destination with
+     `block: 'start'` (see moveItem), which aligns the row's border box with the
+     viewport top — so without this a PageUp in the first ten rows scrolls the
+     page DOWN to reach a row already on screen, taking the header off with it.
+     At >900px the topbar and the shortcut strip measure 131px together, so 132
+     makes that scroll clamp at 0 and the header stay put; deeper in the list the
+     same value is the ring's headroom, which needs only the 4px the box-shadow
+     paints outside the border box. The strip wraps to two lines below ~640px —
+     hence the taller value in the media query. Narrower than ~500px the nav wraps
+     too and this under-covers, the same accepted limit as .row's single narrow
+     value: the ring stays clear, only the header scrolls. */
+  scroll-margin-top: 132px;
+}
+/* One line taller below the same 900px breakpoint the rest of the app uses: the
+   shortcut strip wraps to two lines there (measured 150px above row 0 at 600px)
+   where it is one above it. It has to live HERE rather than in the main 900px
+   block, which sits earlier in the file — .chan is defined after it, and at equal
+   specificity the later rule would win and silently undo this. */
+@media (max-width: 900px) {
+  .chan {
+    scroll-margin-top: 152px;
+  }
+}
+/* Focus / selection — .row:focus-visible's rule and its reasoning, on this page's
+   row; see there for why it is a box-shadow ring over a transparent outline.
+   The SPLIT is what differs, so only this is stated here. A .chan is not a
+   control you activate: it is the cursor position for ↑/↓, x and 1/5/2 (see
+   initListWalk in page-chrome.js), and :focus-visible alone does not mark it.
+   Chrome propagates keyboard modality into a programmatic focus(), so the pane
+   cycle's landing already rings through :focus-visible with no help. The case
+   that needs the class is a MOUSE press on the row's own body — :focus-visible
+   is false there, and without .chan--pointed the cursor those keys act on would
+   be invisible after the one pointer gesture that IS a placement. Not
+   :focus-within either — clicking a speed button or Ignore focuses that control
+   and leaves the row unringed.
+   Order is only readability here, unlike the card's: there is no .chan:hover for
+   an identically-weighted rule to have to sit after. */
+.chan:focus-visible,
+.chan.chan--pointed:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus), var(--shadow);
 }
 /* Avatar + name in ONE anchor to the channel on YouTube, like a card's channel
    badge: muted inline look, and the same idiom as .row__title and
