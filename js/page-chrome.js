@@ -1050,17 +1050,20 @@ export function initListWalk({
    * Does the walk apply to the key being handled right now? THE ONE GATE — every
    * move asks it, so there is one answer.
    *
-   * Only focus genuinely INSIDE the list. That is the queue's stacked-layout
-   * branch, and it is the only branch here because it is the only layout this
-   * kind of page has: one column, no second pane, and the DOCUMENT scrolling at
-   * every width. So each of these keys has a native scroll to belong to
-   * everywhere outside the list, and taking them would leave the page
-   * unscrollable from anywhere the walk had not been entered.
+   * ANYWHERE ON THE PAGE — <body> after a fresh load, the nav strip, inside the
+   * list alike — so the arrows walk the moment the page opens, with no pane
+   * switch to discover first. It is initQueueFocus's rule, not a looser one:
+   * that gate declines only inside the PLAYER pane, the one region with a
+   * native scroll of its own to protect. A single-column page has no such
+   * region, so nothing is carved out and a press from outside ENTERS the list
+   * (see moveItem).
+   *
+   * The one decline is an EMPTY list: with nothing to walk, every one of these
+   * keys keeps its native document scrolling and its native meaning.
    * @returns {boolean} false = decline the key entirely, changing nothing
    */
   function walkApplies() {
-    const active = document.activeElement;
-    return Boolean(list && active && list.contains(active));
+    return Boolean(list) && rows().length > 0;
   }
 
   /**
@@ -1079,9 +1082,10 @@ export function initListWalk({
    * sits above the list, or a jump near the top scrolls the page DOWN to reach
    * it (styles.css, .chan).
    *
-   * NO ENTRY-FROM-OUTSIDE RULE, unlike the queue's moveCard: the gate above
-   * already means focus is in the list, so there is no outside to enter from.
-   * Arriving from another pane is initPaneNav's landing, not a key press here.
+   * ENTERING FROM OUTSIDE THE LIST lands on the remembered row — the first until
+   * the user has been in the list — in EITHER direction, and takes the key. A
+   * page key entering is still an entry, with no "from" to page away from yet,
+   * so it lands in the same place a single step would. moveCard's rule exactly.
    * @param {number} dir
    * @param {object} [opts]
    * @param {boolean} [opts.page] true = one page key's worth of rows, landed at
@@ -1091,9 +1095,13 @@ export function initListWalk({
   function moveItem(dir, { page = false } = {}) {
     if (!walkApplies()) return false;
     const items = rows();
-    if (!items.length) return false;
     const i = items.indexOf(rowOf(document.activeElement));
-    if (i === -1) return false; // in the list but not in a row: nothing to step from
+    if (i === -1) {
+      // Outside the list, or in it but not on a row: an ENTRY, not a step. The
+      // gate guarantees a row to land on, so this always takes the key.
+      rememberedRow(items).focus();
+      return true;
+    }
     const step = page ? pageStep : 1;
     const next = Math.min(items.length - 1, Math.max(0, i + dir * step));
     const target = items[next];
@@ -1114,16 +1122,16 @@ export function initListWalk({
    * last — on moveItem's took-the-key contract.
    *
    * ABSOLUTE where moveItem's keys are relative, so there is no position to step
-   * from and nothing to clamp. An ordinary focus() lets the scroll follow, which
-   * for the first and last rows is the top and the bottom of the document
-   * anyway. An EMPTY list declines and the keys keep their native meaning.
+   * from, nothing to clamp, and no entry rule to need: naming an end answers
+   * "from outside the list" already. An ordinary focus() lets the scroll follow,
+   * which for the first and last rows is the top and the bottom of the document
+   * anyway. An EMPTY list declines at the gate, keeping the keys' native meaning.
    * @param {number} dir
    * @returns {boolean}
    */
   function focusEdge(dir) {
     if (!walkApplies()) return false;
     const items = rows();
-    if (!items.length) return false;
     (dir < 0 ? items[0] : items[items.length - 1]).focus();
     return true;
   }

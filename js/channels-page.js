@@ -130,21 +130,23 @@ function onKeydown(e) {
   const key = e.key.toLowerCase();
   if (key === 'arrowup' || key === 'arrowdown') {
     // ↑/↓ walk the channel rows. The whole rule lives in page-chrome's moveItem
-    // — what it walks, where the keys apply (only INSIDE the list, because the
-    // document scrolls at every width here) and the clamp at both ends — and it
-    // reports whether it TOOK the key. preventDefault ONLY on true, so
-    // everything it declines keeps its native scrolling: focus anywhere off the
-    // list, and a clamp at either end of it.
+    // — what it walks, the clamp at both ends, and the entry from outside that
+    // makes the list walkable straight off a fresh load, with focus still on
+    // <body> — and it reports whether it TOOK the key. preventDefault ONLY on
+    // true, so everything it declines keeps its native scrolling: a clamp at
+    // either end, and every key on a page with no channels at all.
     if (walk && walk.moveItem(key === 'arrowup' ? -1 : 1)) e.preventDefault();
   } else if (key === 'pageup' || key === 'pagedown') {
     // The SAME move as ↑/↓, only further: moveItem steps QUEUE_PAGE_STEP rows
     // instead of one and lands the destination at the top of the viewport. Same
     // took-the-key contract, so a clamp at either end reports false and native
-    // scrolling finishes the job.
+    // scrolling finishes the job — and the same entry rule, a press from outside
+    // the list landing on the remembered row rather than paging from nowhere.
     if (walk && walk.moveItem(key === 'pageup' ? -1 : 1, { page: true })) e.preventDefault();
   } else if (key === 'home' || key === 'end') {
-    // ABSOLUTE keys: the first / last ROW, named rather than stepped to. An
-    // empty list declines and Home/End keep their native meaning.
+    // ABSOLUTE keys: the first / last ROW, named rather than stepped to, from
+    // anywhere on the page. Only an empty list declines, leaving Home/End their
+    // native meaning.
     if (walk && walk.focusEdge(key === 'home' ? -1 : 1)) e.preventDefault();
   } else if (key === '[' || key === ']') {
     // [ / ] step the pane cycle — here just the nav strip and the channel list.
