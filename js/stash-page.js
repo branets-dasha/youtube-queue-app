@@ -53,6 +53,7 @@ import {
 import { getVideosByIds, getChannelAvatars, rateVideo, ApiError } from './api.js';
 import {
   parseVideoId,
+  parseStartSeconds,
   stashChannelInfo,
   sortStash,
   stashToClean,
@@ -680,6 +681,9 @@ async function runAdd() {
     rejectInput('That does not look like a YouTube video link or id.');
     return;
   }
+  // Read here because this is where the pasted string exists: past this point
+  // only the id survives.
+  const startSeconds = parseStartSeconds(raw);
 
   // DUPLICATE, and we know it WITHOUT the lookup or the token: the record is
   // already here, keeping its position and its addedAt whatever we do next. What
@@ -717,6 +721,13 @@ async function runAdd() {
     }
 
     await attachAvatar(incoming);
+
+    // A link's timestamp seeds the SAME field the player writes, so the video
+    // opens where the link points and the first watch overwrites it. Set only
+    // when there is one, so the key is otherwise absent rather than undefined.
+    // A re-add ignores it for free: the duplicate short-circuit above keeps only
+    // the videoId, and addToStash's duplicate branch reads nothing else either.
+    if (startSeconds !== null) incoming.positionSeconds = startSeconds;
 
     // Channel prefs are read FRESH (never cached at startup), so a speed set in
     // a Channels tab applies to this add without reloading. The Ignore flag is
