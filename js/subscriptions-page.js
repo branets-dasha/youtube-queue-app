@@ -87,6 +87,7 @@ import {
   loadVideo as playerLoad,
   setSpeed as playerSetSpeed,
   capturePosition,
+  isReady as isPlayerReady,
   togglePlay,
   seekBy,
   seekTo,
@@ -1020,6 +1021,12 @@ async function addCardToStash(videoId, opts = {}) {
   }
 
   try {
+    // The poll writes only every 5s, so the PLAYING card's stored position can
+    // be that stale — flush it before the spread below copies it. Gated on
+    // READY: until onReady fires, loadVideo has already set currentVideoId
+    // while getCurrentTime() can still answer 0, which would persist a 0 over
+    // the very position being copied.
+    if (isPlayerReady()) flushProgress();
     const incoming = { ...rec };
     const known = state.channels[rec.channelId];
     // Omit the key entirely when we have no avatar — never an explicit

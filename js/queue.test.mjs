@@ -35,6 +35,7 @@ import {
   pruneChannels,
   mergeRefresh,
   parseVideoId,
+  parseStartSeconds,
   sortStash,
   stashToClean,
   addToStash,
@@ -1196,6 +1197,67 @@ test('parseVideoId returns null for ?vi= and for free text', () => {
   assert.equal(parseVideoId(`https://www.youtube.com/watch?a=1&vi=${ID}`), null);
   assert.equal(parseVideoId('just some text about a video'), null);
   assert.equal(parseVideoId('watch this: it is great'), null);
+});
+
+// --- parseStartSeconds: a pasted link's ?t= / &start=, seeding the resume position ---
+
+test('parseStartSeconds reads ?t= and &t= with or without the trailing s', () => {
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=42`), 42);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?v=${ID}&t=42s`), 42);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?t=90&v=${ID}`), 90);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?v=${ID}#t=15`), 15);
+  assert.equal(parseStartSeconds(`  https://youtu.be/${ID}?t=7  `), 7); // pastes carry whitespace
+});
+
+test('parseStartSeconds finds t= after another parameter, and reads start=', () => {
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?si=AbCdEf&t=120`), 120);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/embed/${ID}?start=90`), 90);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/embed/${ID}?start=90&end=120`), 90);
+});
+
+test('parseStartSeconds returns null when there is no timestamp at all', () => {
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}`), null);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?v=${ID}`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?si=AbCdEf`), null);
+  assert.equal(parseStartSeconds(ID), null); // a bare id
+  assert.equal(parseStartSeconds(''), null);
+});
+
+test('parseStartSeconds returns null for a zero offset', () => {
+  // Nothing to seed: resuming at 0 is what an unset position already means.
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=0`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=0s`), null);
+});
+
+test('parseStartSeconds returns null for a value that is not whole seconds', () => {
+  // A composite is REJECTED, never truncated to its leading digits.
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=1m30s`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=1h2m3s`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=1.5`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=-5`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=abc`), null);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ID}?t=`), null);
+});
+
+test('parseStartSeconds does not mistake a longer parameter name for t or start', () => {
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?time_continue=100&v=${ID}`), null);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?v=${ID}&start_radio=1`), null);
+  assert.equal(parseStartSeconds(`https://www.youtube.com/watch?v=${ID}&list=t=30`), null);
+});
+
+test('parseStartSeconds returns null for non-string input', () => {
+  assert.equal(parseStartSeconds(null), null);
+  assert.equal(parseStartSeconds(undefined), null);
+  assert.equal(parseStartSeconds(42), null);
+});
+
+test('a link carrying a timestamp still yields its id', () => {
+  // The two helpers read the same paste independently; neither disturbs the other.
+  const link = `https://www.youtube.com/watch?v=${ID}&t=42s`;
+  assert.equal(parseVideoId(link), ID);
+  assert.equal(parseStartSeconds(link), 42);
+  assert.equal(parseVideoId(`https://youtu.be/${ODD_ID}?t=8`), ODD_ID);
+  assert.equal(parseStartSeconds(`https://youtu.be/${ODD_ID}?t=8`), 8);
 });
 
 // --- sortStash: the stash's ONLY order — oldest addedAt first, unstamped last ---

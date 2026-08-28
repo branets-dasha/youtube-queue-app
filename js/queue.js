@@ -933,6 +933,29 @@ export function parseVideoId(input) {
   return null;
 }
 
+// A 't' or 'start' parameter, anywhere in the query or the fragment. The
+// leading [?&#] is what stops 'time_continue=' and 'start_radio=' being read as
+// one, and the trailing lookahead is what makes a non-integer value ('1m30s',
+// '1.5') a REJECTION rather than a silent truncation to its leading digits.
+const START_SECONDS_RE = /[?&#](?:t|start)=(\d+)s?(?=[&#]|$)/;
+
+/**
+ * Extract a pasted link's start offset in whole seconds, else null.
+ *
+ * Accepts only a plain count of seconds, with or without YouTube's trailing 's'
+ * ('?t=42', '&t=42s', '/embed/ID?start=90'); a composite '1m30s' and any other
+ * unparseable value are null, as is a 0 offset, which is nothing to seed. Pure.
+ * @param {string} input a pasted URL or bare video id
+ * @returns {number|null} whole seconds > 0, or null when there is no usable one
+ */
+export function parseStartSeconds(input) {
+  if (typeof input !== 'string') return null;
+  const m = START_SECONDS_RE.exec(input.trim());
+  if (!m) return null;
+  const seconds = Number.parseInt(m[1], 10);
+  return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
+}
+
 /**
  * The instant a stash record was added, in epoch millis, with a MISSING or
  * UNPARSEABLE `addedAt` mapped to +Infinity so it sorts LAST. Accepts the ISO
