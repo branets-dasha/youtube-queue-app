@@ -138,10 +138,12 @@ function onKeydown(e) {
     if (walk && walk.moveItem(key === 'arrowup' ? -1 : 1)) e.preventDefault();
   } else if (key === 'pageup' || key === 'pagedown') {
     // The SAME move as ↑/↓, only further: moveItem steps QUEUE_PAGE_STEP rows
-    // instead of one and lands the destination at the top of the viewport. Same
-    // took-the-key contract, so a clamp at either end reports false and native
-    // scrolling finishes the job — and the same entry rule, a press from outside
-    // the list landing on the remembered row rather than paging from nowhere.
+    // instead of one. The step size is the only difference — the scroll is the
+    // browser's own either way, so with many rows on screen a page jump often
+    // moves focus without scrolling at all. Same took-the-key contract, so a
+    // clamp at either end reports false and native scrolling finishes the job,
+    // and the same entry rule, a press from outside the list landing on the
+    // remembered row rather than paging from nowhere.
     if (walk && walk.moveItem(key === 'pageup' ? -1 : 1, { page: true })) e.preventDefault();
   } else if (key === 'home' || key === 'end') {
     // ABSOLUTE keys: the first / last ROW, named rather than stepped to, from

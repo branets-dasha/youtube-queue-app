@@ -1682,7 +1682,9 @@ function onGlobalKeydown(e) {
     if (queueFocus && queueFocus.moveCard(key === 'arrowup' ? -1 : 1)) e.preventDefault();
   } else if (key === 'pageup' || key === 'pagedown') {
     // The SAME move as ↑/↓, only further: moveCard steps QUEUE_PAGE_STEP walk
-    // items instead of one and lands the destination at the top of the pane.
+    // items instead of one. The step size is the only difference — the scroll is
+    // the browser's own either way, so a destination already on screen is
+    // focused where it sits.
     // Same took-the-key contract, so a clamp at either end reports false and
     // native scrolling finishes the job. Identical to the subscriptions page.
     if (queueFocus && queueFocus.moveCard(key === 'pageup' ? -1 : 1, { page: true })) {

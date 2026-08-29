@@ -642,10 +642,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * entry-from-outside rule and the clamp a second time is the drift this module
    * exists to prevent.
    *
-   * A PAGE JUMP SCROLLS ITS DESTINATION TO THE TOP (`block: 'start'`), where a
-   * single step keeps the browser's default "nearest": under "nearest" a
-   * ten-item jump pins the destination against the BOTTOM edge with the nine
-   * skipped above it, reading as a scroll that overshot rather than a page turn.
+   * A PAGE JUMP SCROLLS EXACTLY AS A SINGLE STEP DOES — a plain focus(), so the
+   * browser's default "nearest" applies to both: no scroll at all when the
+   * destination is already on screen, and otherwise the least that brings it
+   * into view, settling against whichever edge it came in from. The step SIZE is
+   * the only difference between the two keys.
    *
    * CLAMPS at both ends rather than wrapping, and the clamp still places focus
    * on the item while reporting NOT-handled. Both halves matter: landing on the
@@ -657,7 +658,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * @param {number} dir -1 = up/previous, +1 = down/next
    * @param {object} [opts]
    * @param {boolean} [opts.page] true = one page key's worth (QUEUE_PAGE_STEP
-   *   items), landed at the top of the pane, instead of a single step.
+   *   items) instead of a single step. Nothing else about the move differs.
    * @returns {boolean} true only when focus moved to a DIFFERENT walk item
    */
   function moveCard(dir, { page = false } = {}) {
@@ -691,16 +692,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     }
     const step = page ? QUEUE_PAGE_STEP : 1;
     const next = Math.min(items.length - 1, Math.max(0, i + dir * step));
-    const target = items[next];
-    if (page) {
-      // Two calls because focus() takes no `block` option, and in THIS order so
-      // the default "nearest" scroll never happens and then gets corrected —
-      // which would show as a visible double jump.
-      target.focus({ preventScroll: true });
-      target.scrollIntoView({ block: 'start' });
-    } else {
-      target.focus();
-    }
+    // ONE focus() for both keys: the scroll is the browser's "nearest", which
+    // leaves an on-screen destination alone and otherwise brings it just into
+    // view. `.row`'s scroll-margin-top is what keeps a top-edge landing clear of
+    // the sticky .queue-header.
+    items[next].focus();
     return next !== i; // clamped: focus placed, key NOT taken — see above
   }
 
@@ -1072,15 +1068,11 @@ export function initListWalk({
    * only on true, so everything this declines keeps its native scrolling.
    *
    * ONE FUNCTION FOR BOTH RELATIVE KEYS: the arrows step 1, PageUp/PageDown pass
-   * `{ page: true }` and step `pageStep`. A page jump lands its destination at
-   * the top, a single step keeps the browser's default "nearest", and both ends
-   * CLAMP rather than wrap — the clamp still placing focus while reporting
-   * NOT-handled, so the document gets its native scroll back there. See moveCard
-   * for why each of those three is what it is; they are the same decisions.
-   *
-   * The rows need a `scroll-margin-top` for the top landing to clear whatever
-   * sits above the list, or a jump near the top scrolls the page DOWN to reach
-   * it (styles.css, .chan).
+   * `{ page: true }` and step `pageStep`. The step SIZE is all that differs —
+   * both scroll by a plain focus(), so a destination already on screen is not
+   * scrolled to at all — and both ends CLAMP rather than wrap, the clamp still
+   * placing focus while reporting NOT-handled so the document gets its native
+   * scroll back there. See moveCard: they are the same decisions.
    *
    * ENTERING FROM OUTSIDE THE LIST lands on the remembered row — the first until
    * the user has been in the list — in EITHER direction, and takes the key. A
@@ -1088,8 +1080,8 @@ export function initListWalk({
    * so it lands in the same place a single step would. moveCard's rule exactly.
    * @param {number} dir
    * @param {object} [opts]
-   * @param {boolean} [opts.page] true = one page key's worth of rows, landed at
-   *   the top of the viewport, instead of a single step.
+   * @param {boolean} [opts.page] true = one page key's worth of rows instead of
+   *   a single step. Nothing else about the move differs.
    * @returns {boolean} true only when focus moved to a DIFFERENT row
    */
   function moveItem(dir, { page = false } = {}) {
@@ -1104,16 +1096,9 @@ export function initListWalk({
     }
     const step = page ? pageStep : 1;
     const next = Math.min(items.length - 1, Math.max(0, i + dir * step));
-    const target = items[next];
-    if (page) {
-      // Two calls because focus() takes no `block` option, and in THIS order so
-      // the default "nearest" scroll never happens and then gets corrected —
-      // which would show as a visible double jump.
-      target.focus({ preventScroll: true });
-      target.scrollIntoView({ block: 'start' });
-    } else {
-      target.focus();
-    }
+    // ONE focus() for both keys — see moveCard. Nothing here overrides the
+    // browser's "nearest", so a row already on screen is focused where it sits.
+    items[next].focus();
     return next !== i; // clamped: focus placed, key NOT taken — see above
   }
 
