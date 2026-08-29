@@ -1113,8 +1113,13 @@ body.app-active #app-main.app[hidden] {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* Fixed ~400px queue on the LEFT; the player takes ALL remaining width. */
-  grid-template-columns: 400px minmax(0, 1fr);
+  /* The player takes ALL remaining width on the LEFT; fixed ~400px queue on
+     the RIGHT. Source order is player-then-queue, so this is plain grid
+     auto-placement and NOT a reorder: visual order and DOM order agree here
+     and in the stacked layout below, which is why this stylesheet declares
+     `order` NOWHERE and must not start: both declarations it used to carry
+     put focus order at odds with visual order. */
+  grid-template-columns: minmax(0, 1fr) 400px;
   gap: 20px;
 }
 .workspace__queue {
@@ -1435,8 +1440,9 @@ body.app-active #app-main.app[hidden] {
   background: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 
-/* Stack below this width: player above the queue; release the full-height lock
-   so the whole page scrolls normally as one column. */
+/* Stack below this width: one column, the panes falling in SOURCE order —
+   player above the queue, which is already what they are — and release the
+   full-height lock so the whole page scrolls normally. */
 @media (max-width: 900px) {
   body.app-active {
     height: auto;
@@ -1471,7 +1477,6 @@ body.app-active #app-main.app[hidden] {
      Dropping the band also puts the pane inside the single column rather than
      6px outside it, which is what .workspace__queue already does here. */
   .workspace__player {
-    order: -1; /* player above the queue */
     overflow: visible;
     padding: 0;
     margin: 0;
@@ -1515,7 +1520,7 @@ body.app-active #app-main.app[hidden] {
   }
 }
 
-/* Player bar stack-order, driven by the PLAYER PANE width (see container-type on
+/* Player bar stacking, driven by the PLAYER PANE width (see container-type on
    .player), so it fires wherever the bar is too narrow to hold info + controls on
    one line — including the two-pane layout at ~900–950px viewports where the
    player column is already narrow, which a viewport media query would miss.
@@ -1524,16 +1529,17 @@ body.app-active #app-main.app[hidden] {
    around the mid-30s rem. 38rem reliably catches a ~550–600px pane (the failing
    screenshot sits at ~34.4rem, right on the old 34rem edge) while keeping genuinely
    wide panes side by side (e.g. a ~620px / ~38.75rem laptop pane, and far wider
-   desktop panes). Erring toward "stacked / controls-above" is the desired
-   direction. Above it, the wide info-left / controls-right layout and the
-   equal-width buttons are unchanged. */
+   desktop panes). Erring toward stacking is the desired direction. Above it, the
+   wide info-left / controls-right layout and the equal-width buttons are
+   unchanged.
+   The stacked bar keeps SOURCE order — title, then channel/date, then the
+   controls — so the row of buttons sits BELOW the two links it follows in the
+   tab order. It used to be hoisted above them with `order: -1`, which put the
+   focus order and the visual order at odds for every keyboard user. */
 @container player (max-width: 38rem) {
   .player__bar {
     flex-direction: column;
     align-items: stretch;
-  }
-  .player__controls {
-    order: -1;
   }
 }
 

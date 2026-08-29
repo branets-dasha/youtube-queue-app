@@ -19,8 +19,8 @@
     <script type="module" src="js/stash-page.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#queue-list">Skip to stash</a>
     <a class="skip-link" href="#player-pane">Skip to player</a>
+    <a class="skip-link" href="#queue-list">Skip to stash</a>
 
     <!-- Top-right toast notifications (progress, success, errors, info). -->
     <div id="toast-container" class="toasts" aria-live="polite"></div>
@@ -196,45 +196,8 @@
         </p>
 
         <div class="workspace">
-          <!-- LEFT: the stash (its own scrollbar) -->
-          <div class="workspace__queue">
-            <!-- Clean-up control pinned at the TOP of the scrolling stash pane.
-                 Deliberately NO aria-label: the visible "(n)" count then stays
-                 part of the accessible name, so the button announces how much it
-                 is about to delete. -->
-            <div class="queue-header">
-              <button
-                id="cleanup-btn"
-                class="btn"
-                type="button"
-                title="Delete every video marked Remove"
-                disabled
-              >
-                Clean up (0)
-              </button>
-              <button
-                id="scroll-playing-btn"
-                class="btn btn--icon queue-header__jump"
-                type="button"
-                aria-label="Scroll to the playing video"
-                title="Scroll to the playing video"
-                disabled
-              >
-                ⮦
-              </button>
-            </div>
-            <ul id="queue-list" class="queue" role="list" aria-label="Stashed videos" tabindex="-1"></ul>
-
-            <div id="empty-state" class="empty" tabindex="-1" hidden>
-              <p class="empty__title">Your stash is empty</p>
-              <p class="empty__sub">
-                Paste a YouTube link above to add your first video.
-              </p>
-            </div>
-          </div>
-
-          <!-- RIGHT: the always-visible player. tabindex="0" makes the pane a
-               focus target in its own right — Tab out of the queue lands on it,
+          <!-- LEFT: the always-visible player. tabindex="0" makes the pane a
+               focus target in its own right — Tab out of the toolbar lands on it,
                and so does the '/' key — and once focused it scrolls with the
                arrows / PageUp / PageDown, otherwise a long description is
                unreachable without tabbing through every control of every card. -->
@@ -327,6 +290,43 @@
               <div id="player-description" class="player__description" hidden></div>
             </div>
           </aside>
+
+          <!-- RIGHT: the stash (its own scrollbar) -->
+          <div class="workspace__queue">
+            <!-- Clean-up control pinned at the TOP of the scrolling stash pane.
+                 Deliberately NO aria-label: the visible "(n)" count then stays
+                 part of the accessible name, so the button announces how much it
+                 is about to delete. -->
+            <div class="queue-header">
+              <button
+                id="cleanup-btn"
+                class="btn"
+                type="button"
+                title="Delete every video marked Remove"
+                disabled
+              >
+                Clean up (0)
+              </button>
+              <button
+                id="scroll-playing-btn"
+                class="btn btn--icon queue-header__jump"
+                type="button"
+                aria-label="Scroll to the playing video"
+                title="Scroll to the playing video"
+                disabled
+              >
+                ⮦
+              </button>
+            </div>
+            <ul id="queue-list" class="queue" role="list" aria-label="Stashed videos" tabindex="-1"></ul>
+
+            <div id="empty-state" class="empty" tabindex="-1" hidden>
+              <p class="empty__title">Your stash is empty</p>
+              <p class="empty__sub">
+                Paste a YouTube link above to add your first video.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
     </main>

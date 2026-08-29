@@ -460,9 +460,10 @@ export function focusFirst(...candidates) {
  *   wider than the list: it takes in the sticky header buttons, from which a
  *   press enters the list rather than doing nothing.
  * @param {HTMLElement|null} opts.playerPane the `.workspace__player` aside. It
- *   carries `tabindex="0"` in the HTML, so Tab out of the queue lands on it and
- *   so does '/'; once focused it scrolls natively, the only way to read a long
- *   description without tabbing through every card's controls.
+ *   carries `tabindex="0"` in the HTML, so it is a tab stop of its own — it
+ *   PRECEDES the queue in the markup, so Tab reaches it on the way IN, and '/'
+ *   reaches it from the queue; once focused it scrolls natively, the only way to
+ *   read a long description without tabbing through every card's controls.
  * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
  *   the document scrolls rather than the panes — the question initCurtain asks,
  *   asked the same way.
