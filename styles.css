@@ -806,15 +806,16 @@ main {
   line-height: 1;
   text-transform: uppercase;
 }
-/* In a meta row — and ONLY there; on channels.html the same avatar is a plain
-   flex item of .chan__link — it is out of flow, pinned to the row's left edge
+/* In a meta row and in a channel row alike, it is out of flow, pinned to the
+   row's left edge
    and centred on the row's FULL height, which is what centres it against a name
    that has wrapped. It stays a DESCENDANT of .row__channel-link, so a click on
    it still follows the link: out of flow is a geometry exemption, not a
    hit-testing one. (position blockifies the placeholder's inline-flex to flex,
    so its letter stays centred.) */
 .row__sub .row__avatar,
-.player__meta .row__avatar {
+.player__meta .row__avatar,
+.chan__identity .row__avatar {
   position: absolute;
   left: 0;
   top: 50%;
@@ -1550,6 +1551,13 @@ body.app-active #app-main.app[hidden] {
   flex-direction: column;
   gap: 8px;
 }
+/* An author `display` beats the UA [hidden] rule, so anything hideable needs its
+   own [hidden] { display: none } — the same rule .queue carries. Without it the
+   empty list keeps its padding box and stays in the accessibility tree behind
+   the "no channels" state. */
+.channels[hidden] {
+  display: none;
+}
 /* flex-wrap lets the controls drop under the title on very narrow widths, so
    the stacked layout just works with no dedicated breakpoint. */
 .chan {
@@ -1562,39 +1570,89 @@ body.app-active #app-main.app[hidden] {
   border-radius: var(--radius);
   padding: 8px 14px;
   box-shadow: var(--shadow);
+  /* NO scroll-margin-top, unlike .row — nothing on this page overlays a row. The
+     topbar here is `position: static` and scrolls away, so a row brought to the
+     very top edge is fully visible; .row needs its clearance because the queue's
+     .queue-header is sticky and would cover a card landed there. A margin would
+     now only push an upward landing further down the viewport than the browser
+     asked for (measured 66px at 1280px), which is why it went when the page keys
+     stopped forcing a top-edge landing. */
 }
-/* Avatar + name in ONE anchor to the channel on YouTube, like a card's channel
-   badge: muted inline look, and the same idiom as .row__title and
-   .row__channel-link — hover turns the name accent, focus draws a ring, and
-   nothing underlines. */
-.chan__link {
-  display: inline-flex;
+/* Focus / selection — .row:focus-visible's rule and its reasoning, on this page's
+   row; see there for why it is a box-shadow ring over a transparent outline.
+   The SPLIT is what differs, so only this is stated here. A .chan is not a
+   control you activate: it is the cursor position for ↑/↓, x and 1/5/2 (see
+   initListWalk in page-chrome.js), and :focus-visible alone does not mark it.
+   Chrome propagates keyboard modality into a programmatic focus(), so the pane
+   cycle's landing already rings through :focus-visible with no help. The case
+   that needs the class is a MOUSE press on the row's own body — :focus-visible
+   is false there, and without .chan--pointed the cursor those keys act on would
+   be invisible after the one pointer gesture that IS a placement. Not
+   :focus-within either — clicking a speed button or Ignore focuses that control
+   and leaves the row unringed.
+   Order is only readability here, unlike the card's: there is no .chan:hover for
+   an identically-weighted rule to have to sit after. */
+.chan:focus-visible,
+.chan.chan--pointed:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus), var(--shadow);
+}
+/* .row__sub's job on this page: the flex item that holds the channel's identity,
+   the positioning context its avatar is pinned to, and the reserved space the
+   avatar sits in. min-height is the avatar's own — nothing else sets it once the
+   avatar is out of flow, and without it a one-line name would collapse the row.
+   padding-left is the 36px it vacated plus the 10px gap this row has always had
+   between avatar and name (the card reserves 42px because its gap is 6px). */
+.chan__identity {
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
   flex: 1 1 200px;
+  min-width: 0;
+  min-height: 36px;
+  padding-left: 46px;
+}
+/* .row__subtext's job: ONE block of ordinary inline content, so the link inside
+   stays inline and its ring can fragment per line. A flex container blockifies
+   its children, so the link cannot be the flex item itself. */
+.chan__identity-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* The anchor holds the avatar AND the name, so clicking either navigates — but
+   only the NAME is in flow inside it, so the link is exactly as wide as its text
+   and the empty space beside a short name belongs to the row. Plain inline, with
+   no box of its own, which is what lets a long name wrap inside it.
+   Same idiom as .row__title and .row__channel-link: hover turns the name accent,
+   focus draws a ring, nothing underlines. */
+.chan__link {
   color: inherit;
   text-decoration: none;
 }
 .chan__link:hover .chan__title {
   color: var(--accent);
 }
-/* The text links' 1px offset, and a corner radius rather than a pill:
-   .chan__title wraps, so this box grows tall, and a 999px radius then makes end
-   caps of half that height — measured cutting through the last glyph of the first
-   line at 400px. var(--radius) rather than .row__channel-link's 4px because this
-   box IS the avatar + the name, not text alone. */
+/* .row__channel-link's ring exactly, now that this box is the NAME alone rather
+   than the avatar and the name together: the text links' 1px offset at a 4px
+   radius. Still not a 999px pill — .chan__title wraps, and a pill would make end
+   caps of half the box's height, curving back through the text. A wrapped name
+   rings per line fragment, as a wrapped card title does. */
 .chan__link:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
-  border-radius: var(--radius);
+  border-radius: 4px;
 }
 .chan__title {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-/* Ignored channels grey their identity — never the controls — like handled cards. */
-.chan--ignored .chan__link {
+/* Ignored channels grey their identity — never the controls — like handled cards.
+   On .chan__identity rather than the link: `filter` on a non-none value makes an
+   element the containing block for its absolutely-positioned descendants, so
+   greying the link would re-anchor the avatar to the link's inline box and drop
+   it on top of the name. The identity is the intended containing block already. */
+.chan--ignored .chan__identity {
   opacity: 0.5;
   filter: grayscale(0.7);
 }

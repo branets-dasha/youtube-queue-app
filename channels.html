@@ -15,6 +15,8 @@
     <script type="module" src="js/channels-page.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#channel-list">Skip to channels</a>
+
     <!-- Privacy "curtain": the same full-viewport overlay index.html carries.
          Here it only lifts on wheel-up and toggles on Esc — see the
          coverOnWheelDown note in channels-page.js. -->
@@ -40,9 +42,27 @@
     </header>
 
     <main class="channels-main">
-      <ul id="channel-list" class="channels" role="list" aria-label="Subscribed channels"></ul>
+      <p class="shortcuts" aria-hidden="false">
+        <strong>Channels:</strong> <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> move &middot;
+        <kbd>x</kbd> ignore &middot;
+        <kbd>1</kbd>&middot;<kbd>5</kbd>&middot;<kbd>2</kbd> speed &nbsp;&middot;&nbsp;
+        <strong>Other:</strong> <kbd>[</kbd>&middot;<kbd>]</kbd> prev/next pane &middot;
+        <kbd>Esc</kbd> curtain
+      </p>
 
-      <div id="channels-empty" class="empty" hidden>
+      <ul
+        id="channel-list"
+        class="channels"
+        role="list"
+        aria-label="Subscribed channels"
+        tabindex="-1"
+      ></ul>
+
+      <!-- tabindex="-1" so it can be the skip link's second rung, exactly as
+           #empty-state is on the queue pages: with no channels the <ul> above is
+           genuinely hidden, and this is what occupies the region instead. The
+           shared .empty:focus rule keeps it ringless — a landing, not a control. -->
+      <div id="channels-empty" class="empty" tabindex="-1" hidden>
         <p class="empty__title">No channels yet</p>
         <p class="empty__sub">
           Sign in and fetch on the <a href="index.html">Subscriptions page</a> first —

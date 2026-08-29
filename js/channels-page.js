@@ -19,7 +19,7 @@ import {
   channelPreferredSpeed,
 } from './queue.js';
 import { el, buildAvatar, setCardSpeed, setVisible } from './ui.js';
-import { initCurtain, initPaneNav } from './page-chrome.js';
+import { focusFirst, initCurtain, initListWalk, initPaneNav } from './page-chrome.js';
 
 let prefs = {};
 
@@ -31,6 +31,22 @@ let curtain = null;
 // here and NEITHER role, so [ and ] work and '/' is inert — this page has no
 // queue and no player for it to jump between.
 let paneNav = null;
+
+// The channel list's arrow walk, from page-chrome.js's initListWalk(). Not the
+// queue's initQueueFocus: that one is built around video cards, a windowing
+// footer, the card menu and re-renders that change which records exist, none of
+// which this page has (see the banner over initListWalk).
+let walk = null;
+
+// Digit -> preferred speed for the FOCUSED row, the same three presets and the
+// same mnemonic as the queue's CARD_SPEED_KEYS ('5' is "point-five" for 1.5×, so
+// an explicit table rather than Number(key)). A Map, so a stray key name can
+// never resolve to an inherited Object property.
+const CHANNEL_SPEED_KEYS = new Map([
+  ['1', 1],
+  ['5', 1.5],
+  ['2', 2],
+]);
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -65,14 +81,48 @@ function init() {
     coverOnWheelDown: false,
   });
 
-  // The pane cycle, IN DOM ORDER: the nav strip and the channel list, both
-  // taking the default landing (first focusable — a nav link, the first
-  // channel's link). Worth having on a page with only two: the list is long
-  // enough that getting back to the nav from inside it is otherwise a run of
-  // Shift+Tab.
-  paneNav = initPaneNav({
-    panes: [{ el: document.querySelector('.topbar__nav') }, { el: listEl }],
+  // The channel walk: ↑/↓ by one row, PageUp/PageDown by QUEUE_PAGE_STEP, and
+  // Home/End to the ends — the queue's six keys over this page's one column.
+  // Rows carry tabindex="0" (see buildChannelRow), so they are the stops the
+  // walk moves between and the tab stop their own controls follow.
+  walk = initListWalk({
+    list: listEl,
+    itemSelector: '.chan',
+    idKey: 'channelId',
+    pointedClass: 'chan--pointed',
   });
+
+  // The pane cycle, IN DOM ORDER: the nav strip and the channel list. The nav
+  // takes the default landing (its first link); the LIST cannot, and this is not
+  // cosmetic — now that a row is focusable, paneFocusables matches the <li>
+  // itself, which precedes its own link in DOM order, so the default landing
+  // silently moved from the first channel's link to the first row and either way
+  // restarts at the top. focusRemembered resumes at the row the user left, and
+  // reports what it landed on, which is what "skip this pane" is decided by.
+  paneNav = initPaneNav({
+    panes: [
+      { el: document.querySelector('.topbar__nav') },
+      { el: listEl, focus: () => walk.focusRemembered({ preventScroll: false }) },
+    ],
+  });
+
+  // The skip link does NOT navigate its fragment, for the two reasons the queue's
+  // does not either: the navigation would scroll the list into view on its own,
+  // nudging a page already at the top, and landing on an invisible container
+  // reads as nothing having happened for what is a keyboard gesture. focusEdge
+  // is "the first row" — it rings on arrival, :focus-visible propagating from the
+  // keyboard-focused link. It declines on an EMPTY list, where the <ul> is
+  // genuinely `hidden` and focusing it would be a silent no-op, so the ladder
+  // falls to the empty state, which is what actually occupies the region;
+  // focusFirst verifies each candidate really took focus, so the <ul> behind it
+  // costs nothing and stays the tail.
+  const skipToList = document.querySelector('.skip-link[href="#channel-list"]');
+  if (skipToList) {
+    skipToList.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!(walk && walk.focusEdge(-1))) focusFirst(emptyEl, listEl);
+    });
+  }
 
   document.addEventListener('keydown', onKeydown);
 }
@@ -96,13 +146,66 @@ function onKeydown(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   const key = e.key.toLowerCase();
-  if (key === '[' || key === ']') {
+  if (key === 'arrowup' || key === 'arrowdown') {
+    // ↑/↓ walk the channel rows. The whole rule lives in page-chrome's moveItem
+    // — what it walks, the clamp at both ends, and the entry from outside that
+    // makes the list walkable straight off a fresh load, with focus still on
+    // <body> — and it reports whether it TOOK the key. preventDefault ONLY on
+    // true, so everything it declines keeps its native scrolling: a clamp at
+    // either end, and every key on a page with no channels at all.
+    if (walk && walk.moveItem(key === 'arrowup' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'pageup' || key === 'pagedown') {
+    // The SAME move as ↑/↓, only further: moveItem steps QUEUE_PAGE_STEP rows
+    // instead of one. The step size is the only difference — the scroll is the
+    // browser's own either way, so with many rows on screen a page jump often
+    // moves focus without scrolling at all. Same took-the-key contract, so a
+    // clamp at either end reports false and native scrolling finishes the job,
+    // and the same entry rule, a press from outside the list landing on the
+    // remembered row rather than paging from nowhere.
+    if (walk && walk.moveItem(key === 'pageup' ? -1 : 1, { page: true })) e.preventDefault();
+  } else if (key === 'home' || key === 'end') {
+    // ABSOLUTE keys: the first / last ROW, named rather than stepped to, from
+    // anywhere on the page. Only an empty list declines, leaving Home/End their
+    // native meaning.
+    if (walk && walk.focusEdge(key === 'home' ? -1 : 1)) e.preventDefault();
+  } else if (key === '[' || key === ']') {
     // [ / ] step the pane cycle — here just the nav strip and the channel list.
     // page-chrome's movePane owns the wrap, the skip past a pane that cannot
     // take focus and the fallback to the last pane focus was in, and reports
     // whether it took the key; neither bracket has a native action to preserve.
     if (paneNav && paneNav.movePane(key === '[' ? -1 : 1)) e.preventDefault();
+  } else if (key === 'x') {
+    // x = Ignore, this page's counterpart to the queue's skip — both mean "keep
+    // this out of the queue", and both toggle. Focus does NOT move: an ignored
+    // channel greys in place and is never removed, so there is nothing to rescue.
+    const channelId = focusedChannelId();
+    if (channelId) {
+      e.preventDefault();
+      onToggleIgnore(channelId);
+    }
+  } else if (CHANNEL_SPEED_KEYS.has(key)) {
+    // 1 / 5 / 2 = the same three presets the cards use, routed through the same
+    // handler the speed buttons call — so pressing the one already active clears
+    // the pref, exactly as clicking it does. No focus move, like the card keys.
+    const channelId = focusedChannelId();
+    if (channelId) {
+      e.preventDefault();
+      onSpeed(channelId, CHANNEL_SPEED_KEYS.get(key));
+    }
   }
+}
+
+/**
+ * The channelId of the row that CONTAINS focus, or null when focus is outside
+ * the list altogether. Resolved by closest('.chan') rather than an exact match,
+ * which is what keeps the per-row keys alive while focus sits on a control
+ * INSIDE a row — the channel link, a speed button, Ignore.
+ * @returns {string|null}
+ */
+function focusedChannelId() {
+  const active = document.activeElement;
+  const row = active && active.closest ? active.closest('.chan') : null;
+  return (row && row.dataset.channelId) || null;
 }
 
 /**
@@ -167,10 +270,28 @@ function buildChannelRow(ch) {
     onclick: () => onToggleIgnore(ch.channelId),
   });
 
+  // The card meta row's shape, for the same reason (styles.css, .row__sub): the
+  // OUTER div is the flex item and the positioning context the avatar is pinned
+  // to, the INNER span is the inline formatting context, and the link inside it
+  // is plain inline — so its focus ring hugs the NAME instead of running out to
+  // the end of the row. Two elements because a flex container blockifies its
+  // children: the link has to be a grandchild to stay inline.
+  const identity = el('div', { class: 'chan__identity' }, [
+    el('span', { class: 'chan__identity-text' }, [link]),
+  ]);
+
   const li = el(
     'li',
-    { class: 'chan', role: 'listitem', dataset: { channelId: ch.channelId } },
-    [link, el('div', { class: 'chan__controls' }, [speeds, ignoreBtn])]
+    {
+      class: 'chan',
+      role: 'listitem',
+      // A REAL tab stop, like a queue card (ui.js) and like the panes: the row
+      // is the cursor position x and 1/5/2 act on, and reachable by the walk but
+      // not by Tab would be incoherent. Its own controls follow it in the order.
+      tabindex: '0',
+      dataset: { channelId: ch.channelId },
+    },
+    [identity, el('div', { class: 'chan__controls' }, [speeds, ignoreBtn])]
   );
   syncRow(li, ch.channelId);
   return li;
