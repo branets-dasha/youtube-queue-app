@@ -250,6 +250,16 @@ function buildChannelRow(ch) {
     onclick: () => onToggleIgnore(ch.channelId),
   });
 
+  // The card meta row's shape, for the same reason (styles.css, .row__sub): the
+  // OUTER div is the flex item and the positioning context the avatar is pinned
+  // to, the INNER span is the inline formatting context, and the link inside it
+  // is plain inline — so its focus ring hugs the NAME instead of running out to
+  // the end of the row. Two elements because a flex container blockifies its
+  // children: the link has to be a grandchild to stay inline.
+  const identity = el('div', { class: 'chan__identity' }, [
+    el('span', { class: 'chan__identity-text' }, [link]),
+  ]);
+
   const li = el(
     'li',
     {
@@ -261,7 +271,7 @@ function buildChannelRow(ch) {
       tabindex: '0',
       dataset: { channelId: ch.channelId },
     },
-    [link, el('div', { class: 'chan__controls' }, [speeds, ignoreBtn])]
+    [identity, el('div', { class: 'chan__controls' }, [speeds, ignoreBtn])]
   );
   syncRow(li, ch.channelId);
   return li;
