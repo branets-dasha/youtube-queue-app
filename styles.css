@@ -29,8 +29,10 @@
   --queue-w: 400px; /* fixed queue column, right-hand side */
   --pane-gap: 20px; /* gutter between the player and queue panes */
   /* The width a 16:9 video reaches once its HEIGHT is what limits it — 420px is
-     the chrome above and below it. .player takes min(100%, this), so the video
-     is width-limited below the frame cap and height-limited at or above it. */
+     the chrome above and below it. Consumed ONLY by the frame's max-width: the
+     cap sizes the player column to this, and .player then fills that column, so
+     the video is height-limited wherever the cap binds and column-limited where
+     it does not (below the cap's 900px floor, where it grows to fill instead). */
   --video-w: calc((100dvh - 420px) * 16 / 9);
   --app-pad-x: 12px; /* side padding of the app view's main */
 }
@@ -1254,11 +1256,16 @@ body.app-active #app-main.app[hidden] {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  /* Track the VIDEO's rendered width (the same 16:9 height-cap as the frame),
-     left-aligned in the pane. The frame, now-playing info, and controls all live
-     in this wrapper, so the info aligns to the video's LEFT edge and the
-     right-aligned controls align to the video's RIGHT edge (not the pane/screen). */
-  width: min(100%, var(--video-w));
+  /* FILLS the pane. The 16:9 height cap that used to live here now lives in the
+     frame's max-width (see `body.app-active main`), which sizes the player
+     column to the video — so filling the column IS tracking the video wherever
+     that cap binds, and this rule is a no-op there. Where it does NOT bind (the
+     cap's 900px floor, i.e. a short viewport) the video grows to fill the column
+     instead of leaving dead space beside it, pushing the info and controls below
+     the fold; the pane scrolls, so they stay reachable. The frame, now-playing
+     info and controls all live in this wrapper, so the info still aligns to the
+     video's LEFT edge and the right-aligned controls to its RIGHT edge. */
+  width: 100%;
   /* Query container: whether the player__bar can hold info + controls side by
      side depends on THIS wrapper's width (which tracks the video), NOT the
      viewport — so the stack-order switch below is driven by a @container query,
