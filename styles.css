@@ -1190,17 +1190,17 @@ body.app-active #app-main.app[hidden] {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-/* Jump buttons ("jump to last skipped", "scroll to playing"): pushed to the far
-   RIGHT edge of the header (auto margin absorbs the free space) while Trim front
-   / Hide skipped stay grouped at the left. Sizing/disabled look reuse the base
-   .btn / .btn--icon. */
-.queue-header__jump {
+/* The header reads as TWO groups: the playing-jump and Trim front at the left,
+   Hide skipped and the skipped-jump at the right. This marks the first item of
+   the RIGHT group, and its auto margin absorbs all the free space between them.
+   An auto margin moves no element PAST another, so DOM order stays the visual
+   order and the tab order matches what is drawn — which is why the grouping is
+   done this way and not with `order` or `row-reverse` (this stylesheet declares
+   `order` nowhere; see .workspace). Sizing and the disabled look come from the
+   base .btn / .btn--icon. stash.html has only the left group, so it carries no
+   split and its two buttons sit together at the left. */
+.queue-header__split {
   margin-left: auto;
-}
-/* Only the FIRST jump button absorbs the free space — the rest sit right next to
-   it (separated by the header's flex gap) as one right-aligned group. */
-.queue-header__jump ~ .queue-header__jump {
-  margin-left: 0;
 }
 .workspace__player {
   min-height: 0;

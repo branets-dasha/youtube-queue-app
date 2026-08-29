@@ -326,6 +326,16 @@
             <!-- Cleanup + hide-handled controls pinned at the TOP of the queue pane. -->
             <div class="queue-header">
               <button
+                id="scroll-playing-btn"
+                class="btn btn--icon"
+                type="button"
+                aria-label="Scroll to the playing video"
+                title="Scroll to the playing video"
+                disabled
+              >
+                ⮧
+              </button>
+              <button
                 id="cleanup-btn"
                 class="btn"
                 type="button"
@@ -336,7 +346,7 @@
               </button>
               <button
                 id="hide-marked-btn"
-                class="btn"
+                class="btn queue-header__split"
                 type="button"
                 aria-pressed="false"
               >
@@ -344,23 +354,13 @@
               </button>
               <button
                 id="scroll-skipped-btn"
-                class="btn btn--icon queue-header__jump"
+                class="btn btn--icon"
                 type="button"
                 aria-label="Jump to last skipped video"
                 title="Jump to last skipped video"
                 disabled
               >
                 ⭳
-              </button>
-              <button
-                id="scroll-playing-btn"
-                class="btn btn--icon queue-header__jump"
-                type="button"
-                aria-label="Scroll to the playing video"
-                title="Scroll to the playing video"
-                disabled
-              >
-                ⮦
               </button>
             </div>
             <ul id="queue-list" class="queue" role="list" aria-label="Video queue" tabindex="-1"></ul>

@@ -299,6 +299,16 @@
                  is about to delete. -->
             <div class="queue-header">
               <button
+                id="scroll-playing-btn"
+                class="btn btn--icon"
+                type="button"
+                aria-label="Scroll to the playing video"
+                title="Scroll to the playing video"
+                disabled
+              >
+                ⮧
+              </button>
+              <button
                 id="cleanup-btn"
                 class="btn"
                 type="button"
@@ -306,16 +316,6 @@
                 disabled
               >
                 Clean up (0)
-              </button>
-              <button
-                id="scroll-playing-btn"
-                class="btn btn--icon queue-header__jump"
-                type="button"
-                aria-label="Scroll to the playing video"
-                title="Scroll to the playing video"
-                disabled
-              >
-                ⮦
               </button>
             </div>
             <ul id="queue-list" class="queue" role="list" aria-label="Stashed videos" tabindex="-1"></ul>
