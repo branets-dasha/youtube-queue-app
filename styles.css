@@ -22,6 +22,17 @@
   --maxw: 860px; /* readable width for onboarding panels / prose */
   --maxw-wide: 1320px; /* wide frame so the card grid shows several per row */
   --card-min: 400px; /* min card width before the grid wraps to fewer columns */
+  /* Two-pane geometry. Declared here because the app frame's max-width is
+     computed FROM them (see `body.app-active main`): the queue column, the
+     gutter and the video's width have to be one set of numbers, or the frame
+     and the grid disagree and the empty space they exist to remove reopens. */
+  --queue-w: 400px; /* fixed queue column, right-hand side */
+  --pane-gap: 20px; /* gutter between the player and queue panes */
+  /* The width a 16:9 video reaches once its HEIGHT is what limits it — 420px is
+     the chrome above and below it. .player takes min(100%, this), so the video
+     is width-limited below the frame cap and height-limited at or above it. */
+  --video-w: calc((100dvh - 420px) * 16 / 9);
+  --app-pad-x: 12px; /* side padding of the app view's main */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1080,17 +1091,34 @@ body.app-active {
 }
 body.app-active .topbar {
   flex: 0 0 auto;
-  max-width: none; /* align header with the full-width, left-stuck workspace */
+  /* Full width, but every child is centred text or a centred flex row, so the
+     header shares one centre axis with the capped, centred main below it. */
+  max-width: none;
 }
+/* CENTRED, and capped at exactly the width the two panes can fill: the video
+   (height-limited — see --video-w), the gutter, the queue column, and this
+   element's own side padding, which border-box puts inside the max-width. Below
+   that cap the frame is the viewport and nothing here binds, so the layout is
+   untouched; at and above it the player column stops outgrowing the video and
+   the empty space that used to open between the video and the queue never
+   appears. The 900px floor keeps a very short viewport from squeezing the whole
+   page narrower than the stacked breakpoint while still in two panes — the cost
+   is that some empty space returns below ~690px of viewport height. There is
+   deliberately no --maxw-wide upper bound: on a large TALL screen the video is
+   width-limited and already fills its column, so clamping there would shrink the
+   video to remove a gap that is not there. */
 body.app-active main {
   flex: 1 1 auto;
   min-height: 0;
-  max-width: none; /* NO centering — span the full viewport width, flush left */
+  max-width: max(
+    900px,
+    calc(var(--video-w) + var(--pane-gap) + var(--queue-w) + var(--app-pad-x) * 2)
+  );
   width: 100%;
-  margin: 0;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  padding: 8px 12px 12px;
+  padding: 8px var(--app-pad-x) 12px;
 }
 body.app-active .footer {
   display: none; /* reclaim vertical space for the two-pane view */
@@ -1119,8 +1147,8 @@ body.app-active #app-main.app[hidden] {
      and in the stacked layout below, which is why this stylesheet declares
      `order` NOWHERE and must not start: both declarations it used to carry
      put focus order at odds with visual order. */
-  grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) var(--queue-w);
+  gap: var(--pane-gap);
 }
 .workspace__queue {
   min-height: 0;
@@ -1230,7 +1258,7 @@ body.app-active #app-main.app[hidden] {
      left-aligned in the pane. The frame, now-playing info, and controls all live
      in this wrapper, so the info aligns to the video's LEFT edge and the
      right-aligned controls align to the video's RIGHT edge (not the pane/screen). */
-  width: min(100%, calc((100dvh - 420px) * 16 / 9));
+  width: min(100%, var(--video-w));
   /* Query container: whether the player__bar can hold info + controls side by
      side depends on THIS wrapper's width (which tracks the video), NOT the
      viewport — so the stack-order switch below is driven by a @container query,
@@ -1717,8 +1745,8 @@ body.app-active #app-main.app[hidden] {
 /* ---- Stash page (stash.html) ---- */
 
 /* The "add a video by link" block. It needs its OWN max-width: body.app-active
-   strips main's (`max-width: none`, so the workspace can span the viewport), and
-   without one the input would stretch the full width of an 1800px screen. Prose
+   replaces main's with the two-pane frame cap, which is far wider than prose,
+   and without one the input would stretch the full width of that frame. Prose
    width is the same measure the onboarding panels use. */
 .stash-add-block {
   max-width: var(--maxw);
