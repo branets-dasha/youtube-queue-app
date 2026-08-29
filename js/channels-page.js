@@ -19,7 +19,7 @@ import {
   channelPreferredSpeed,
 } from './queue.js';
 import { el, buildAvatar, setCardSpeed, setVisible } from './ui.js';
-import { initCurtain, initListWalk, initPaneNav } from './page-chrome.js';
+import { focusFirst, initCurtain, initListWalk, initPaneNav } from './page-chrome.js';
 
 let prefs = {};
 
@@ -105,6 +105,24 @@ function init() {
       { el: listEl, focus: () => walk.focusRemembered({ preventScroll: false }) },
     ],
   });
+
+  // The skip link does NOT navigate its fragment, for the two reasons the queue's
+  // does not either: the navigation would scroll the list into view on its own,
+  // nudging a page already at the top, and landing on an invisible container
+  // reads as nothing having happened for what is a keyboard gesture. focusEdge
+  // is "the first row" — it rings on arrival, :focus-visible propagating from the
+  // keyboard-focused link. It declines on an EMPTY list, where the <ul> is
+  // genuinely `hidden` and focusing it would be a silent no-op, so the ladder
+  // falls to the empty state, which is what actually occupies the region;
+  // focusFirst verifies each candidate really took focus, so the <ul> behind it
+  // costs nothing and stays the tail.
+  const skipToList = document.querySelector('.skip-link[href="#channel-list"]');
+  if (skipToList) {
+    skipToList.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!(walk && walk.focusEdge(-1))) focusFirst(emptyEl, listEl);
+    });
+  }
 
   document.addEventListener('keydown', onKeydown);
 }
