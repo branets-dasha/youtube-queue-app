@@ -379,7 +379,7 @@ function bindEvents() {
 
   // The curtain binds its own wheel handler and keeps its own covering flag; Esc
   // stays here, in onGlobalKeydown, because page-chrome owns no shortcuts. The
-  // defaults ('.workspace', <=900px, cover on wheel-down) are right for this
+  // defaults ('.workspace', <=1080px, cover on wheel-down) are right for this
   // page: it IS the 100dvh `app-active` two-pane layout.
   curtain = initCurtain({ node: dom.curtain });
 
@@ -409,29 +409,31 @@ function bindEvents() {
     });
   }
 
-  // The pane cycle, IN DOM ORDER — the subscriptions cycle with the add form
-  // inserted after the toolbar. THREE override the default landing: the queue
-  // resumes at the remembered card (letting the scroll follow, unlike every
-  // other caller of focusRemembered, since arriving from another pane has no
-  // scroll to protect), the player is focused WHOLE so its description scrolls
-  // natively, and the add form is focused whole because its only controls are a
-  // text field the typing guard in onGlobalKeydown would swallow [ ] and / in —
-  // landing there would take the cycle's own keys away. The override is required,
-  // not decorative: paneFocusables is a querySelectorAll, which never matches the
-  // element itself, so the default path would land on the input regardless of the
-  // form's tabindex.
+  // The pane cycle, IN DOM ORDER (which is also visual order — see the note on
+  // the subscriptions array) — the subscriptions cycle with the add form
+  // inserted after the toolbar, where the markup puts it: ahead of the whole
+  // workspace, so it stays before the player either way. THREE override the
+  // default landing: the queue resumes at the remembered card (letting the
+  // scroll follow, unlike every other caller of focusRemembered, since arriving
+  // from another pane has no scroll to protect), the player is focused WHOLE so
+  // its description scrolls natively, and the add form is focused whole because
+  // its only controls are a text field the typing guard in onGlobalKeydown would
+  // swallow [ ] and / in — landing there would take the cycle's own keys away.
+  // The override is required, not decorative: paneFocusables is a
+  // querySelectorAll, which never matches the element itself, so the default
+  // path would land on the input regardless of the form's tabindex.
   paneNav = initPaneNav({
     panes: [
       { el: dom.topbarNav },
       { el: dom.toolbar },
       { el: dom.addForm, focus: () => focusFirst(dom.addForm) },
+      { el: dom.playerPane, role: 'player', focus: () => focusFirst(dom.playerPane) },
       { el: dom.queueHeader },
       {
         el: dom.queueList,
         role: 'queue',
         focus: () => (queueFocus ? queueFocus.focusRemembered({ preventScroll: false }) : null),
       },
-      { el: dom.playerPane, role: 'player', focus: () => focusFirst(dom.playerPane) },
     ],
   });
 
@@ -1045,7 +1047,7 @@ function renderKeepingPlace() {
   // pane wide, the DOCUMENT stacked, where the pane is `overflow: visible` and
   // its scrollTop is always 0 — read directly, the save returned 0 and the
   // restore did nothing, leaving the refocused card ~6000px below the fold.
-  // The 900px breakpoint is a media query over there, never measured here.
+  // The 1080px breakpoint is a media query over there, never measured here.
   const restoreScroll = queueFocus ? queueFocus.captureQueueScroll() : null;
 
   const active = document.activeElement;

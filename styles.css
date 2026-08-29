@@ -22,6 +22,19 @@
   --maxw: 860px; /* readable width for onboarding panels / prose */
   --maxw-wide: 1320px; /* wide frame so the card grid shows several per row */
   --card-min: 400px; /* min card width before the grid wraps to fewer columns */
+  /* Two-pane geometry. Declared here because the app frame's max-width is
+     computed FROM them (see `body.app-active main`): the queue column, the
+     gutter and the video's width have to be one set of numbers, or the frame
+     and the grid disagree and the empty space they exist to remove reopens. */
+  --queue-w: 400px; /* fixed queue column, right-hand side */
+  --pane-gap: 20px; /* gutter between the player and queue panes */
+  /* The width a 16:9 video reaches once its HEIGHT is what limits it — 420px is
+     the chrome above and below it. Consumed ONLY by the frame's max-width: the
+     cap sizes the player column to this, and .player then fills that column, so
+     the video is height-limited wherever the cap binds and column-limited where
+     it does not (below the cap's 1080px floor, where it grows to fill instead). */
+  --video-w: calc((100dvh - 420px) * 16 / 9);
+  --app-pad-x: 12px; /* side padding of the app view's main */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -299,7 +312,7 @@ main {
    that edge reads as a second border rather than a ring — worst on .btn--primary,
    where focus-blue sits 1px from a saturated red fill. Total reach is therefore
    4px, inside the 6px of headroom .workspace__player reserves for the controls
-   in it above 900px (below that it clips nothing); read the padding/margin pair
+   in it above 1080px (below that it clips nothing); read the padding/margin pair
    there before widening this further. */
 .btn:focus-visible {
   outline: 2px solid var(--focus);
@@ -561,7 +574,7 @@ main {
   /* Clears the OPAQUE sticky .queue-header: focus() scrolls a card's
      scroll-margin box into view, so without this a keyboard-focused card parks
      underneath it. On the CARD rather than scroll-padding on the pane because
-     the scrollport changes with the layout — .workspace__queue above 900px, the
+     the scrollport changes with the layout — .workspace__queue above 1080px, the
      document below it, which needs its own taller value (see the media query). */
   scroll-margin-top: 60px;
   /* No overflow:hidden here — corner-clipping lives on the thumbnail wrapper, so
@@ -1080,17 +1093,39 @@ body.app-active {
 }
 body.app-active .topbar {
   flex: 0 0 auto;
-  max-width: none; /* align header with the full-width, left-stuck workspace */
+  /* Full width, but every child is centred text or a centred flex row, so the
+     header shares one centre axis with the capped, centred main below it. */
+  max-width: none;
 }
+/* CENTRED, and capped at exactly the width the two panes can fill: the video
+   (height-limited — see --video-w), the gutter, the queue column, and this
+   element's own side padding, which border-box puts inside the max-width. Below
+   that cap the frame is the viewport and nothing here binds, so the layout is
+   untouched; at and above it the player column stops outgrowing the video and
+   the empty space that used to open between the video and the queue never
+   appears. The 1080px floor is what keeps the player column clear of the bar's
+   38rem stacking threshold: it is the stacked layout's breakpoint too, so in two
+   panes the frame is never below it and the column never below 636px — 621px as
+   the container query sees it, once the pane's own scrollbar is off — which clears
+   608px, so the bar never stacks while two panes are on screen. Measure the
+   SCROLLBAR-adjusted width when re-tuning this: 1060px looked sufficient on the
+   column alone and was 7px short in practice. Change one and you must change the
+   other, or the four-state layout comes back. There is
+   deliberately no --maxw-wide upper bound: on a large TALL screen the video is
+   width-limited and already fills its column, so clamping there would shrink the
+   video to remove a gap that is not there. */
 body.app-active main {
   flex: 1 1 auto;
   min-height: 0;
-  max-width: none; /* NO centering — span the full viewport width, flush left */
+  max-width: max(
+    1080px,
+    calc(var(--video-w) + var(--pane-gap) + var(--queue-w) + var(--app-pad-x) * 2)
+  );
   width: 100%;
-  margin: 0;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  padding: 8px 12px 12px;
+  padding: 8px var(--app-pad-x) 12px;
 }
 body.app-active .footer {
   display: none; /* reclaim vertical space for the two-pane view */
@@ -1113,9 +1148,14 @@ body.app-active #app-main.app[hidden] {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* Fixed ~400px queue on the LEFT; the player takes ALL remaining width. */
-  grid-template-columns: 400px minmax(0, 1fr);
-  gap: 20px;
+  /* The player takes ALL remaining width on the LEFT; fixed ~400px queue on
+     the RIGHT. Source order is player-then-queue, so this is plain grid
+     auto-placement and NOT a reorder: visual order and DOM order agree here
+     and in the stacked layout below, which is why this stylesheet declares
+     `order` NOWHERE and must not start: both declarations it used to carry
+     put focus order at odds with visual order. */
+  grid-template-columns: minmax(0, 1fr) var(--queue-w);
+  gap: var(--pane-gap);
 }
 .workspace__queue {
   min-height: 0;
@@ -1124,7 +1164,7 @@ body.app-active #app-main.app[hidden] {
      makes both panes. Without this the pane cannot shrink below its widest card,
      and neither can the column holding it (a track's automatic minimum is
      min-content too, so even 1fr stops there), so one card wider than a narrow
-     viewport pushes the whole PAGE sideways. Free above 900px, where both panes
+     viewport pushes the whole PAGE sideways. Free above 1080px, where both panes
      are scroll containers and that minimum is already 0. */
   min-width: 0;
   overflow-y: auto; /* the queue pane's OWN scrollbar */
@@ -1150,17 +1190,17 @@ body.app-active #app-main.app[hidden] {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-/* Jump buttons ("jump to last skipped", "scroll to playing"): pushed to the far
-   RIGHT edge of the header (auto margin absorbs the free space) while Trim front
-   / Hide skipped stay grouped at the left. Sizing/disabled look reuse the base
-   .btn / .btn--icon. */
-.queue-header__jump {
+/* The header reads as TWO groups: the playing-jump and Trim front at the left,
+   Hide skipped and the skipped-jump at the right. This marks the first item of
+   the RIGHT group, and its auto margin absorbs all the free space between them.
+   An auto margin moves no element PAST another, so DOM order stays the visual
+   order and the tab order matches what is drawn — which is why the grouping is
+   done this way and not with `order` or `row-reverse` (this stylesheet declares
+   `order` nowhere; see .workspace). Sizing and the disabled look come from the
+   base .btn / .btn--icon. stash.html has only the left group, so it carries no
+   split and its two buttons sit together at the left. */
+.queue-header__split {
   margin-left: auto;
-}
-/* Only the FIRST jump button absorbs the free space — the rest sit right next to
-   it (separated by the header's flex gap) as one right-aligned group. */
-.queue-header__jump ~ .queue-header__jump {
-  margin-left: 0;
 }
 .workspace__player {
   min-height: 0;
@@ -1206,7 +1246,7 @@ body.app-active #app-main.app[hidden] {
    painted over by .player__frame (full-bleed, black, flush to the pane's top and
    left corner) and on the right runs through the scrollbar, painted inside that
    same box. 0 rather than 2px only because the box has since grown 6px on every
-   side above 900px (see the padding/margin pair above; below it there is no band
+   side above 1080px (see the padding/margin pair above; below it there is no band
    and the ring hugs the pane's own edge); going negative to win those back
    puts the right-hand segment on the scrollbar again, which rides outward with
    the padding box. Nothing clips it — 20px of .workspace grid gap to the left,
@@ -1221,16 +1261,22 @@ body.app-active #app-main.app[hidden] {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  /* Track the VIDEO's rendered width (the same 16:9 height-cap as the frame),
-     left-aligned in the pane. The frame, now-playing info, and controls all live
-     in this wrapper, so the info aligns to the video's LEFT edge and the
-     right-aligned controls align to the video's RIGHT edge (not the pane/screen). */
-  width: min(100%, calc((100dvh - 420px) * 16 / 9));
+  /* FILLS the pane. The 16:9 height cap that used to live here now lives in the
+     frame's max-width (see `body.app-active main`), which sizes the player
+     column to the video — so filling the column IS tracking the video wherever
+     that cap binds, and this rule is a no-op there. Where it does NOT bind (the
+     cap's 1080px floor, i.e. a short viewport) the video grows to fill the column
+     instead of leaving dead space beside it, pushing the info and controls below
+     the fold; the pane scrolls, so they stay reachable. The frame, now-playing
+     info and controls all live in this wrapper, so the info still aligns to the
+     video's LEFT edge and the right-aligned controls to its RIGHT edge. */
+  width: 100%;
   /* Query container: whether the player__bar can hold info + controls side by
      side depends on THIS wrapper's width (which tracks the video), NOT the
-     viewport — so the stack-order switch below is driven by a @container query,
-     firing in both the two-pane and the stacked (<900px) layouts. Width is set
-     explicitly above, so inline-size containment does not affect it. */
+     viewport — so the stack-order switch below is driven by a @container query.
+     It now fires in the STACKED layout only: the frame's 1080px floor holds the
+     two-pane column above the 38rem threshold. Width is set explicitly above, so
+     inline-size containment does not affect it. */
   container-type: inline-size;
   container-name: player;
 }
@@ -1435,9 +1481,17 @@ body.app-active #app-main.app[hidden] {
   background: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 
-/* Stack below this width: player above the queue; release the full-height lock
-   so the whole page scrolls normally as one column. */
-@media (max-width: 900px) {
+/* Stack below this width: one column, the panes falling in SOURCE order —
+   player above the queue, which is already what they are — and release the
+   full-height lock so the whole page scrolls normally.
+   1080px is not a round number, it is derived: the bar stacks at a 38rem (608px)
+   player column, the column is the frame minus 444px (two 12px page paddings, the
+   20px gutter, the 400px queue), and a scrolling player pane takes another ~15px.
+   608 + 444 + 15 = 1067, so the two-pane layout starts above that with a little
+   slack. Below it the document scrolls, which is also what stops the fixed top
+   chrome from squeezing a player that cannot fit beside it. It MUST stay equal to
+   the frame cap's floor above, and to narrowQuery in js/page-chrome.js. */
+@media (max-width: 1080px) {
   body.app-active {
     height: auto;
     overflow: visible;
@@ -1471,7 +1525,6 @@ body.app-active #app-main.app[hidden] {
      Dropping the band also puts the pane inside the single column rather than
      6px outside it, which is what .workspace__queue already does here. */
   .workspace__player {
-    order: -1; /* player above the queue */
     overflow: visible;
     padding: 0;
     margin: 0;
@@ -1515,25 +1568,28 @@ body.app-active #app-main.app[hidden] {
   }
 }
 
-/* Player bar stack-order, driven by the PLAYER PANE width (see container-type on
+/* Player bar stacking, driven by the PLAYER PANE width (see container-type on
    .player), so it fires wherever the bar is too narrow to hold info + controls on
-   one line — including the two-pane layout at ~900–950px viewports where the
-   player column is already narrow, which a viewport media query would miss.
+   one line. In practice that is the STACKED layout alone: the frame's 1080px
+   floor keeps the two-pane column at 636px or more, clear of this threshold even
+   once the pane's own scrollbar takes 15px off it. That is deliberate — two
+   panes with a stacked bar was a fourth layout state nobody wanted.
    Threshold: the equal-width controls (5 buttons × min-width 3.5rem + the 8px/6px
    gaps ≈ 19.5rem) plus a comfortable title/channel area stop fitting side by side
    around the mid-30s rem. 38rem reliably catches a ~550–600px pane (the failing
    screenshot sits at ~34.4rem, right on the old 34rem edge) while keeping genuinely
    wide panes side by side (e.g. a ~620px / ~38.75rem laptop pane, and far wider
-   desktop panes). Erring toward "stacked / controls-above" is the desired
-   direction. Above it, the wide info-left / controls-right layout and the
-   equal-width buttons are unchanged. */
+   desktop panes). Erring toward stacking is the desired direction. Above it, the
+   wide info-left / controls-right layout and the equal-width buttons are
+   unchanged.
+   The stacked bar keeps SOURCE order — title, then channel/date, then the
+   controls — so the row of buttons sits BELOW the two links it follows in the
+   tab order. It used to be hoisted above them with `order: -1`, which put the
+   focus order and the visual order at odds for every keyboard user. */
 @container player (max-width: 38rem) {
   .player__bar {
     flex-direction: column;
     align-items: stretch;
-  }
-  .player__controls {
-    order: -1;
   }
 }
 
@@ -1711,8 +1767,8 @@ body.app-active #app-main.app[hidden] {
 /* ---- Stash page (stash.html) ---- */
 
 /* The "add a video by link" block. It needs its OWN max-width: body.app-active
-   strips main's (`max-width: none`, so the workspace can span the viewport), and
-   without one the input would stretch the full width of an 1800px screen. Prose
+   replaces main's with the two-pane frame cap, which is far wider than prose,
+   and without one the input would stretch the full width of that frame. Prose
    width is the same measure the onboarding panels use. */
 .stash-add-block {
   max-width: var(--maxw);

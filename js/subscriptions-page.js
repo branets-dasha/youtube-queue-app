@@ -359,7 +359,7 @@ function bindEvents() {
 
   // The curtain binds its own wheel handler and keeps its own covering flag; Esc
   // stays here, in onGlobalKeydown, because page-chrome owns no shortcuts. The
-  // defaults ('.workspace', <=900px, cover on wheel-down) are this page's.
+  // defaults ('.workspace', <=1080px, cover on wheel-down) are this page's.
   curtain = initCurtain({ node: dom.curtain });
 
   // Arrow-key card navigation: page-chrome owns the remembered card and the
@@ -389,6 +389,9 @@ function bindEvents() {
   }
 
   // The pane cycle, IN DOM ORDER — the one place this page's regions are named.
+  // DOM order is also VISUAL order: the player pane precedes the queue in the
+  // markup, which puts it in the left column when side by side and on top when
+  // stacked, so no CSS reorders anything and this array needs no width branch.
   // Only two override the default landing: the queue resumes at the remembered
   // card (letting the scroll follow, unlike every other caller of
   // focusRemembered, since arriving from another pane has no scroll to protect),
@@ -397,13 +400,13 @@ function bindEvents() {
     panes: [
       { el: dom.topbarNav },
       { el: dom.toolbar },
+      { el: dom.playerPane, role: 'player', focus: () => focusFirst(dom.playerPane) },
       { el: dom.queueHeader },
       {
         el: dom.queueList,
         role: 'queue',
         focus: () => (queueFocus ? queueFocus.focusRemembered({ preventScroll: false }) : null),
       },
-      { el: dom.playerPane, role: 'player', focus: () => focusFirst(dom.playerPane) },
     ],
   });
 

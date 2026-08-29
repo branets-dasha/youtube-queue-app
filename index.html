@@ -32,8 +32,8 @@
     <script type="module" src="js/subscriptions-page.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#queue-list">Skip to queue</a>
     <a class="skip-link" href="#player-pane">Skip to player</a>
+    <a class="skip-link" href="#queue-list">Skip to queue</a>
 
     <!-- Top-right toast notifications (progress, success, errors, info). -->
     <div id="toast-container" class="toasts" aria-live="polite"></div>
@@ -229,74 +229,8 @@
         </p>
 
         <div class="workspace">
-          <!-- LEFT: the queue (its own scrollbar) -->
-          <div class="workspace__queue">
-            <!-- Cleanup + hide-handled controls pinned at the TOP of the queue pane. -->
-            <div class="queue-header">
-              <button
-                id="cleanup-btn"
-                class="btn"
-                type="button"
-                aria-label="Trim front — remove handled videos up to the cutoff"
-                disabled
-              >
-                Trim front (0)
-              </button>
-              <button
-                id="hide-marked-btn"
-                class="btn"
-                type="button"
-                aria-pressed="false"
-              >
-                Hide skipped
-              </button>
-              <button
-                id="scroll-skipped-btn"
-                class="btn btn--icon queue-header__jump"
-                type="button"
-                aria-label="Jump to last skipped video"
-                title="Jump to last skipped video"
-                disabled
-              >
-                ⭳
-              </button>
-              <button
-                id="scroll-playing-btn"
-                class="btn btn--icon queue-header__jump"
-                type="button"
-                aria-label="Scroll to the playing video"
-                title="Scroll to the playing video"
-                disabled
-              >
-                ⮦
-              </button>
-            </div>
-            <ul id="queue-list" class="queue" role="list" aria-label="Video queue" tabindex="-1"></ul>
-
-            <!-- Two messages, exactly one shown (render()). An empty pane means
-                 either the queue is genuinely drained OR "Hide skipped" filtered
-                 every remaining record out of view — where "all caught up" would
-                 be a lie and the way back is the toggle, not Refresh. -->
-            <div id="empty-state" class="empty" tabindex="-1" hidden>
-              <div id="empty-caught-up">
-                <p class="empty__title">You're all caught up</p>
-                <p class="empty__sub">
-                  Nothing newer than your cutoff. Hit <strong>Refresh</strong> to
-                  check for new uploads.
-                </p>
-              </div>
-              <div id="empty-all-hidden" hidden>
-                <p class="empty__title">Everything here is skipped</p>
-                <p class="empty__sub">
-                  Every video left in the queue is marked and hidden. Hit
-                  <strong>Show skipped</strong> to see them again.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <!-- RIGHT: the always-visible player. tabindex="0" makes the pane a
-               focus target in its own right — Tab out of the queue lands on it,
+          <!-- LEFT: the always-visible player. tabindex="0" makes the pane a
+               focus target in its own right — Tab out of the toolbar lands on it,
                and so does the '/' key — and once focused it scrolls with the
                arrows / PageUp / PageDown, otherwise a long description is
                unreachable without tabbing through every control of every card. -->
@@ -386,6 +320,72 @@
               <div id="player-description" class="player__description" hidden></div>
             </div>
           </aside>
+
+          <!-- RIGHT: the queue (its own scrollbar) -->
+          <div class="workspace__queue">
+            <!-- Cleanup + hide-handled controls pinned at the TOP of the queue pane. -->
+            <div class="queue-header">
+              <button
+                id="scroll-playing-btn"
+                class="btn btn--icon"
+                type="button"
+                aria-label="Scroll to the playing video"
+                title="Scroll to the playing video"
+                disabled
+              >
+                ⮧
+              </button>
+              <button
+                id="cleanup-btn"
+                class="btn"
+                type="button"
+                aria-label="Trim front — remove handled videos up to the cutoff"
+                disabled
+              >
+                Trim front (0)
+              </button>
+              <button
+                id="hide-marked-btn"
+                class="btn queue-header__split"
+                type="button"
+                aria-pressed="false"
+              >
+                Hide skipped
+              </button>
+              <button
+                id="scroll-skipped-btn"
+                class="btn btn--icon"
+                type="button"
+                aria-label="Jump to last skipped video"
+                title="Jump to last skipped video"
+                disabled
+              >
+                ⭳
+              </button>
+            </div>
+            <ul id="queue-list" class="queue" role="list" aria-label="Video queue" tabindex="-1"></ul>
+
+            <!-- Two messages, exactly one shown (render()). An empty pane means
+                 either the queue is genuinely drained OR "Hide skipped" filtered
+                 every remaining record out of view — where "all caught up" would
+                 be a lie and the way back is the toggle, not Refresh. -->
+            <div id="empty-state" class="empty" tabindex="-1" hidden>
+              <div id="empty-caught-up">
+                <p class="empty__title">You're all caught up</p>
+                <p class="empty__sub">
+                  Nothing newer than your cutoff. Hit <strong>Refresh</strong> to
+                  check for new uploads.
+                </p>
+              </div>
+              <div id="empty-all-hidden" hidden>
+                <p class="empty__title">Everything here is skipped</p>
+                <p class="empty__sub">
+                  Every video left in the queue is marked and hidden. Hit
+                  <strong>Show skipped</strong> to see them again.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
