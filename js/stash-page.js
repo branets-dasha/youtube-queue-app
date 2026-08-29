@@ -379,7 +379,7 @@ function bindEvents() {
 
   // The curtain binds its own wheel handler and keeps its own covering flag; Esc
   // stays here, in onGlobalKeydown, because page-chrome owns no shortcuts. The
-  // defaults ('.workspace', <=900px, cover on wheel-down) are right for this
+  // defaults ('.workspace', <=1080px, cover on wheel-down) are right for this
   // page: it IS the 100dvh `app-active` two-pane layout.
   curtain = initCurtain({ node: dom.curtain });
 
@@ -1047,7 +1047,7 @@ function renderKeepingPlace() {
   // pane wide, the DOCUMENT stacked, where the pane is `overflow: visible` and
   // its scrollTop is always 0 — read directly, the save returned 0 and the
   // restore did nothing, leaving the refocused card ~6000px below the fold.
-  // The 900px breakpoint is a media query over there, never measured here.
+  // The 1080px breakpoint is a media query over there, never measured here.
   const restoreScroll = queueFocus ? queueFocus.captureQueueScroll() : null;
 
   const active = document.activeElement;

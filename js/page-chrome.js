@@ -321,7 +321,7 @@ export function reportIfFatalDb(err) {
 export function initCurtain({
   node,
   exemptSelector = '.workspace',
-  narrowQuery = '(max-width: 900px)',
+  narrowQuery = '(max-width: 1080px)',
   coverOnWheelDown = true,
 } = {}) {
   let covering = false;
@@ -475,7 +475,7 @@ export function focusFirst(...candidates) {
  *   focusRemembered: (opts?:{preventScroll?:boolean}) => Element|null,
  *   captureQueueScroll: () => () => void}}
  */
-export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 900px)' } = {}) {
+export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 1080px)' } = {}) {
   // The videoId of the card the walk resumes at — an id, never a node, so it
   // survives every re-render. Null until the user has been in the list. Focus
   // landing in a card is its usual writer (the focusin below), but not its only
@@ -594,7 +594,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * INTERNALLY, so outside the player pane there is no native scroll for a key
    * to belong to and it belongs to the queue — including from <body>, where
    * focus keeps landing (bindIframeFocusGuard puts it there on every click of
-   * the video). Stacked (<=900px) the queue pane is `overflow: visible` and the
+   * the video). Stacked (<=1080px) the queue pane is `overflow: visible` and the
    * DOCUMENT scrolls, so there is one, and only focus genuinely INSIDE the queue
    * pane is taken.
    *

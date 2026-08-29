@@ -73,7 +73,7 @@ function init() {
   // with index.html. This page's <body> has no `app-active` class, so it is not
   // a 100dvh flex column: the whole DOCUMENT scrolls at every width. If a
   // wheel-down covered here you could never scroll the channel list. Wheel-up
-  // still lifts and Esc still toggles — the same rule the ≤900px breakpoint
+  // still lifts and Esc still toggles — the same rule the ≤1080px breakpoint
   // already encodes on index.html, stated by layout instead of by width.
   curtain = initCurtain({
     node: document.getElementById('curtain'),

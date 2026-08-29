@@ -359,7 +359,7 @@ function bindEvents() {
 
   // The curtain binds its own wheel handler and keeps its own covering flag; Esc
   // stays here, in onGlobalKeydown, because page-chrome owns no shortcuts. The
-  // defaults ('.workspace', <=900px, cover on wheel-down) are this page's.
+  // defaults ('.workspace', <=1080px, cover on wheel-down) are this page's.
   curtain = initCurtain({ node: dom.curtain });
 
   // Arrow-key card navigation: page-chrome owns the remembered card and the
