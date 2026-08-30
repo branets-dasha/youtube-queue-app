@@ -84,7 +84,6 @@ export function requestTabLock(name) {
 // Fatal storage errors
 // ---------------------------------------------------------------------------
 
-// One fatal storage screen per page load — see FIRST CAUSE WINS below.
 /**
  * What to run when a fatal screen goes up. The wall covers the player but does
  * not silence it, and the user is left hunting for audio with no visible source.
@@ -98,6 +97,7 @@ export function setFatalHaltHandler(fn) {
   onFatalHalt = typeof fn === 'function' ? fn : null;
 }
 
+// One fatal storage screen per page load — see FIRST CAUSE WINS below.
 let fatalStorageErrorShown = false;
 
 // Onboarding/app scaffolding hidden behind the overlay. Resolved by id at call
