@@ -297,6 +297,72 @@ export function paneCandidates(len, from, dir) {
   return out;
 }
 
+// The character keys the three keydown tables bind, and so the only characters
+// `normalizeKey` may hand back from a key's PHYSICAL position. Characters only:
+// Escape, the arrows, PageUp/PageDown, Home/End, Enter and Space report the same
+// e.key on every layout and must fall through the fallback untouched.
+const SHORTCUT_CHARS = new Set([
+  'x', 't', 'p', 'l', 'n', 'm', 'f', // card and player gestures
+  '1', '5', '2', // the speed presets
+  '/', '[', ']', // the pane keys
+  '-', '=', '+', // the speed cycle
+]);
+
+// Physical position -> the US-QWERTY character sitting there, for the
+// PUNCTUATION the tables bind. Letters and digits are derived instead (KeyX ->
+// 'x', Digit1 -> '1'), so a future letter or digit shortcut needs no entry.
+const PUNCTUATION_CODES = new Map([
+  ['Slash', '/'],
+  ['BracketLeft', '['],
+  ['BracketRight', ']'],
+  ['Minus', '-'],
+  ['Equal', '='],
+]);
+
+/**
+ * The US-QWERTY character at a physical key position, or '' for a position that
+ * carries no character at all (Escape, the arrows, Enter, Space, F1-F12).
+ * @param {string} code a KeyboardEvent.code
+ * @returns {string}
+ */
+function physicalChar(code) {
+  if (/^Key[A-Z]$/.test(code)) return code[3].toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code[5];
+  return PUNCTUATION_CODES.get(code) || '';
+}
+
+/**
+ * The shortcut character a keydown MEANS, whatever keyboard layout is active:
+ * the character the layout PRODUCES when that is a bound shortcut, else the one
+ * at the key's PHYSICAL position when THAT is, else the produced character
+ * unchanged.
+ *
+ * e.key alone is only ever what the layout produces, so on a Cyrillic, Greek,
+ * Hebrew or Arabic layout it is never a latin letter and every letter shortcut
+ * dies the moment the user switches input. e.code is the physical position,
+ * named against US-QWERTY and layout-independent, which rescues exactly those —
+ * one entry per shortcut, never one per language.
+ *
+ * PRECEDENCE IS THE DESIGN. What the layout PRINTS wins, so Dvorak, AZERTY and
+ * QWERTZ users get the letters on their own keycaps; the physical fallback runs
+ * only when the produced character is no shortcut at all, which is the
+ * non-latin case that has no keycap to match. Reversed, the shortcuts would
+ * scatter across every latin non-QWERTY layout. The accepted cost is that a
+ * Dvorak user also triggers Skip from the cap printed 'b', which sits where
+ * QWERTY's 'x' does.
+ *
+ * Pure — it reads two fields off its argument and touches no global, which is
+ * what lets the whole mapping be tested without a KeyboardEvent.
+ * @param {{key: string, code?: string}} e a keydown event
+ * @returns {string} the lowercased character the tables switch on
+ */
+export function normalizeKey(e) {
+  const key = String((e && e.key) || '').toLowerCase();
+  if (SHORTCUT_CHARS.has(key)) return key;
+  const physical = physicalChar((e && e.code) || '');
+  return SHORTCUT_CHARS.has(physical) ? physical : key;
+}
+
 /**
  * Compute the live CUTOFF marker: the boundary of the contiguous handled prefix
  * among the currently-present videos — "everything up to here is handled; the

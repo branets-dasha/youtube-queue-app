@@ -40,6 +40,7 @@ import {
   stashToClean,
   addToStash,
   reconcileStash,
+  normalizeKey,
 } from './queue.js';
 import { SHORTS_MAX_SECONDS } from './config.js';
 
@@ -210,6 +211,69 @@ test('paneCandidates wraps at BOTH ends rather than clamping', () => {
   // very first candidate, which is the whole difference from the card walk.
   assert.deepEqual(paneCandidates(5, 4, 1), [0, 1, 2, 3]);
   assert.deepEqual(paneCandidates(5, 0, -1), [4, 3, 2, 1]);
+});
+
+// --- normalizeKey: the shortcut a key means, whatever the layout ---
+
+test('normalizeKey passes a latin press straight through', () => {
+  assert.equal(normalizeKey({ key: 'x', code: 'KeyX' }), 'x');
+  assert.equal(normalizeKey({ key: '1', code: 'Digit1' }), '1');
+  assert.equal(normalizeKey({ key: '/', code: 'Slash' }), '/');
+  // Uppercase (Shift, or caps lock) still resolves to the bound character.
+  assert.equal(normalizeKey({ key: 'X', code: 'KeyX' }), 'x');
+});
+
+test('normalizeKey rescues a Cyrillic layout through the physical position', () => {
+  // The whole point: a Cyrillic layout produces no latin letter at all, so
+  // without the fallback every letter shortcut dies on switching input.
+  assert.equal(normalizeKey({ key: 'ч', code: 'KeyX' }), 'x');
+  assert.equal(normalizeKey({ key: 'е', code: 'KeyT' }), 't');
+  assert.equal(normalizeKey({ key: 'з', code: 'KeyP' }), 'p');
+  assert.equal(normalizeKey({ key: 'д', code: 'KeyL' }), 'l');
+  // Its brackets carry letters, and its Slash position carries a full stop.
+  assert.equal(normalizeKey({ key: 'х', code: 'BracketLeft' }), '[');
+  assert.equal(normalizeKey({ key: 'ъ', code: 'BracketRight' }), ']');
+  assert.equal(normalizeKey({ key: '.', code: 'Slash' }), '/');
+});
+
+test('normalizeKey rescues the AZERTY digit row, where the presets are shifted', () => {
+  assert.equal(normalizeKey({ key: '&', code: 'Digit1' }), '1');
+  assert.equal(normalizeKey({ key: '(', code: 'Digit5' }), '5');
+  assert.equal(normalizeKey({ key: 'é', code: 'Digit2' }), '2');
+});
+
+test('normalizeKey lets the PRINTED character win over the physical position', () => {
+  // German QWERTZ puts '-' on the Slash position. Both are bound, and what the
+  // keycap says wins — the user gets the speed cycle, not the pane toggle. This
+  // precedence is what keeps Dvorak/AZERTY/QWERTZ on their own printed letters.
+  assert.equal(normalizeKey({ key: '-', code: 'Slash' }), '-');
+  // Dvorak prints 'l' where QWERTY sits 'p': the printed letter wins again.
+  assert.equal(normalizeKey({ key: 'l', code: 'KeyP' }), 'l');
+});
+
+test('normalizeKey leaves every unbound key untouched', () => {
+  // Non-character keys report the same e.key on every layout, so they must never
+  // be routed through the fallback — their codes carry no character at all.
+  assert.equal(normalizeKey({ key: 'Escape', code: 'Escape' }), 'escape');
+  assert.equal(normalizeKey({ key: 'ArrowUp', code: 'ArrowUp' }), 'arrowup');
+  assert.equal(normalizeKey({ key: 'PageDown', code: 'PageDown' }), 'pagedown');
+  assert.equal(normalizeKey({ key: 'Home', code: 'Home' }), 'home');
+  assert.equal(normalizeKey({ key: 'Enter', code: 'Enter' }), 'enter');
+  assert.equal(normalizeKey({ key: ' ', code: 'Space' }), ' ');
+  // An unbound character key keeps what the layout produced, physical position
+  // or not — 'й' must not become the (unbound) 'q' it sits on.
+  assert.equal(normalizeKey({ key: 'й', code: 'KeyQ' }), 'й');
+  assert.equal(normalizeKey({ key: 'a', code: 'KeyA' }), 'a');
+});
+
+test('normalizeKey survives a missing or empty code', () => {
+  // Some virtual keyboards report no code; the fallback simply cannot fire, and
+  // the produced character stands, exactly as it does today.
+  assert.equal(normalizeKey({ key: 'x' }), 'x');
+  assert.equal(normalizeKey({ key: 'ч', code: '' }), 'ч');
+  assert.equal(normalizeKey({ key: 'ч', code: 'Unidentified' }), 'ч');
+  assert.equal(normalizeKey({}), '');
+  assert.equal(normalizeKey(null), '');
 });
 
 test('paneCandidates never offers the origin, so a cycle of one is empty', () => {

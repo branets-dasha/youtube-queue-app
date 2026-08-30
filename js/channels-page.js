@@ -17,6 +17,7 @@ import {
   setChannelPref,
   isChannelIgnored,
   channelPreferredSpeed,
+  normalizeKey,
 } from './queue.js';
 import { el, buildAvatar, setCardSpeed, setVisible } from './ui.js';
 import { focusFirst, initCurtain, initListWalk, initPaneNav } from './page-chrome.js';
@@ -143,9 +144,17 @@ function onKeydown(e) {
   }
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+  // Mid-IME composition e.key is 'Process' while e.code still names the physical
+  // key, so normalizeKey's fallback would fire shortcuts under a user composing
+  // Chinese/Japanese/Korean text. Below Esc, which stays unconditional.
+  if (e.isComposing) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-  const key = e.key.toLowerCase();
+  // The character this key MEANS, not the one the active layout produces — a
+  // Cyrillic/Greek/Hebrew layout produces no latin letter, so queue.js's
+  // normalizeKey falls back to the key's physical position. See its contract for
+  // why what the keycap PRINTS wins over where the key sits.
+  const key = normalizeKey(e);
   if (key === 'arrowup' || key === 'arrowdown') {
     // ↑/↓ walk the channel rows. The whole rule lives in page-chrome's moveItem
     // — what it walks, the clamp at both ends, and the entry from outside that

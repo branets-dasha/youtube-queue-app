@@ -69,6 +69,7 @@ import {
   pruneChannels,
   mergeRefresh,
   addToStash,
+  normalizeKey,
 } from './queue.js';
 import {
   showStatus,
@@ -1946,12 +1947,20 @@ function onGlobalKeydown(e) {
 
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+  // Mid-IME composition e.key is 'Process' while e.code still names the physical
+  // key, so normalizeKey's fallback would fire shortcuts under a user composing
+  // Chinese/Japanese/Korean text. Below Esc, which stays unconditional.
+  if (e.isComposing) return;
   if (dom.appMain.hidden) return;
   // Never hijack browser/OS shortcuts (Ctrl+U, Cmd+K, Alt+…). Shift stays allowed
   // so '+' and other shifted keys still reach us.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-  const key = e.key.toLowerCase();
+  // The character this key MEANS, not the one the active layout produces — a
+  // Cyrillic/Greek/Hebrew layout produces no latin letter, so queue.js's
+  // normalizeKey falls back to the key's physical position. See its contract for
+  // why what the keycap PRINTS wins over where the key sits.
+  const key = normalizeKey(e);
   // Nothing may UNCOVER the screen; page-chrome names the escaping keys so the
   // two tables cannot drift. Silently — nothing visible could explain it here.
   if (curtain && curtain.suppressesKey(key)) return;
@@ -1991,8 +2000,9 @@ function onGlobalKeydown(e) {
     // '/' is the absolute jump between the two BIG panes, with the queue as
     // home: from the queue into the player, from anywhere else — the player, any
     // of the small panes, <body> — back to the remembered card. ALWAYS prevented
-    // — Firefox opens Quick Find on '/' otherwise — and read off e.key, so a
-    // layout that puts '/' behind Shift still reaches us (Shift is allowed).
+    // — Firefox opens Quick Find on '/' otherwise. A layout that puts '/' behind
+    // Shift still reaches us (Shift is allowed), and one with no '/' at all
+    // reaches us through normalizeKey's physical Slash fallback.
     e.preventDefault();
     if (paneNav) paneNav.togglePane();
   } else if (key === '[' || key === ']') {
