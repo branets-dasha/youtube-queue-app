@@ -50,6 +50,7 @@ For what only a real browser can answer — focus order, key handling, layout at
 
 Issues live in **Linear**, not GitHub Issues — never reach for `gh issue create`.
 
+- **Most work has no issue, and that is the normal case, not a gap.** The owner is on a free plan with a limited issue count, so Linear tracks only what is prolonged, complex, or in danger of being forgotten — never a one-shot change. **The owner names the issue id when one exists**; absent that, assume there is none. Do not search Linear to check, and do not offer to create one — a PR whose title carries no id is the expected shape.
 - One team, so don't enumerate teams: **Owls**, key `OWL`, id `53f5e1c0-f1b2-464c-a707-7b99f24b7b1a`. Default project **YouTube Queue**, id `3f52fab5-8f05-4643-a31e-ce393556c45d`; new issues default to it and to the **Backlog** state unless told otherwise. The ids are recorded here so `list_teams`/`list_projects` are **not** re-queried — go straight to creating the issue.
 - Claude authenticates as **its own Linear user** — `agent`, id `e6401194-c489-40e2-a9a4-a3e5c0e75b3a` — not as the repo owner, so **authorship is a signal**: an issue or comment by that user is Claude's, anything else is the owner's. New issues **default to it as assignee**. (Everything created before 2026-08-23 is attributed to the owner regardless of who wrote it.)
 - The Linear MCP `save_issue` create is **not idempotent**, and a `502 upstream_unavailable` can still have created the issue — if a create appears to fail, search for it before retrying, or you get duplicates.
