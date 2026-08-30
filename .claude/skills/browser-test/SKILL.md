@@ -44,10 +44,15 @@ machine.)
 
 Three calls in this order. The first `browser_navigate` exists **only to get the
 origin** — you cannot write an origin's `localStorage`/IndexedDB before you are
-on it. One `browser_evaluate` then seeds, and the second `browser_navigate`
-reloads into the seeded state.
+on it — and must land on a page that runs **no app JS**. Seeding from a loaded
+app page races the app's own `cleanup()`, whose `setFloor()` lands after your
+`localStorage.setItem`: every seeded record is then `<= floor` and is deleted
+before the first render, silently, leaving an empty queue and an empty DB. One
+`browser_evaluate` then seeds, and the second `browser_navigate` reloads into
+the seeded state.
 
-`browser_navigate` to `http://localhost:5273/index.html`, then `browser_evaluate`:
+`browser_navigate` to `http://localhost:5273/js/` — a generated directory
+listing, so same origin and no app JS — then `browser_evaluate`:
 
 ```js
 async () => {
@@ -99,8 +104,9 @@ async () => {
 }
 ```
 
-Then `browser_navigate` to the same URL again. For `stash.html`, put records
-carrying `addedAt` + `channelAvatarUrl` into the `stash` store instead.
+Then `browser_navigate` to `http://localhost:5273/index.html`. For `stash.html`,
+put records carrying `addedAt` + `channelAvatarUrl` into the `stash` store
+instead.
 
 Confirm the seed took — one `browser_evaluate` returning
 `document.querySelectorAll('#queue-list .row').length` — before trusting
@@ -157,6 +163,15 @@ anything downstream.
   browser paints "another tab is already open". If a check goes strangely quiet,
   look for a stray tab (`browser_tabs` → `close`): a card's channel link opens
   one, being `target="_blank"`.
+- **The owner may be watching the same window, and their keystrokes land as real
+  shortcuts.** `x`, `t`, `n`, `p`, `/` and the brackets all act on the focused
+  card or pane, so a stray press invalidates a run — as easily a false pass as a
+  false fail. If page state looks mutated mid-run, re-seed and re-run rather
+  than reasoning about the anomaly.
+- **Ask the player what it is doing — `getPlayerState()` on the live `YT.Player`,
+  never the overlay.** `.player__empty` is an opaque box over the same frame, so
+  a video that is still playing looks stopped. `1` is PLAYING; `0`/`5`/`-1` are
+  not.
 
 ## Confirming a visual change
 
