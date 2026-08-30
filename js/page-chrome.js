@@ -85,6 +85,19 @@ export function requestTabLock(name) {
 // ---------------------------------------------------------------------------
 
 // One fatal storage screen per page load — see FIRST CAUSE WINS below.
+/**
+ * What to run when a fatal screen goes up. The wall covers the player but does
+ * not silence it, and the user is left hunting for audio with no visible source.
+ *
+ * A PARAMETER, not an import: this module knows nothing about the player, the
+ * two player pages hand in player.js's stopPlayback, and channels.html — which
+ * has no player — registers nothing and is unaffected.
+ */
+let onFatalHalt = null;
+export function setFatalHaltHandler(fn) {
+  onFatalHalt = typeof fn === 'function' ? fn : null;
+}
+
 let fatalStorageErrorShown = false;
 
 // Onboarding/app scaffolding hidden behind the overlay. Resolved by id at call
@@ -112,6 +125,16 @@ const SCAFFOLD_IDS = ['setup-panel', 'cutoff-panel', 'app-main'];
 export function showFatalStorageError({ heading, paragraphs, toast }) {
   if (fatalStorageErrorShown) return;
   fatalStorageErrorShown = true;
+  // Inside the first-cause guard, so it runs exactly once, and BEFORE the screen
+  // is built, so the defensive toast path below silences the page too. A no-op
+  // where nothing has played — the superseded tab halts before it can start.
+  if (onFatalHalt) {
+    try {
+      onFatalHalt();
+    } catch {
+      /* a failed stop must never keep the screen off the page */
+    }
+  }
   const overlay = document.getElementById('blocked-overlay');
   if (!overlay) {
     // Defensive: without the container, at least surface it as a toast.
