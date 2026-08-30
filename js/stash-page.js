@@ -1665,6 +1665,9 @@ function onGlobalKeydown(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   const key = e.key.toLowerCase();
+  // Nothing may UNCOVER the screen; page-chrome names the escaping keys so the
+  // two tables cannot drift. Silently — nothing visible could explain it here.
+  if (curtain && curtain.suppressesKey(key)) return;
   const rows = Array.from(dom.queueList.querySelectorAll('.row'));
   const active = document.activeElement;
   const idx = focusedCardIndex(rows, active);
