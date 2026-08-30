@@ -298,6 +298,18 @@ export function reportIfFatalDb(err) {
 // by a wheel-UP (or Esc). Visual only — the player is NOT paused.
 // ---------------------------------------------------------------------------
 
+// Keys whose effect ESCAPES the curtain, so the one gesture that hides the
+// screen cannot be undone by a stray keypress. Only fullscreen does: it hands
+// the player iframe to the browser's own fullscreen layer, which is outside the
+// z-index stack the curtain sits on top of, so the video would play over it.
+// Every other shortcut stays live — the curtain is a screen COVER, not a lock,
+// and the queue already mutates behind it unprompted (auto-advance on ENDED,
+// the position poll). A Google consent window can also open over the curtain,
+// but NOT from one key worth naming here: ensureAuthorized backs Sign in, both
+// refresh buttons and the stash's Add too, all reachable by Enter/Space on a
+// focused button. A visible popup beats several silently dead controls.
+const SCREEN_ESCAPING_KEYS = new Set(['f']);
+
 /**
  * Bind the curtain's wheel behavior and hand back its controls. The covering
  * flag lives in this closure — the calling page does not mirror it.
@@ -316,7 +328,7 @@ export function reportIfFatalDb(err) {
  *   covers there, while wheel-up still lifts. Same rule the narrow breakpoint
  *   encodes, stated by layout instead of width.
  * @returns {{isCovering: () => boolean, set: (covering:boolean) => void,
- *   toggle: () => void}}
+ *   toggle: () => void, suppressesKey: (key:string) => boolean}}
  */
 export function initCurtain({
   node,
@@ -326,9 +338,28 @@ export function initCurtain({
 } = {}) {
   let covering = false;
 
-  /** Reflect the covering flag onto the overlay element (class + aria). */
+  // The curtain is a solid overlay with no content, so it contributes NOTHING to
+  // the accessibility tree and leaves the page behind it fully exposed — nothing
+  // is inert or aria-hidden, deliberately, since a screen reader user has more
+  // reason to want a screen cover than less. Without this region the state
+  // change is the one thing they get no signal for at all. Built here rather
+  // than in each page's HTML: no page mirrors the covering flag, so none owns
+  // this either. It must exist BEFORE the first toggle — a live region inserted
+  // in the same tick as its text does not reliably announce.
+  // Outside `node`, never inside it: the curtain carries aria-hidden="true" when
+  // lifted, which would swallow the "uncovered" announcement.
+  const status = document.createElement('p');
+  status.className = 'sr-only';
+  status.setAttribute('role', 'status');
+  document.body.appendChild(status);
+
+  /** Reflect the covering flag onto the overlay element (class + aria), and
+   *  announce the change. Announced only on an ACTUAL change, or a repeated
+   *  set(true) from the wheel would re-announce a state that never moved. */
   function set(next) {
+    const changed = Boolean(next) !== covering;
     covering = Boolean(next);
+    if (changed) status.textContent = covering ? 'Screen covered' : 'Screen uncovered';
     if (!node) return;
     node.classList.toggle('is-covering', covering);
     node.setAttribute('aria-hidden', String(!covering));
@@ -365,6 +396,10 @@ export function initCurtain({
     isCovering: () => covering,
     set,
     toggle: () => set(!covering),
+    // Asked by each page's keydown table for EVERY key, so the escaping-key list
+    // is named once here rather than duplicated across two tables that would
+    // drift. Esc never reaches it: the panic key is handled before every guard.
+    suppressesKey: (key) => covering && SCREEN_ESCAPING_KEYS.has(key),
   };
 }
 

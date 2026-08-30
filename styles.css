@@ -97,6 +97,23 @@ code {
   word-break: break-all;
 }
 
+/* Announced by a screen reader, never painted. Used for the curtain's live
+   region: the overlay itself has no content, so covering/uncovering the screen
+   would otherwise be the one state change with no non-visual signal at all.
+   Not `display: none` / `visibility: hidden` — either would drop it out of the
+   accessibility tree and silence the announcement. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .skip-link {
   position: absolute;
   left: -9999px;
