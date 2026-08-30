@@ -144,10 +144,6 @@ function onKeydown(e) {
   }
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
-  // Mid-IME composition e.key is 'Process' while e.code still names the physical
-  // key, so normalizeKey's fallback would fire shortcuts under a user composing
-  // Chinese/Japanese/Korean text. Below Esc, which stays unconditional.
-  if (e.isComposing) return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   // The character this key MEANS, not the one the active layout produces — a

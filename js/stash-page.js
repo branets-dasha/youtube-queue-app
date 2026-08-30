@@ -1660,10 +1660,6 @@ function onGlobalKeydown(e) {
 
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
-  // Mid-IME composition e.key is 'Process' while e.code still names the physical
-  // key, so normalizeKey's fallback would fire shortcuts under a user composing
-  // Chinese/Japanese/Korean text. Below Esc, which stays unconditional.
-  if (e.isComposing) return;
   if (dom.appMain.hidden) return;
   // Never hijack browser/OS shortcuts (Ctrl+U, Cmd+K, Alt+…). Shift stays allowed
   // so '+' and other shifted keys still reach us.
