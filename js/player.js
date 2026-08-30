@@ -237,6 +237,34 @@ export function togglePlay() {
   }
 }
 
+/**
+ * Stop playback outright and forget what was loaded — for the moments the page
+ * tears the now-playing region down (the queue ran out) while the video is still
+ * running: the empty-state overlay covers the frame opaquely, so an un-stopped
+ * video is invisible but fully audible.
+ *
+ * NOT pauseVideo(): the PAUSED branch above captures progress, which would
+ * re-persist the mid-video time over the position the caller just reset. And
+ * stopVideo() alone is not enough — it moves the player to a state onStateChange
+ * has no branch for, so the poll would keep firing, and getCurrentTime() returns
+ * 0 after it, writing a bogus 0 every 5s. Hence: kill the poll, then clear
+ * currentVideoId (which makes any late captureProgress a no-op via its own
+ * guard), then stop. Clearing `pending` covers a load queued before ready, which
+ * onReady would otherwise run after this.
+ */
+export function stopPlayback() {
+  stopProgressPoll();
+  currentVideoId = null;
+  pending = null;
+  justEnded = false;
+  if (!player || typeof player.stopVideo !== 'function') return;
+  try {
+    player.stopVideo();
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Seek the current video by `deltaSeconds` (clamped at 0). */
 export function seekBy(deltaSeconds) {
   if (!player || typeof player.seekTo !== 'function') return;

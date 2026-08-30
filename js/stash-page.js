@@ -87,6 +87,7 @@ import {
   toggleMute,
   requestFullscreen,
   getIframe as getPlayerIframe,
+  stopPlayback,
 } from './player.js';
 import { showToast } from './toast.js';
 import {
@@ -102,6 +103,7 @@ import {
   initPaneNav,
   focusFirst,
   bindIframeFocusGuard,
+  setFatalHaltHandler,
 } from './page-chrome.js';
 
 // ---------------------------------------------------------------------------
@@ -187,6 +189,11 @@ function persistRecord(rec) {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+  // Hand the chrome the player's stop before anything can raise a fatal screen:
+  // its wall hides the player but cannot silence it on its own. Registered here
+  // rather than imported over there, so page-chrome stays player-free.
+  setFatalHaltHandler(stopPlayback);
+
   // Single-tab guard, first thing: this page owns the `stash` object store, so
   // it takes its OWN lock (STASH_TAB_LOCK) — a subscriptions tab writes a
   // different store and may stay open alongside.
@@ -915,6 +922,10 @@ async function sweepRemoved() {
   const ids = doomed.map((r) => r.videoId);
   const idSet = new Set(ids);
   state.records = state.records.filter((r) => !idSet.has(r.videoId));
+  // The deleted set can include the PLAYING record — its card goes, but
+  // state.playing still names it, so the bar stays up and the video plays on
+  // behind it. One check here covers every caller of this single deletion site.
+  if (state.playing && !playingRecord()) showPlayerEmpty(true);
   await deleteStashVideos(ids);
   return ids.length;
 }
@@ -1266,6 +1277,10 @@ function showPlayerEmpty(caughtUp) {
   const takesFocus =
     (dom.playerBar && dom.playerBar.contains(active)) ||
     (dom.playerDescription && dom.playerDescription.contains(active));
+
+  // The overlay only COVERS the frame, so a video still running here would go on
+  // being heard behind it. A no-op at the sites that arrive with nothing playing.
+  stopPlayback();
 
   state.playing = null;
   state.playerCaughtUp = !!caughtUp;
