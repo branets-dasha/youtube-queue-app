@@ -17,3 +17,6 @@ node_modules/
 # It writes into the repo root as you drive the app; none of it is ever
 # committed - see .claude/skills/browser-test/SKILL.md.
 .playwright-mcp/
+
+# Screenshots and other throwaway evidence from browser verification runs.
+.evidence/
