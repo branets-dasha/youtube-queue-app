@@ -43,13 +43,6 @@
          above everything (including toasts) and blocks interaction while up. -->
     <div id="curtain" class="curtain" aria-hidden="true"></div>
 
-    <!-- Full-screen BLOCKING error: shown by subscriptions-page.js for either
-         fatal storage condition — IndexedDB blocked by another tab open at a
-         different app/DB version, or IndexedDB unavailable entirely. Populated
-         + revealed by showFatalStorageError(); halts app startup until the
-         user fixes it and reloads. -->
-    <div id="blocked-overlay" class="blocked-overlay" hidden></div>
-
     <!-- Shared page nav. The title + nav share one flex row (.topbar__row) so
          the nav costs no extra header height on wide screens; the tagline stays
          a SIBLING of that row so it can never land on the title's line. The
@@ -69,6 +62,15 @@
       <p class="topbar__tagline">Burn down your subscription feed, oldest first.</p>
     </header>
 
+    <!-- BLOCKING error: shown by subscriptions-page.js for either fatal storage
+         condition — IndexedDB blocked by another tab open at a different app/DB
+         version, or IndexedDB unavailable entirely. Populated + revealed by
+         showFatalStorageError(); halts app startup until the user fixes it and
+         reloads. It sits AFTER the header, not over it: startup halts before
+         bindEvents(), so the page nav above and this panel's own Reload are the
+         only controls on the page that still work. -->
+    <div id="blocked-overlay" class="blocked-overlay" hidden></div>
+
     <main>
       <!-- ===== First-run: Client ID setup ===== -->
       <section id="setup-panel" class="panel" hidden aria-labelledby="setup-heading">
@@ -76,7 +78,10 @@
         <p>
           This app talks to YouTube directly from your browser using your own
           Google OAuth 2.0 <strong>Client ID</strong>. Nothing is sent to any
-          server we control, and no client secret or API key is needed.
+          server we control, and no client secret or API key is needed. The
+          access token stays in memory only, so signing in is re-approved each
+          time you load the page; the only things saved locally are your Client
+          ID and your cutoff.
         </p>
         <ol class="steps">
           <li>
@@ -389,12 +394,5 @@
         </div>
       </section>
     </main>
-
-    <footer class="footer">
-      <p>
-        Runs entirely in your browser. Access token stays in memory; only your
-        Client ID and cutoff are saved locally.
-      </p>
-    </footer>
   </body>
 </html>

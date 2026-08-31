@@ -185,7 +185,7 @@ async function init() {
   // store, but if anything ever did, it must throw rather than persist.
   if (!(await tabLockGranted)) {
     standDownForOtherTab();
-    showSupersededError();
+    showSupersededError('Subscriptions');
     return;
   }
 
@@ -204,7 +204,7 @@ async function init() {
   // resolves [] on a first run), so a rejection always means the video store is
   // unusable. Falling through with an empty state.records would show a wiped
   // queue and then write over rows that may still be sitting in the DB. So each
-  // case HALTS startup with a blocking full-screen error:
+  // case HALTS startup with a blocking error:
   //   - DbBlockedError     — another tab holds the DB at a different version.
   //   - DbUnavailableError — IndexedDB could not be opened at all.
   //   - anything else      — the DB opened but the read failed (a plain
@@ -453,9 +453,9 @@ function bindEvents() {
 // init() fires the request at the very top and awaits the answer right after
 // cacheDom(), before it reads the store, restores any setting or binds a single
 // handler. Not granted means another queue tab is live: this one puts up the
-// same full-screen halt as the other fatal storage conditions and returns,
-// having touched nothing. The store also stands down (every video API then
-// throws DbBlockedError) — belt to the checkpoint's braces.
+// same halt as the other fatal storage conditions and returns, having
+// touched nothing. The store also stands down (every video API then throws
+// DbBlockedError) — belt to the checkpoint's braces.
 //
 // The decision is made once, at startup: there is no path that supersedes a
 // running tab later, so no mid-session halt and nothing to do about the player.
@@ -2114,8 +2114,8 @@ function onGlobalKeydown(e) {
 // ---------------------------------------------------------------------------
 // Error handling
 //
-// The full-screen halt screens themselves live in page-chrome.js (they are the
-// same on both queue pages); this is the page-specific router — auth failures
+// The halt screens themselves live in page-chrome.js (they are the same on
+// both queue pages); this is the page-specific router — auth failures
 // end the session and repaint this page's auth UI.
 //
 // NOTE the plain-Error tail: auth.js throws bare Errors (no `kind`) for GIS not

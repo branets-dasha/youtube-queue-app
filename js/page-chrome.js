@@ -100,16 +100,25 @@ export function setFatalHaltHandler(fn) {
 // One fatal storage screen per page load — see FIRST CAUSE WINS below.
 let fatalStorageErrorShown = false;
 
-// Onboarding/app scaffolding hidden behind the overlay. Resolved by id at call
-// time rather than passed in, because this module holds no `dom` map;
-// setVisible() is null-tolerant, so an id a given page does not have is a
-// silent no-op.
-const SCAFFOLD_IDS = ['setup-panel', 'cutoff-panel', 'app-main'];
+// Everything a fatal screen must take off the page with it. Resolved by
+// SELECTOR at call time rather than passed in, because this module holds no
+// `dom` map; a selector a page has no match for is a silent no-op.
+//
+// The skip links are hidden for a stronger reason than the panels, which are
+// merely redundant: they are actively WRONG here. Both point into #app-main,
+// which this same pass hides, so they offer a jump that lands nowhere. They
+// were covered by the overlay when it was a fixed full-viewport scrim, and
+// surfaced when it moved below the header.
+//
+// The header is deliberately NOT here: its page nav is the one thing on this
+// screen that still works, and reaching another page is a real way out.
+const HIDDEN_ON_FATAL = ['#setup-panel', '#cutoff-panel', '#app-main', '.skip-link'];
 
 /**
- * Full-screen BLOCKING error for a FATAL storage condition: the video store is
- * unusable, so the page halts rather than run on a queue it cannot read or
- * save. Shared by the four callers below; only the copy differs. All are
+ * BLOCKING error for a FATAL storage condition: the video store is unusable, so
+ * the page halts rather than run on a queue it cannot read or save. It fills the
+ * page below the header, which stays live so the nav can reach another page.
+ * Shared by the four callers below; only the copy differs. All are
  * resolved by fixing the environment and reloading, hence the single Reload
  * action. Built with el()/text nodes (no innerHTML for the dynamic reload
  * wiring), matching the panel look.
@@ -141,8 +150,11 @@ export function showFatalStorageError({ heading, paragraphs, toast }) {
     showToast(toast, { type: 'error' });
     return;
   }
-  // Hide the onboarding/app scaffolding behind the overlay.
-  for (const id of SCAFFOLD_IDS) setVisible(document.getElementById(id), false);
+  // Hide the scaffolding and the chrome that would mislead. querySelectorAll,
+  // not getElementById: .skip-link matches twice on the queue pages.
+  for (const selector of HIDDEN_ON_FATAL) {
+    for (const node of document.querySelectorAll(selector)) setVisible(node, false);
+  }
 
   while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
   const panel = el('div', { class: 'panel panel--blocked', role: 'alertdialog', 'aria-labelledby': 'blocked-heading' }, [
@@ -207,16 +219,25 @@ export function showDbUnavailableError() {
  * Another tab of this page holds its tab lock, so this one is superseded. The
  * store has already been stood down, so nothing here can write; this is the
  * visible half of that halt (see the Single-tab lock section).
+ *
+ * NAMES THE PAGE, and takes it as a parameter like everything else page-specific
+ * in this module. The two locks are independent and guard two different object
+ * stores, so a Subscriptions tab and a Stash tab open at once is legitimate; an
+ * unqualified "the queue is already open" reads as a conflict between them and
+ * sends the user to close a tab that is not the one holding the lock. Contrast
+ * the DB-level screens above, which stay unqualified because the DATABASE really
+ * is shared and every tab of every page is a candidate.
+ * @param {string} pageLabel this page's own name, e.g. 'Subscriptions'
  */
-export function showSupersededError() {
+export function showSupersededError(pageLabel) {
   showFatalStorageError({
-    heading: 'The queue is already open',
+    heading: `The ${pageLabel} page is already open`,
     paragraphs: [
-      'This queue is open in another browser tab. Only one tab at a time may ' +
-        'write to your stored videos, so this one stopped before it could touch them.',
-      'Close the other tab, then reload this page.',
+      `The ${pageLabel} page is open in another browser tab. Only one tab at a ` +
+        'time may write to its stored videos, so this one stopped before it could touch them.',
+      'Close this tab, or reload after closing the other one, or navigate to a different page.',
     ],
-    toast: 'The queue is already open in another tab. Close it, then reload this page.',
+    toast: `The ${pageLabel} page is already open in another tab. Close it, then reload this page.`,
   });
 }
 

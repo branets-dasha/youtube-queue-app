@@ -213,7 +213,7 @@ async function init() {
   // than persist.
   if (!(await tabLockGranted)) {
     standDownForOtherTab();
-    showSupersededError();
+    showSupersededError('Stash');
     return;
   }
 
@@ -250,8 +250,7 @@ async function bootApp() {
     // an error (getAll() resolves [] on a first run), so a rejection always means
     // the store is unusable — and continuing would show an empty stash and then
     // write over rows that may still be in the DB. Each case HALTS startup
-    // behind the shared full-screen error, BEFORE the sweep below deletes
-    // anything.
+    // behind the shared error, BEFORE the sweep below deletes anything.
     try {
       state.records = sortStash(await getAllStashVideos());
     } catch (err) {
@@ -1834,8 +1833,8 @@ function cyclePlaybackSpeed(dir) {
 // ---------------------------------------------------------------------------
 // Error handling
 //
-// The full-screen halt screens live in page-chrome.js (identical on both queue
-// pages); this is the page-LOCAL router — an auth failure ends the session and
+// The halt screens live in page-chrome.js (identical on both queue pages);
+// this is the page-LOCAL router — an auth failure ends the session and
 // repaints THIS page's auth UI. Add failures do not come through here: they get
 // their own toast, worded by describeAddFailure.
 // ---------------------------------------------------------------------------
