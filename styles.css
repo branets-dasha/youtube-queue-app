@@ -279,20 +279,37 @@ main {
   margin-top: 12px;
 }
 
-/* ---- Blocking full-screen error (fatal storage condition) ---- */
-/* Fixed, full-viewport, opaque scrim that centers a panel. Shown by
-   subscriptions-page.js when startup must halt (DB blocked by another tab,
-   IndexedDB unavailable, or the stored queue unreadable). Sits above the app
-   but below the privacy curtain (2000). */
+/* ---- Blocking error (fatal storage condition) ---- */
+/* An opaque region IN FLOW below the header, not a fixed full-viewport scrim.
+   Shown when startup must halt (DB blocked by another tab, IndexedDB
+   unavailable, the stored queue unreadable, or another tab holding the page's
+   lock). A scrim over the header left the page nav painted behind it: still
+   focusable and still navigating on Enter, but invisible and unclickable — and
+   the nav is one of only two working controls on this screen, since the halt
+   comes before bindEvents(). Nothing behind needs covering: #app-main and both
+   onboarding panels are already hidden by then. */
 .blocked-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 900;
   display: flex;
-  align-items: center;
+  /* SAFE centring, not plain centring: once the panel is taller than the region
+     (a long error under body.app-active, or a short window), a centred flex item
+     overflows equally in both directions and the half above the scrollport is
+     unreachable — scrollTop cannot go negative, so the heading is lost. `safe`
+     falls back to start-alignment at exactly that point. */
+  align-items: safe center;
   justify-content: center;
   padding: 16px;
+  /* Claim most of the viewport, or the panel reads as a note tucked under the
+     header rather than as the state of the page. */
+  min-height: 60vh;
   background: var(--bg);
+}
+/* body.app-active is a 100dvh, overflow:hidden column, where a min-height is
+   both too little (the panel sits high, with dead space below) and too much (a
+   panel taller than the gap is clipped with nothing able to scroll to it). */
+body.app-active .blocked-overlay {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .blocked-overlay[hidden] {
   display: none;
@@ -459,10 +476,10 @@ main {
 /* A full-viewport solid overlay (BSOD-style blue, no content) that slides DOWN
    to cover the page and UP to lift. Sits above everything, so while covering it
    blocks all interaction with the page behind it. That deliberately includes the
-   fatal-error overlay (.blocked-overlay 900, toasts 1000): one gesture must hide
-   the whole screen, no exceptions — and it is recoverable, since Esc (the panic
-   key, handled before every guard) and scroll-up both lift it. Hidden
-   by default via translateY(-100%) — still present (not display:none) so it can
+   fatal-error overlay and the toasts (1000): one gesture must hide the whole
+   screen, no exceptions — and it is recoverable, since Esc (the panic key,
+   handled before every guard) and scroll-up both lift it. Hidden by default via
+   translateY(-100%) — still present (not display:none) so it can
    animate and so a wheel event over it targets the curtain, not the page. */
 .curtain {
   position: fixed;
@@ -1181,9 +1198,6 @@ body.app-active main {
   flex-direction: column;
   padding: 8px var(--app-pad-x) 12px;
 }
-body.app-active .footer {
-  display: none; /* reclaim vertical space for the two-pane view */
-}
 body.app-active #app-main.app {
   flex: 1 1 auto;
   min-height: 0;
@@ -1563,9 +1577,6 @@ body.app-active #app-main.app[hidden] {
   body.app-active main {
     display: block;
     max-width: var(--maxw-wide);
-  }
-  body.app-active .footer {
-    display: block;
   }
   .workspace {
     grid-template-columns: 1fr;

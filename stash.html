@@ -30,13 +30,6 @@
          above everything (including toasts) and blocks interaction while up. -->
     <div id="curtain" class="curtain" aria-hidden="true"></div>
 
-    <!-- Full-screen BLOCKING error: shown by stash-page.js for either fatal
-         storage condition — IndexedDB blocked by another tab open at a
-         different app/DB version, or IndexedDB unavailable entirely. Populated
-         + revealed by showFatalStorageError(); halts page startup until the
-         user fixes it and reloads. -->
-    <div id="blocked-overlay" class="blocked-overlay" hidden></div>
-
     <!-- Shared page nav — identical on every page, differing only in which item
          carries aria-current. The <h1> is the app name everywhere; page identity
          comes from aria-current + <title> + the tagline. -->
@@ -54,6 +47,15 @@
       <p class="topbar__tagline">A hand-picked queue — paste a link to stash a video for later.</p>
     </header>
 
+    <!-- BLOCKING error: shown by stash-page.js for either fatal storage
+         condition — IndexedDB blocked by another tab open at a different app/DB
+         version, or IndexedDB unavailable entirely. Populated + revealed by
+         showFatalStorageError(); halts page startup until the user fixes it and
+         reloads. It sits AFTER the header, not over it: startup halts before
+         bindEvents(), so the page nav above and this panel's own Reload are the
+         only controls on the page that still work. -->
+    <div id="blocked-overlay" class="blocked-overlay" hidden></div>
+
     <main>
       <!-- ===== First-run: Client ID setup ===== -->
       <!-- This page is self-sufficient: a brand-new browser can be set up here
@@ -64,7 +66,10 @@
         <p>
           This app talks to YouTube directly from your browser using your own
           Google OAuth 2.0 <strong>Client ID</strong>. Nothing is sent to any
-          server we control, and no client secret or API key is needed.
+          server we control, and no client secret or API key is needed. The
+          access token stays in memory only, so signing in is re-approved each
+          time you load the page; the only things saved locally are your Client
+          ID and the videos you stash.
         </p>
         <ol class="steps">
           <li>
@@ -330,12 +335,5 @@
         </div>
       </section>
     </main>
-
-    <footer class="footer">
-      <p>
-        Runs entirely in your browser. Access token stays in memory; only your
-        Client ID and the videos you stash are saved locally.
-      </p>
-    </footer>
   </body>
 </html>
