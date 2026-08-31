@@ -243,6 +243,11 @@ The MCP server writes page snapshots and console logs into **`.playwright-mcp/`
 in the repo root**. It is gitignored. Read the console log when something will
 not render — that is where a seeding mistake shows up first.
 
+**Your own scratch output goes to `.evidence/`**, gitignored beside it: give
+`browser_take_screenshot` an explicit relative path (`.evidence/ring-after.png`),
+never a bare filename. A bare filename resolves to the **repo root**, where it
+silently overwrites whatever untracked file of the owner's shares its name.
+
 ## There is no test suite here, on purpose
 
 There is **no regression suite and no screenshot baselines.** That is the
