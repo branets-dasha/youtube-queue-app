@@ -755,6 +755,11 @@ main {
    a wrapped one is the taller of the two and the avatar centres against IT. */
 .row__sub {
   position: relative;
+  /* The query container the date's one exception is asked about (see
+     .row__time-abs). inline-size only, so this row still grows with its own
+     content; `contain: layout` comes with it and changes nothing, the row being
+     the avatar's containing block already. */
+  container: metarow / inline-size;
   margin-top: 4px;
   color: var(--text-dim);
   font-size: 0.85rem;
@@ -765,6 +770,10 @@ main {
 }
 .row__channel {
   font-weight: 500;
+  /* .row__title's rule, on the other text in the card that can be one long
+     unbroken token: a channel name with no spaces (or a single word wider than
+     the column) breaks rather than running off the card. */
+  overflow-wrap: anywhere;
 }
 /* Everything but the avatar — channel name, separator, date — as ONE block of
    ordinary inline content, shared by a card and the now-playing bar. Inline is
@@ -810,9 +819,30 @@ main {
 /* One unit: inline flow would otherwise break the date across its OWN spaces
    ("24 Feb / 2026, 17:00") once a long channel name leaves it too little room.
    The line is meant to break at the space BEFORE the separator instead, which
-   is why that is the only breakable one of the pair. */
+   is why that is the only breakable one of the pair — and it stays that way at
+   every width a date can actually fit, which is what the container query below
+   is scoped so tightly for. */
 .row__time-abs {
   white-space: nowrap;
+}
+/* THE ONE WIDTH AT WHICH IT MAY BREAK: a column too narrow to hold the date on a
+   line of its own, where nowrap keeps nothing whole — it just runs the date off
+   the card and the page's right edge with it (a 175px viewport put the box at
+   x = 207). Wrapped at its own spaces is the least-bad reading there.
+   A CONTAINER query, not a media query, because the question is about this column
+   rather than the viewport: the container is .row__sub / .player__meta (see the
+   container-type on each) and a size query reads its CONTENT box — exactly the
+   width left after the avatar's indent, on either page and in either layout.
+   150px is the widest a short-month timestamp runs across locales ("Sep 24, 2026,
+   05:00 PM" and the like) plus slack, and erring HIGH is the safe direction: above
+   the true threshold the cost is a date split over two lines, below it a page that
+   scrolls sideways. Neither two-pane layout can reach it — the 400px queue pane
+   leaves 331px here. The non-breaking space still holds inside the query, so the
+   "·" travels with the date's first line and does not dangle. */
+@container metarow (max-width: 150px) {
+  .row__time-abs {
+    white-space: normal;
+  }
 }
 
 /* Channel avatar (always present — image or letter placeholder — so the sub-row,
@@ -920,11 +950,18 @@ main {
 /* Per-video preferred-speed group: compact, tightly grouped, with a subtle
    divider before the Skip button. */
 .row__speeds {
-  flex: 0 0 auto;
+  /* Shrinkable and WRAPPING, for the same reason .row__actions is: three fixed
+     36px buttons are ~119px the footer cannot always give them, and an
+     unshrinkable group carried the card, and the page with it, off the right edge
+     below ~170px of viewport. It costs nothing above that — the group sits at its
+     max-content width wherever the footer has the room for it. */
+  flex: 0 1 auto;
   display: flex;
+  flex-wrap: wrap;
   /* Stretched by the footer, and stretching in turn, so the three buttons are
      the footer's height too. The divider is this box's border, so it now spans
-     the footer's full content height. */
+     the footer's full content height — per LINE once it wraps, as everywhere
+     else here. */
   align-items: stretch;
   gap: 2px;
   padding-right: 6px;
@@ -1379,6 +1416,7 @@ body.app-active #app-main.app[hidden] {
    one in-flow block over an out-of-flow avatar, for the reasons in .row__sub. */
 .player__meta {
   position: relative;
+  container: metarow / inline-size; /* as .row__sub, and for the same date rule */
   display: flex;
   align-items: center;
   min-height: 36px;
@@ -1440,6 +1478,14 @@ body.app-active #app-main.app[hidden] {
 }
 .player__speeds {
   display: flex;
+  /* WRAPS, so this group is not the one thing .player__controls' own wrap cannot
+     rescue: three buttons at the 3.5rem floor below are 180px of min-content, and
+     a 190px viewport leaves the bar 175px — the group then overflowed a line it
+     already had to itself. Wrapping drops its min-content to one button, and
+     changes nothing above that, the group's max-content being what decides where
+     the controls row breaks. Still NO align-items of its own (see
+     .player__controls): the default stretch is what sizes the buttons, per line. */
+  flex-wrap: wrap;
   gap: 6px;
 }
 /* Uniform width across ALL player control buttons (like / skip / 1× 1.5× 2×) so
@@ -1735,8 +1781,16 @@ body.app-active #app-main.app[hidden] {
 .chan__controls {
   display: flex;
   align-items: stretch;
+  /* WRAPS and SHRINKS, as .row__actions does on a card: the group and Ignore want
+     202px the row cannot always give them (115px at a 190px viewport), and
+     unshrinkable they took the row, and the page's horizontal scroll, with them.
+     .chan already wraps them onto their own line; this is the second break, after
+     that line is itself too narrow. Free above ~340px, where the 202px fits. The
+     stretch then works per LINE, so Ignore on a line of its own keeps its own
+     height rather than the group's. */
+  flex-wrap: wrap;
   gap: 8px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   margin-left: auto;
 }
 /* Same ghost treatment as a card's action footer, so the 1× / 1.5× / 2× group
@@ -1752,8 +1806,13 @@ body.app-active #app-main.app[hidden] {
 }
 .chan__speeds {
   display: flex;
+  /* .row__speeds' rule, for .row__speeds' reason: three fixed 36px buttons are an
+     unshrinkable 119px, and the row has only 75px of it at a 150px viewport. */
+  flex-wrap: wrap;
+  flex: 0 1 auto;
   /* Stretched by the row, and stretching in turn, so the three buttons are the
-     row's height. The divider is this box's border, so it spans that height. */
+     row's height — per LINE once it wraps. The divider is this box's border, so
+     it spans that height. */
   align-items: stretch;
   gap: 2px;
   padding-right: 6px;
