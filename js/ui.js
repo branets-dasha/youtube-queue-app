@@ -73,15 +73,41 @@ function watchUrl(videoId) {
 // Time formatting
 // ---------------------------------------------------------------------------
 
-// ONE formatter for the whole app, built once at module load: this is a hot
+// Every formatter here is built ONCE at module load: publish dates are a hot
 // path (once per rendered card) and Date#toLocaleString builds a fresh
 // Intl.DateTimeFormat on EVERY call — ~100ms per 2000 cards, against ~3ms
-// through this one. Consequence: the locale and time zone are resolved once per
+// through these. Consequence: the locale and time zone are resolved once per
 // page load, so changing either mid-session now needs a reload.
 const ABSOLUTE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
   month: 'short',
   day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+// The CUTOFF adds the weekday: it is a single stat the user reads as a date to
+// steer by, where "which day was that" is the actual question. The weekday is
+// deliberately NOT on ABSOLUTE_FORMAT — that one draws a publish date inside
+// the meta row, whose width is already tight enough to need an
+// `@container metarow` escape hatch below 150px, and a per-card weekday would
+// be noise there as well as more of it.
+//
+// It goes AFTER the date, which Intl cannot be asked for: `weekday: 'short'`
+// emits the weekday first in every locale. Hence three formatters composed by
+// hand — and NOT surgery on a combined formatter's formatToParts, since in
+// ru-RU the year's trailing ` г.` and the date/time separator can arrive fused
+// into one literal, putting the weekday inside the date (`2 сент. 2026 (ср) г.,
+// 17:30`). The ` (` / `), ` glue is the one hardcoded part, and is accepted.
+const CUTOFF_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+});
+const CUTOFF_WEEKDAY_FORMAT = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+});
+const CUTOFF_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   hour: '2-digit',
   minute: '2-digit',
 });
@@ -95,6 +121,22 @@ export function formatAbsolute(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso || '';
   return ABSOLUTE_FORMAT.format(d);
+}
+
+/**
+ * Absolute, locale-aware timestamp string with the weekday AFTER the date
+ * ("2 Sept 2026 (Wed), 17:30"). For the cutoff marker only; every other date
+ * goes through formatAbsolute.
+ * @param {string} iso
+ * @returns {string}
+ */
+function formatCutoffDate(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || '';
+  const date = CUTOFF_DATE_FORMAT.format(d);
+  const weekday = CUTOFF_WEEKDAY_FORMAT.format(d);
+  const time = CUTOFF_TIME_FORMAT.format(d);
+  return `${date} (${weekday}), ${time}`;
 }
 
 /**
@@ -1041,7 +1083,7 @@ export function renderStats(refs, { queued, handled, cutoff }) {
   if (refs.handledCountEl) refs.handledCountEl.textContent = String(handled);
   if (refs.cutoffEl) {
     if (cutoff) {
-      refs.cutoffEl.textContent = formatAbsolute(cutoff);
+      refs.cutoffEl.textContent = formatCutoffDate(cutoff);
       refs.cutoffEl.setAttribute('datetime', cutoff);
       refs.cutoffEl.setAttribute('title', cutoff);
     } else {
