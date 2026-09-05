@@ -621,6 +621,26 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     });
   }
 
+  if (playerPane) {
+    // The pane is focusable ITSELF, so a click on its background focuses it
+    // silently — and Chrome's :focus-visible heuristic then rings it on the
+    // next keydown, ANY keydown, a seek or a like or a mute included. Freeze
+    // the browser's own verdict at the moment focus LANDS and hold it for that
+    // focus session: no modality is guessed at, so Tab, '/', the '[' / ']'
+    // cycle and the skip link keep the ring they have today, and only the later
+    // keypress stops changing the answer. focusin BUBBLES, so the target check
+    // is what stops a control focused inside the pane answering for it. The
+    // class may linger while the pane is unfocused — inert, the rule needs
+    // :focus-visible and the next arrival recomputes it.
+    playerPane.addEventListener('focusin', (e) => {
+      if (e.target !== playerPane) return;
+      playerPane.classList.toggle(
+        'workspace__player--pointed',
+        !playerPane.matches(':focus-visible'),
+      );
+    });
+  }
+
   /** This list's cards, in DOM order. Re-queried every time: the <ul> is rebuilt. */
   function cards() {
     return queueList ? Array.from(queueList.querySelectorAll('.row')) : [];
