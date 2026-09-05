@@ -143,6 +143,16 @@ anything downstream.
   collector, `browser_press_key`, read it back — and it collects **hundreds of
   idle frames** while those calls travel. Find the transition
   (`s.findIndex(v => v !== s[0])`); never read the front of the array.
+- **A CSS edit is not live until you disable cache — a reload serves the OLD
+  `styles.css` for minutes at a time.** It fails as a FALSE NEGATIVE: the new
+  rule reads back absent with a correct diff sitting in the file, which invites
+  both wrong conclusions — revert the edit, or hunt a specificity bug that is not
+  there. Three steps on one CDP session, in order: `Network.enable`, *then*
+  `Network.setCacheDisabled({ cacheDisabled: true })`, *then* `page.reload()` —
+  the second alone is a no-op, and without the third you measure the cached page
+  anyway. It **persists for the rest of the browser session**, later
+  `browser_navigate` calls included, so send it once before the first edit rather
+  than after a measurement has already misled you.
 - **An ELEMENT screenshot clips to the bounding box, which crops this app's
   focus rings** — every one of them is painted *outside* its border box, so an
   element shot makes "focused" look identical to "plain" and proves nothing. Use
@@ -183,11 +193,9 @@ the conversation:
 3. **Prove the edit is live by reading a computed style** — never by looking at
    the page — then `browser_take_screenshot` again, same viewport, same framing.
 
-Step 3 is not ceremony: **a reload serves the OLD `styles.css` for minutes at a
-time**, and the tell is a full set of "after" measurements identical to the
-"before" ones, with a plausible diff sitting in the file. Cache-disabling takes
-**two** CDP calls on one session, in order — `Network.enable`, *then*
-`Network.setCacheDisabled({ cacheDisabled: true })`; the second alone is a no-op.
+Step 3 is not ceremony: the tell of a cached stylesheet is a full set of "after"
+measurements identical to the "before" ones, with a plausible diff sitting in the
+file. Disable cache before you make the edit (Browser traps).
 
 Pin the viewport whenever the answer depends on layout: 1280×800 is the
 side-by-side two-pane layout, ≤900px the stacked one, and the two have genuinely
