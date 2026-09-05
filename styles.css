@@ -1307,8 +1307,9 @@ body.app-active #app-main.app[hidden] {
 /* The pane is a tab stop (tabindex="0" in the HTML), so this ring appears for
    three gestures: a Tab out of the queue, the '/' pane toggle, and the handoff
    off a now-playing control that is about to vanish (showPlayerEmpty). It is
-   :focus-visible, so those draw a ring for a keyboard user while a CLICK on the
-   pane background focuses it silently — the wanted behaviour either way.
+   :focus-visible, so those draw a ring for a keyboard user; a CLICK on the pane
+   background focuses it silently, but only until the next keydown — which is
+   what the --pointed rule below is for.
    The offset must stay NON-NEGATIVE, keeping the ring wholly OUTSIDE the border
    box: an element paints its outline BEFORE its descendants, so an inset ring is
    painted over by .player__frame (full-bleed, black, flush to the pane's top and
@@ -1323,6 +1324,14 @@ body.app-active #app-main.app[hidden] {
 .workspace__player:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 0;
+}
+/* A POINTER press placed focus here, so no ring: Chrome's :focus-visible
+   heuristic flips a mouse-focused element on the NEXT keydown, any keydown, so
+   without this a seek, a like or a mute rings the whole pane. It must be an
+   explicit `outline: none` — narrowing the rule above with :not() only drops the
+   author ring and hands Chrome's own back (measured: outline: auto 1px). */
+.workspace__player--pointed:focus-visible {
+  outline: none;
 }
 
 .player {
