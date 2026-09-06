@@ -491,11 +491,37 @@ export function bindIframeFocusGuard(getIframe) {
 let keyboardGesture = false;
 let modalityBound = false;
 
+// The element a POINTER press put focus on. Single-slot, and the class is only
+// half the answer: styles.css suppresses the ring for it, so appearance stops
+// contradicting the selection verdict, which for a pointer arrival is always
+// "not selected". Chrome's flip is what makes the class necessary — an element
+// focused by mouse rings from the next keydown onwards, and there is no focus
+// call to state focusVisible on, the click having landed first.
+//
+// Deliberately NOT keyed on any selector: what the mark suppresses is decided
+// in the stylesheet, beside the ring rules themselves. The two ROW rings are
+// box-shadows and so survive it untouched, which is what leaves .row--pointed
+// and .chan--pointed free to keep ringing a placement press on purpose.
+let pointerFocused = null;
+
+function markPointerFocus(el) {
+  if (pointerFocused === el) return;
+  if (pointerFocused) pointerFocused.classList.remove('is-pointer-focused');
+  pointerFocused = el;
+  if (el && el.classList) el.classList.add('is-pointer-focused');
+}
+
 function trackInputModality() {
   if (modalityBound) return;
   modalityBound = true;
   document.addEventListener('keydown', () => { keyboardGesture = true; }, true);
   document.addEventListener('pointerdown', () => { keyboardGesture = false; }, true);
+  // pointerdown above runs BEFORE the browser moves focus, so the modality read
+  // here is already the gesture that caused this landing. The mark may linger on
+  // an element focus has left — inert, the rule needs :focus-visible too.
+  document.addEventListener('focusin', (e) => {
+    markPointerFocus(keyboardGesture ? null : e.target);
+  }, true);
 }
 
 /**
@@ -716,26 +742,6 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
         pointedCard.classList.remove('row--pointed');
         pointedCard = null;
       }
-    });
-  }
-
-  if (playerPane) {
-    // The pane is focusable ITSELF, so a click on its background focuses it
-    // silently — and Chrome's :focus-visible heuristic then rings it on the
-    // next keydown, ANY keydown, a seek or a like or a mute included. Freeze
-    // the browser's own verdict at the moment focus LANDS and hold it for that
-    // focus session: no modality is guessed at, so Tab, '/', the '[' / ']'
-    // cycle and the skip link keep the ring they have today, and only the later
-    // keypress stops changing the answer. focusin BUBBLES, so the target check
-    // is what stops a control focused inside the pane answering for it. The
-    // class may linger while the pane is unfocused — inert, the rule needs
-    // :focus-visible and the next arrival recomputes it.
-    playerPane.addEventListener('focusin', (e) => {
-      if (e.target !== playerPane) return;
-      playerPane.classList.toggle(
-        'workspace__player--pointed',
-        !playerPane.matches(':focus-visible'),
-      );
     });
   }
 

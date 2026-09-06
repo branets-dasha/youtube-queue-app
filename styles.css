@@ -352,6 +352,23 @@ body.app-active .blocked-overlay {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+/* A POINTER press placed focus here, so no ring — app-wide, over EVERY outline
+   ring in this file (page-chrome's markPointerFocus owns the class). Chrome
+   flips a mouse-focused element to :focus-visible on the next keydown, any
+   keydown, so without this a clicked button rings from the first keypress while
+   the selection verdict — frozen when focus landed — still refuses it, and a
+   ringed control that arms nothing is exactly the contradiction the ring is
+   there to prevent. The suppression must be EXPLICIT: narrowing each ring rule
+   with :not() drops only the author ring and hands Chrome's own back (measured:
+   outline: auto 1px). The two row rings are box-shadows and so pass through
+   untouched, which is what leaves .row--pointed and .chan--pointed free to ring
+   a placement press on purpose. Text fields are the one exemption — a caret is
+   not the field's boundary, and an input arms no shortcut anyway (the typing
+   guard), so it has no contradiction to fix. That :not() also lifts this to
+   0,3,0, above every ring rule here, so it need not come last in the file. */
+.is-pointer-focused:focus-visible:not(.field__input) {
+  outline: none;
+}
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1321,8 +1338,8 @@ body.app-active #app-main.app[hidden] {
    three gestures: a Tab out of the queue, the '/' pane toggle, and the handoff
    off a now-playing control that is about to vanish (showPlayerEmpty). It is
    :focus-visible, so those draw a ring for a keyboard user; a CLICK on the pane
-   background focuses it silently, but only until the next keydown — which is
-   what the --pointed rule below is for.
+   background focuses it silently, and the general pointer-focus rule near the
+   top of this file is what holds that answer past the next keydown.
    The offset must stay NON-NEGATIVE, keeping the ring wholly OUTSIDE the border
    box: an element paints its outline BEFORE its descendants, so an inset ring is
    painted over by .player__frame (full-bleed, black, flush to the pane's top and
@@ -1338,15 +1355,6 @@ body.app-active #app-main.app[hidden] {
   outline: 2px solid var(--focus);
   outline-offset: 0;
 }
-/* A POINTER press placed focus here, so no ring: Chrome's :focus-visible
-   heuristic flips a mouse-focused element on the NEXT keydown, any keydown, so
-   without this a seek, a like or a mute rings the whole pane. It must be an
-   explicit `outline: none` — narrowing the rule above with :not() only drops the
-   author ring and hands Chrome's own back (measured: outline: auto 1px). */
-.workspace__player--pointed:focus-visible {
-  outline: none;
-}
-
 .player {
   display: flex;
   flex-direction: column;
