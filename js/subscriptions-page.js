@@ -110,6 +110,7 @@ import {
   initQueueFocus,
   initPaneNav,
   focusFirst,
+  focusByGesture,
   bindIframeFocusGuard,
   setFatalHaltHandler,
 } from './page-chrome.js';
@@ -928,19 +929,19 @@ async function setVideoState(videoId, nextState, opts = {}) {
     // the window leaves a permanently blank pane with live controls over it.
     if (emptied) render();
     if (opts.advanceFocus || takesFocus) {
-      if (neighbour) neighbour.focus();
+      if (neighbour) focusByGesture(neighbour);
       // Nothing left to stand on. #hide-marked-btn is the honest landing: a live
       // control one press from bringing the hidden cards back, and the only
       // affordance the empty pane still has. Mirrors onCleanup on the stash.
       else if (!(queueFocus && queueFocus.focusCardAt(0)) && dom.hideMarkedBtn) {
-        dom.hideMarkedBtn.focus();
+        focusByGesture(dom.hideMarkedBtn);
       }
     }
   } else if (card) {
     setCardState(card, nextState);
     if (opts.advanceFocus) {
       const next = nextRowAfter(card);
-      if (next) next.focus();
+      if (next) focusByGesture(next);
     }
   }
   // This optimistic path skips render(), so re-evaluate the playback controls
@@ -1028,7 +1029,7 @@ async function addCardToStash(videoId, opts = {}) {
   const advancingFrom = opts.advanceFocus ? findCard(videoId) : null;
   if (advancingFrom) {
     const next = nextRowAfter(advancingFrom);
-    if (next) next.focus();
+    if (next) focusByGesture(next);
   }
 
   try {
@@ -1074,7 +1075,7 @@ async function addCardToStash(videoId, opts = {}) {
     // Nothing has been marked yet, so there is nothing to revert — except the
     // cursor, which moved above: put it back, so "a failed write leaves the card
     // untouched" holds for the keyboard too.
-    if (advancingFrom && advancingFrom.isConnected) advancingFrom.focus();
+    if (advancingFrom && advancingFrom.isConnected) focusByGesture(advancingFrom);
     // Route it through this page's one error router, which raises the halt
     // screen for a fatal DB state and toasts everything else.
     handleError(err);
@@ -1425,7 +1426,7 @@ function onScrollToPlaying() {
   // preventScroll first, then the centering scroll — focus()'s own "nearest"
   // scroll would otherwise land and be corrected a frame later, as a visible
   // double jump. Same two-call idiom as moveCard's page branch.
-  card.focus({ preventScroll: true });
+  focusByGesture(card, { preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
   return true;
 }
@@ -1456,7 +1457,7 @@ function onScrollToLastSkipped() {
   if (!target) return; // empty list: button is disabled anyway
   const card = findCard(target.videoId);
   if (!card) return;
-  card.focus({ preventScroll: true });
+  focusByGesture(card, { preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
@@ -1941,6 +1942,9 @@ const CARD_SPEED_KEYS = new Map([
  * button — every one of which used to make them inert. Scoping is free: `rows`
  * holds only this list's cards, so a .row from anywhere else answers -1.
  *
+ * Containment ALONE, deliberately: whether that card is visibly selected is
+ * isCardSelected's question, asked separately so Enter can keep using this one.
+ *
  * NOT for Enter/Space, which must match the .row exactly — see that branch.
  * @param {HTMLElement[]} rows the queue list's .row elements, in order
  * @param {Element|null} active document.activeElement
@@ -1978,6 +1982,11 @@ function onGlobalKeydown(e) {
   const rows = Array.from(dom.queueList.querySelectorAll('.row'));
   const active = document.activeElement;
   const idx = focusedCardIndex(rows, active);
+  // The card x / t / 1,5,2 may act on: focus alone is not enough, the ring the
+  // user can SEE is what names their target. Enter keeps `idx` — it matches the
+  // .row exactly and activates what is focused, so it answers a different
+  // question. The navigation keys take neither: they create the selection.
+  const selIdx = queueFocus && queueFocus.isCardSelected() ? idx : -1;
 
   if (key === 'arrowup' || key === 'arrowdown') {
     // ↑ = previous/older card (upward in the oldest->newest list), ↓ = next.
@@ -2035,34 +2044,34 @@ function onGlobalKeydown(e) {
     // video and wanting its card back is the whole point.
     if (onScrollToPlaying()) e.preventDefault();
   } else if (key === 'x') {
-    // x = Skip: toggle the focused card between new and skipped.
-    if (idx >= 0) {
+    // x = Skip: toggle the SELECTED card between new and skipped.
+    if (selIdx >= 0) {
       e.preventDefault();
-      toggleSkip(rows[idx].dataset.videoId, { advanceFocus: true });
+      toggleSkip(rows[selIdx].dataset.videoId, { advanceFocus: true });
     }
   } else if (CARD_SPEED_KEYS.has(key)) {
-    // Set the FOCUSED card's preferred speed (1 = 1×, 5 = 1.5×, 2 = 2× — see
+    // Set the SELECTED card's preferred speed (1 = 1×, 5 = 1.5×, 2 = 2× — see
     // CARD_SPEED_KEYS). Reuses the card speed-button behavior: toggles off if
     // already set, no playback, applies live only if the focused card is the one
     // currently playing. No-op on a non-embeddable card: it has no in-app
     // playback (its speed group renders inert), so there is nothing to set —
     // consistent with its footer.
-    if (idx >= 0) {
+    if (selIdx >= 0) {
       e.preventDefault();
-      const videoId = rows[idx].dataset.videoId;
+      const videoId = rows[selIdx].dataset.videoId;
       const rec = state.records.find((r) => r.videoId === videoId);
       if (!rec || rec.embeddable !== false) onCardSpeed(videoId, CARD_SPEED_KEYS.get(key));
     }
   } else if (key === 't') {
-    // t = add the FOCUSED card to the stash, through the same addCardToStash the
+    // t = add the SELECTED card to the stash, through the same addCardToStash the
     // card menu item calls — so a keyboard user never has to open that menu.
     // Advances focus like x, so a run of t's walks the queue rather than firing
     // twice on one card (the second add finds the video already stashed and,
     // with nothing new to say about it, writes nothing — but it would still
     // re-mark the same card).
-    if (idx >= 0) {
+    if (selIdx >= 0) {
       e.preventDefault();
-      addCardToStash(rows[idx].dataset.videoId, { advanceFocus: true });
+      addCardToStash(rows[selIdx].dataset.videoId, { advanceFocus: true });
     }
   } else if (key === 'enter') {
     // Play the FOCUSED card — the ONE card shortcut that matches the .row
