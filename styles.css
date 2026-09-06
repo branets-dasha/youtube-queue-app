@@ -629,7 +629,9 @@ body.app-active .blocked-overlay {
    cursor position for ArrowUp/ArrowDown, x, t and 1/5/2 (see initQueueFocus in
    page-chrome.js) — and only SOME of the ways focus reaches one are the user
    choosing a place. :focus-visible covers keyboard focus and the programmatic
-   focus Chrome propagates it to; .row--pointed covers the one pointer gesture
+   focus that states it (page-chrome's focusByGesture, which passes focusVisible
+   from the gesture in flight rather than leaving it to a heuristic Chrome
+   revises on the next keydown); .row--pointed covers the one pointer gesture
    that IS a placement, a click on the card's own body. What plain :focus would
    also have caught, and must not: the app rescuing focus onto a card after a
    MOUSE press on a control that disabled itself (Clean up, Trim front, Show
@@ -644,6 +646,17 @@ body.app-active .blocked-overlay {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus), var(--shadow);
+}
+/* Focus stayed on a card the pointer just DESELECTED, so the ring must not come
+   back: a press on the thumbnail of an already-focused card unmarks it, and
+   ui.js then re-focuses the row focus is already on — a no-op, which is the one
+   route by which focusVisible cannot be stated (the option only applies when
+   focus actually moves). Chrome's flip on the next keydown would otherwise ring
+   a card the shortcuts refuse. Restores the resting shadow explicitly rather
+   than narrowing the rule above, which would hand the ring back; page-chrome's
+   pointerdown owns the class and the next focusin clears it. */
+.row.row--unringed:focus-visible {
+  box-shadow: var(--shadow);
 }
 
 .row__thumb-btn {

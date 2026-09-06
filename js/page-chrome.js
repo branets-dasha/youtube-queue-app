@@ -474,6 +474,45 @@ export function bindIframeFocusGuard(getIframe) {
   });
 }
 
+// Whether the gesture in flight came from the KEYBOARD, so a programmatic focus
+// can state its ring explicitly instead of leaving it to Chrome.
+//
+// Chrome decides a programmatic focus by propagation and gets the LANDING right
+// — a jump button's click leaves its card unringed, the same jump from `p` rings
+// it. What it does not do is HOLD that answer: the first keydown afterwards, any
+// keydown, flips a mouse-placed focus to :focus-visible. The card then rings
+// while the selection verdict, frozen when focus landed, still says not-selected
+// — a visibly ringed card the shortcuts refuse. Passing focusVisible freezes the
+// same answer for good, the option being sticky where the heuristic is not.
+//
+// Bound from the init functions rather than at import: this module must stay
+// importable under Node, and binding on first USE would miss the very gesture
+// that led to the call.
+let keyboardGesture = false;
+let modalityBound = false;
+
+function trackInputModality() {
+  if (modalityBound) return;
+  modalityBound = true;
+  document.addEventListener('keydown', () => { keyboardGesture = true; }, true);
+  document.addEventListener('pointerdown', () => { keyboardGesture = false; }, true);
+}
+
+/**
+ * focus(), with the ring decided by the gesture that led here. THE one place
+ * that decision is made: every programmatic landing in the app goes through
+ * this or through focusFirst below, so no call site carries a modality argument
+ * of its own and the three pages cannot drift apart on it.
+ * @param {Element|null|undefined} el
+ * @param {FocusOptions} [opts] merged under the focusVisible this decides
+ * @returns {Element|null} `el` if it took focus, else null
+ */
+export function focusByGesture(el, opts = {}) {
+  if (!el || !el.focus) return null;
+  el.focus({ ...opts, focusVisible: keyboardGesture });
+  return document.activeElement === el ? el : null;
+}
+
 /**
  * Focus the first candidate that will actually TAKE it, and report which did.
  * For handing focus off a control that is about to be disabled or hidden — the
@@ -489,8 +528,7 @@ export function bindIframeFocusGuard(getIframe) {
 export function focusFirst(...candidates) {
   for (const el of candidates) {
     if (!el) continue;
-    el.focus();
-    if (document.activeElement === el) return el;
+    if (focusByGesture(el)) return el;
   }
   return null;
 }
@@ -555,6 +593,7 @@ export function focusFirst(...candidates) {
  *   captureQueueScroll: () => () => void}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 1080px)' } = {}) {
+  trackInputModality();
   // The videoId of the card the walk resumes at — an id, never a node, so it
   // survives every re-render. Null until the user has been in the list. Focus
   // landing in a card is its usual writer (the focusin below), but not its only
@@ -596,6 +635,21 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       ? el
       : null;
 
+  // The card wearing .row--unringed, if any — the class that stops a ring
+  // returning to a card focus never left but selection did. Single-slot like
+  // pointedCard, and cleared by the same focusin.
+  let unringedCard = null;
+  const rowOfActive = () => {
+    const a = document.activeElement;
+    return a && a.closest ? a.closest('.row') : null;
+  };
+  const setUnringed = (row) => {
+    if (unringedCard === row) return;
+    if (unringedCard) unringedCard.classList.remove('row--unringed');
+    unringedCard = row;
+    if (row) row.classList.add('row--unringed');
+  };
+
   if (queueList) {
     // pointerdown, not click: the mark has to be set BEFORE focus moves.
     //
@@ -625,6 +679,14 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       // unringed one. Unconditional is safe — a press that DOES move focus is
       // re-frozen by the focusin a moment later.
       selectedEl = selectionFor(document.activeElement);
+      // Focus that STAYS on a card this press just deselected keeps a ring the
+      // gate no longer honours: Chrome flips it on the next keydown, and the
+      // usual answer — state focusVisible outright — is unavailable, that option
+      // applying only when focus actually MOVES. Suppress it in CSS instead. The
+      // one route here is a press on the thumbnail of the focused card, which
+      // ui.js re-focuses in place; the focusin below clears the class the moment
+      // focus goes anywhere at all.
+      setUnringed(selectedEl ? null : rowOfActive());
     });
 
     // focusin (not focus) because it BUBBLES: the note must be taken whether
@@ -644,6 +706,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       // card answers for itself — a Tabbed-to Skip rings and names its card, a
       // clicked one rings nothing.
       selectedEl = selectionFor(e.target);
+      setUnringed(null); // focus MOVED: what it lands on rings on its own terms
       // The mark survives only while focus is on the marked card ITSELF, and is
       // retired the moment focus moves anywhere else — a walk on to the next
       // card, or a control reached inside this one. Presses on controls no
@@ -822,7 +885,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       // Entering the list from OUTSIDE it: always the remembered CARD, never
       // index 0 blindly and never the footer button. A page key entering the
       // list is still an ENTRY — there is no "from" to page away from yet.
-      rememberedCard(rows).focus();
+      focusByGesture(rememberedCard(rows));
       return true;
     }
     const step = page ? QUEUE_PAGE_STEP : 1;
@@ -831,7 +894,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     // leaves an on-screen destination alone and otherwise brings it just into
     // view. `.row`'s scroll-margin-top is what keeps a top-edge landing clear of
     // the sticky .queue-header.
-    items[next].focus();
+    focusByGesture(items[next]);
     return next !== i; // clamped: focus placed, key NOT taken — see above
   }
 
@@ -854,7 +917,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     if (!walkApplies()) return false;
     const items = walkItems();
     if (!items.length) return false;
-    (dir < 0 ? items[0] : items[items.length - 1]).focus();
+    focusByGesture(dir < 0 ? items[0] : items[items.length - 1]);
     return true;
   }
 
@@ -882,7 +945,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     const rows = cards();
     if (!rows.length) return null;
     const target = rows[index] || rows[rows.length - 1] || rows[0];
-    target.focus();
+    focusByGesture(target);
     return target;
   }
 
@@ -1039,7 +1102,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    */
   function focusRemembered({ preventScroll = true } = {}) {
     const target = rememberedCard(cards());
-    if (target) target.focus({ preventScroll });
+    if (target) focusByGesture(target, { preventScroll });
     return target;
   }
 
@@ -1132,6 +1195,8 @@ export function initListWalk({
   pointedClass,
   pageStep = QUEUE_PAGE_STEP,
 } = {}) {
+  trackInputModality();
+
   // The id of the row the walk resumes at — an id, never a node. focusin is its
   // ONLY writer here: unlike the queue there is no move that changes the user's
   // place while focus is elsewhere, so there is no rememberCard counterpart.
@@ -1267,14 +1332,14 @@ export function initListWalk({
     if (i === -1) {
       // Outside the list, or in it but not on a row: an ENTRY, not a step. The
       // gate guarantees a row to land on, so this always takes the key.
-      rememberedRow(items).focus();
+      focusByGesture(rememberedRow(items));
       return true;
     }
     const step = page ? pageStep : 1;
     const next = Math.min(items.length - 1, Math.max(0, i + dir * step));
     // ONE focus() for both keys — see moveCard. Nothing here overrides the
     // browser's "nearest", so a row already on screen is focused where it sits.
-    items[next].focus();
+    focusByGesture(items[next]);
     return next !== i; // clamped: focus placed, key NOT taken — see above
   }
 
@@ -1293,7 +1358,7 @@ export function initListWalk({
   function focusEdge(dir) {
     if (!walkApplies()) return false;
     const items = rows();
-    (dir < 0 ? items[0] : items[items.length - 1]).focus();
+    focusByGesture(dir < 0 ? items[0] : items[items.length - 1]);
     return true;
   }
 
@@ -1314,7 +1379,7 @@ export function initListWalk({
    */
   function focusRemembered({ preventScroll = true } = {}) {
     const target = rememberedRow(rows());
-    if (target) target.focus({ preventScroll });
+    if (target) focusByGesture(target, { preventScroll });
     return target;
   }
 
@@ -1403,6 +1468,7 @@ function paneFocusables(el) {
  * @returns {{movePane: (dir:number) => boolean, togglePane: () => boolean}}
  */
 export function initPaneNav({ panes = [] } = {}) {
+  trackInputModality();
   const cycle = (Array.isArray(panes) ? panes : []).filter((p) => p && p.el);
   const roleAt = (role) => cycle.findIndex((p) => p.role === role);
   const queueAt = roleAt('queue');

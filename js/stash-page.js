@@ -102,6 +102,7 @@ import {
   initQueueFocus,
   initPaneNav,
   focusFirst,
+  focusByGesture,
   bindIframeFocusGuard,
   setFatalHaltHandler,
 } from './page-chrome.js';
@@ -871,7 +872,7 @@ async function setVideoState(videoId, nextState, opts = {}) {
     setCardState(card, nextState);
     if (opts.advanceFocus) {
       const next = nextRowAfter(card);
-      if (next) next.focus();
+      if (next) focusByGesture(next);
     }
   }
   // This optimistic path skips render(), so re-evaluate what depends on the
@@ -1074,7 +1075,7 @@ function renderKeepingPlace() {
       const control = controlIndex >= 0 ? cardControls(rebuilt)[controlIndex] : null;
       // preventScroll: focusing scrolls the card into view by default, which
       // would fight the scroll restore below.
-      (control || rebuilt).focus({ preventScroll: true });
+      focusByGesture(control || rebuilt, { preventScroll: true });
     }
   }
   if (restoreScroll) restoreScroll();
@@ -1140,7 +1141,7 @@ function scrollToCard(videoId, { focus = false } = {}) {
   // preventScroll first, then the centering scroll — focus()'s own "nearest"
   // scroll would otherwise land and be corrected a frame later, as a visible
   // double jump. Same two-call idiom as moveCard's page branch.
-  if (focus) card.focus({ preventScroll: true });
+  if (focus) focusByGesture(card, { preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
   return card;
 }

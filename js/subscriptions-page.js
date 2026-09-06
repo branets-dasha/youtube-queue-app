@@ -110,6 +110,7 @@ import {
   initQueueFocus,
   initPaneNav,
   focusFirst,
+  focusByGesture,
   bindIframeFocusGuard,
   setFatalHaltHandler,
 } from './page-chrome.js';
@@ -928,19 +929,19 @@ async function setVideoState(videoId, nextState, opts = {}) {
     // the window leaves a permanently blank pane with live controls over it.
     if (emptied) render();
     if (opts.advanceFocus || takesFocus) {
-      if (neighbour) neighbour.focus();
+      if (neighbour) focusByGesture(neighbour);
       // Nothing left to stand on. #hide-marked-btn is the honest landing: a live
       // control one press from bringing the hidden cards back, and the only
       // affordance the empty pane still has. Mirrors onCleanup on the stash.
       else if (!(queueFocus && queueFocus.focusCardAt(0)) && dom.hideMarkedBtn) {
-        dom.hideMarkedBtn.focus();
+        focusByGesture(dom.hideMarkedBtn);
       }
     }
   } else if (card) {
     setCardState(card, nextState);
     if (opts.advanceFocus) {
       const next = nextRowAfter(card);
-      if (next) next.focus();
+      if (next) focusByGesture(next);
     }
   }
   // This optimistic path skips render(), so re-evaluate the playback controls
@@ -1028,7 +1029,7 @@ async function addCardToStash(videoId, opts = {}) {
   const advancingFrom = opts.advanceFocus ? findCard(videoId) : null;
   if (advancingFrom) {
     const next = nextRowAfter(advancingFrom);
-    if (next) next.focus();
+    if (next) focusByGesture(next);
   }
 
   try {
@@ -1074,7 +1075,7 @@ async function addCardToStash(videoId, opts = {}) {
     // Nothing has been marked yet, so there is nothing to revert — except the
     // cursor, which moved above: put it back, so "a failed write leaves the card
     // untouched" holds for the keyboard too.
-    if (advancingFrom && advancingFrom.isConnected) advancingFrom.focus();
+    if (advancingFrom && advancingFrom.isConnected) focusByGesture(advancingFrom);
     // Route it through this page's one error router, which raises the halt
     // screen for a fatal DB state and toasts everything else.
     handleError(err);
@@ -1425,7 +1426,7 @@ function onScrollToPlaying() {
   // preventScroll first, then the centering scroll — focus()'s own "nearest"
   // scroll would otherwise land and be corrected a frame later, as a visible
   // double jump. Same two-call idiom as moveCard's page branch.
-  card.focus({ preventScroll: true });
+  focusByGesture(card, { preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
   return true;
 }
@@ -1456,7 +1457,7 @@ function onScrollToLastSkipped() {
   if (!target) return; // empty list: button is disabled anyway
   const card = findCard(target.videoId);
   if (!card) return;
-  card.focus({ preventScroll: true });
+  focusByGesture(card, { preventScroll: true });
   card.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
