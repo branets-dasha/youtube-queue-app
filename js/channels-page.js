@@ -183,7 +183,7 @@ function onKeydown(e) {
     // x = Ignore, this page's counterpart to the queue's skip — both mean "keep
     // this out of the queue", and both toggle. Focus does NOT move: an ignored
     // channel greys in place and is never removed, so there is nothing to rescue.
-    const channelId = focusedChannelId();
+    const channelId = selectedChannelId();
     if (channelId) {
       e.preventDefault();
       onToggleIgnore(channelId);
@@ -192,7 +192,7 @@ function onKeydown(e) {
     // 1 / 5 / 2 = the same three presets the cards use, routed through the same
     // handler the speed buttons call — so pressing the one already active clears
     // the pref, exactly as clicking it does. No focus move, like the card keys.
-    const channelId = focusedChannelId();
+    const channelId = selectedChannelId();
     if (channelId) {
       e.preventDefault();
       onSpeed(channelId, CHANNEL_SPEED_KEYS.get(key));
@@ -201,13 +201,22 @@ function onKeydown(e) {
 }
 
 /**
- * The channelId of the row that CONTAINS focus, or null when focus is outside
- * the list altogether. Resolved by closest('.chan') rather than an exact match,
- * which is what keeps the per-row keys alive while focus sits on a control
- * INSIDE a row — the channel link, a speed button, Ignore.
+ * The channelId of the SELECTED row — the one containing focus, but only while
+ * that focus is visibly ringed, so the user can SEE which row x or a speed key
+ * is about to hit. Null otherwise, leaving those keys inert.
+ *
+ * Containment is still closest('.chan') rather than an exact match, which is
+ * what keeps the per-row keys alive while focus sits on a control INSIDE a row —
+ * a Tabbed-to channel link, speed button or Ignore rings and names its row. A
+ * CLICKED one rings nothing, and no longer answers.
+ *
+ * Gated here rather than at the two call sites, as the queue pages gate: both of
+ * this page's per-row keys ask the same question and there is no Enter branch
+ * wanting the ungated answer.
  * @returns {string|null}
  */
-function focusedChannelId() {
+function selectedChannelId() {
+  if (!(walk && walk.isItemSelected())) return null;
   const active = document.activeElement;
   const row = active && active.closest ? active.closest('.chan') : null;
   return (row && row.dataset.channelId) || null;

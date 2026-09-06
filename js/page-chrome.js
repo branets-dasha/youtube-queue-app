@@ -574,6 +574,28 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   // re-render drops the class with the <ul> it was on.
   let pointedCard = null;
 
+  // The element focus LANDED on while visibly ringed — the app's notion of a
+  // SELECTED card, which is what arms x / t / 1,5,2 (see isCardSelected). Held
+  // as the element rather than a boolean so a later focus move that fires no
+  // focusin here — out of the list entirely — cannot leave a stale yes behind.
+  //
+  // Frozen at landing because it CANNOT be read when the key arrives: Chrome
+  // flips the focused element to :focus-visible on the first keydown, any
+  // keydown, so a gate reading it live is true for every card the user merely
+  // clicked (measured: false before the key, true inside the handler). Same
+  // reason the player pane freezes its own verdict, a few lines below.
+  let selectedEl = null;
+
+  // The card ring rule (styles.css: .row:focus-visible, .row.row--pointed:focus)
+  // asked of the element that holds focus. Only ever called with that element,
+  // which is what makes the pointed half sound: the class alone does not ring.
+  // One expression because the verdict is frozen at TWO sites, and a second copy
+  // could disagree with the first.
+  const selectionFor = (el) =>
+    el && el.closest && el.closest('.row') && (el.matches(':focus-visible') || el === pointedCard)
+      ? el
+      : null;
+
   if (queueList) {
     // pointerdown, not click: the mark has to be set BEFORE focus moves.
     //
@@ -595,6 +617,14 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       if (pointedCard && pointedCard !== placed) pointedCard.classList.remove('row--pointed');
       pointedCard = placed;
       if (placed) placed.classList.add('row--pointed');
+      // The ring has just changed, and a press on the card ALREADY holding focus
+      // moves no focus — so no focusin follows to re-freeze the verdict against
+      // it. Both directions were live: marking the focused card left the keys
+      // inert over a ringed one, and a press on its thumbnail unmarked it while
+      // ui.js re-focused the row focus was already on, arming them over an
+      // unringed one. Unconditional is safe — a press that DOES move focus is
+      // re-frozen by the focusin a moment later.
+      selectedEl = selectionFor(document.activeElement);
     });
 
     // focusin (not focus) because it BUBBLES: the note must be taken whether
@@ -609,6 +639,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
       const card = e.target && e.target.closest ? e.target.closest('.row') : null;
       const id = card && card.dataset ? card.dataset.videoId : null;
       if (id) rememberedId = id;
+      // Ringed on arrival? Read BEFORE the retire below, since the pointed half
+      // is exactly `e.target` still being the marked card. A control inside a
+      // card answers for itself — a Tabbed-to Skip rings and names its card, a
+      // clicked one rings nothing.
+      selectedEl = selectionFor(e.target);
       // The mark survives only while focus is on the marked card ITSELF, and is
       // retired the moment focus moves anywhere else — a walk on to the next
       // card, or a control reached inside this one. Presses on controls no
@@ -1008,6 +1043,24 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     return target;
   }
 
+  /**
+   * Is the card holding focus SELECTED — visibly ringed when focus arrived, so
+   * the user could SEE which card the key is about to hit? The gate for the
+   * shortcuts that mutate one card out of many (x, t, 1/5/2). The navigation
+   * keys are exempt: they CREATE a selection rather than consume one, and
+   * Enter is exempt too, activating whatever is focused.
+   *
+   * Invisible focus keeps its own job — putting Tab in the right place after a
+   * mouse click — it just stops naming a target the user cannot see. So a
+   * mouse-clicked thumbnail, speed button or Skip no longer arms the keys, and
+   * neither does a programmatic landing after a mouse gesture (Trim front,
+   * "Show all", the removal rescue), which by design does not ring either.
+   * @returns {boolean}
+   */
+  function isCardSelected() {
+    return selectedEl !== null && selectedEl === document.activeElement;
+  }
+
   return {
     moveCard,
     focusEdge,
@@ -1017,6 +1070,7 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     renderKeepingAnchor,
     focusRemembered,
     captureQueueScroll,
+    isCardSelected,
   };
 }
 
@@ -1068,7 +1122,8 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
  * @param {number} [opts.pageStep] rows one PageUp/PageDown covers.
  * @returns {{moveItem: (dir:number, opts?:{page?:boolean}) => boolean,
  *   focusEdge: (dir:number) => boolean,
- *   focusRemembered: (opts?:{preventScroll?:boolean}) => Element|null}}
+ *   focusRemembered: (opts?:{preventScroll?:boolean}) => Element|null,
+ *   isItemSelected: () => boolean}}
  */
 export function initListWalk({
   list,
@@ -1087,9 +1142,21 @@ export function initListWalk({
   // here would ring a row after a keystroke aimed at another region entirely.
   let pointedRow = null;
 
+  // The element focus LANDED on while visibly ringed — a SELECTED row, which is
+  // what arms the page's per-row keys (see isItemSelected). initQueueFocus's
+  // selectedEl exactly, for the same reason it cannot be read when the key
+  // arrives: Chrome flips the focused element to :focus-visible on the first
+  // keydown, so a gate reading it live is true for every row merely clicked.
+  let selectedEl = null;
+
   const rowOf = (node) => (node && node.closest ? node.closest(itemSelector) : null);
   const mark = (row) => row && pointedClass && row.classList.add(pointedClass);
   const unmark = (row) => row && pointedClass && row.classList.remove(pointedClass);
+
+  // The row ring rule asked of the element that holds focus — initQueueFocus's
+  // selectionFor exactly, and frozen at the same two sites for the same reason.
+  const selectionFor = (el) =>
+    el && rowOf(el) && (el.matches(':focus-visible') || el === pointedRow) ? el : null;
 
   if (list) {
     // pointerdown, not click: the mark has to be set BEFORE focus moves. A press
@@ -1104,6 +1171,10 @@ export function initListWalk({
       if (pointedRow !== placed) unmark(pointedRow);
       pointedRow = placed;
       mark(placed);
+      // The ring has just changed, and a press on the row ALREADY holding focus
+      // moves no focus, so no focusin follows to re-freeze the verdict. Safe
+      // unconditionally — see initQueueFocus, where both directions were live.
+      selectedEl = selectionFor(document.activeElement);
     });
 
     // focusin (not focus) because it BUBBLES: the note must be taken whether
@@ -1113,6 +1184,11 @@ export function initListWalk({
       const row = rowOf(e.target);
       const id = row && row.dataset ? row.dataset[idKey] : null;
       if (id) rememberedId = id;
+      // Ringed on arrival? Read BEFORE the retire below, since the pointed half
+      // is exactly `e.target` still being the marked row. A control inside a row
+      // answers for itself — a Tabbed-to Ignore rings and names its row, a
+      // clicked one rings nothing.
+      selectedEl = selectionFor(e.target);
       // The mark survives only while focus is on the marked row ITSELF, and is
       // retired the moment focus moves anywhere else — the next row, or a
       // control reached inside this one.
@@ -1242,7 +1318,22 @@ export function initListWalk({
     return target;
   }
 
-  return { moveItem, focusEdge, focusRemembered };
+  /**
+   * Is the row holding focus SELECTED — visibly ringed when focus arrived, so
+   * the user could SEE which row the key is about to hit? The gate for the keys
+   * that mutate one row out of many. The walk keys are exempt: they CREATE a
+   * selection rather than consume one.
+   *
+   * Invisible focus keeps its own job — putting Tab in the right place after a
+   * mouse click — it just stops naming a target the user cannot see, so a
+   * mouse-clicked control inside a row no longer arms the keys.
+   * @returns {boolean}
+   */
+  function isItemSelected() {
+    return selectedEl !== null && selectedEl === document.activeElement;
+  }
+
+  return { moveItem, focusEdge, focusRemembered, isItemSelected };
 }
 
 // ---------------------------------------------------------------------------
