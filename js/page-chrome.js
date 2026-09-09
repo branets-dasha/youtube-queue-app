@@ -338,7 +338,7 @@ export function reportIfFatalDb(err) {
 
 // ---------------------------------------------------------------------------
 // Privacy curtain: a full-viewport overlay that hides the whole page. Covers the
-// page on a wheel-DOWN anywhere outside the exempt scroll area (or Esc), lifted
+// page on a wheel-DOWN in the band ABOVE the exempt scroll area (or Esc), lifted
 // by a wheel-UP (or Esc). Visual only — the player is NOT paused.
 // ---------------------------------------------------------------------------
 
@@ -363,8 +363,9 @@ const SCREEN_ESCAPING_KEYS = new Set(['f']);
  *
  * @param {object} opts
  * @param {HTMLElement|null} opts.node the `#curtain` overlay (tolerates null).
- * @param {string} [opts.exemptSelector] wheeling inside a match scrolls it
- *   normally and never drives the curtain.
+ * @param {string} [opts.exemptSelector] the scroll area a wheel-down must be
+ *   ABOVE to cover: its top edge is the boundary, so the panes and the gutters
+ *   beside them scroll normally and never drive the curtain.
  * @param {string} [opts.narrowQuery] media query for the stacked layout, where
  *   the whole page scrolls, so a wheel-down must not cover it.
  * @param {boolean} [opts.coverOnWheelDown] false for a page whose document
@@ -409,29 +410,37 @@ export function initCurtain({
     node.setAttribute('aria-hidden', String(!covering));
   }
 
-  /** Wheel handler: scroll INSIDE the exempt area scrolls it; elsewhere it
-   *  drives the curtain — down covers, up lifts (binary by direction). While the
-   *  curtain is covering it is on top, so a wheel event's target is the curtain
-   *  (not the queue), and a scroll-up over it lifts it. In the stacked layout the
-   *  page scrolls as one column, so scroll-down does NOT cover the page (Esc
-   *  still does) — but a scroll-up may still lift an already-covered curtain. */
+  /** Wheel handler: down covers, up lifts (binary by direction).
+   *
+   *  A wheel-DOWN covers only from the band ABOVE the exempt area's top edge —
+   *  the header/toolbar/stats strip — not from everywhere outside it. The
+   *  GUTTERS beside the panes are outside the exempt area too and run the full
+   *  page height, so a wheel that overshot a pane sideways by a few pixels
+   *  covered the screen instead of doing nothing. Decided by GEOMETRY, not by
+   *  the event target: a wheel over a gutter targets whatever is behind it,
+   *  which never matches the exempt selector. The rect is read per event — the
+   *  layout changes with width and with onboarding.
+   *
+   *  No exempt box (onboarding hides #app-main, so .workspace is not laid out)
+   *  means the whole viewport covers, as it always did: there is no pane to
+   *  overshoot.
+   *
+   *  A wheel-UP lifts from anywhere at any width — while covering, the curtain
+   *  is on top, so the event's target is the overlay rather than the queue. */
   function onWheel(e) {
-    // Stacked layout: the whole page scrolls, so scroll-down must not cover the
-    // page (it would fight normal scrolling). But scroll-up may still LIFT an
-    // already-covered curtain on any width. Reuse the player-above-queue
-    // breakpoint.
-    const narrow = window.matchMedia(narrowQuery).matches;
-    const t = e.target;
-    // Let the exempt pane(s) scroll normally — wheeling over the queue list or
-    // the player's description never triggers the curtain. Only the
-    // header/toolbar/stats region ABOVE it covers the page.
-    if (t && typeof t.closest === 'function' && t.closest(exemptSelector)) return;
-    if (e.deltaY > 0) {
-      // scroll down -> cover (wide, cover-capable layouts only)
-      if (coverOnWheelDown && !narrow && !covering) set(true);
-    } else if (e.deltaY < 0) {
+    if (e.deltaY < 0) {
       if (covering) set(false); // scroll up -> lift (any width)
+      return;
     }
+    if (e.deltaY === 0) return;
+    // Stacked layout: the whole page scrolls as one column, so a scroll-down
+    // must not cover it (that would fight normal scrolling; Esc still covers).
+    // Reuse the player-above-queue breakpoint.
+    if (!coverOnWheelDown || covering || window.matchMedia(narrowQuery).matches) return;
+    const exempt = document.querySelector(exemptSelector);
+    const box = exempt ? exempt.getBoundingClientRect() : null;
+    if (box && (box.width || box.height) && e.clientY >= box.top) return;
+    set(true);
   }
 
   window.addEventListener('wheel', onWheel, { passive: true });
