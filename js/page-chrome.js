@@ -306,6 +306,13 @@ export function describeAuthFailure(err) {
     return 'A sign-in is already in progress — finish that one first.';
   }
   const code = err && err.code;
+  if (code === 'popup_failed_to_open' || /failed to open popup/i.test(message)) {
+    // Reached from the interactive requests that cannot be inside a gesture —
+    // either page's Like re-consent retry and api.js's 401 retry — where GIS's
+    // own wording names only the popup and offers no way out. Sign in always
+    // has a live gesture, so it is the way through.
+    return 'Your browser blocked the Google popup. Press Sign in, then try again.';
+  }
   if (code === 'popup_closed' || code === 'access_denied' || /cancel/i.test(message)) {
     return 'Sign-in was cancelled, so nothing was changed.';
   }
