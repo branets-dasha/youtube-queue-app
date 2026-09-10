@@ -191,25 +191,16 @@ export function hasSession() {
 }
 
 /**
- * Ensure a valid token, refreshing silently if needed. If a silent refresh
- * fails and `interactiveFallback` is true, fall back to an interactive prompt.
- * @param {object} [opts]
- * @param {boolean} [opts.interactiveFallback=false]
+ * Ensure a valid token, refreshing silently (prompt: 'none', no UI) if needed.
+ * It never escalates to an interactive prompt: its callers are mid-flight API
+ * calls, far from any click, and a popup opened there is blocked outright.
+ * Authorizing from a gesture is ensureAuthorized()'s job.
  * @returns {Promise<string>}
  */
-export async function ensureToken({ interactiveFallback = false } = {}) {
+export async function ensureToken() {
   const existing = getToken();
   if (existing) return existing;
-  try {
-    // Attempt a genuinely silent refresh first (prompt: 'none', no UI).
-    return await requestToken({ interactive: false });
-  } catch (err) {
-    // Only escalate to an interactive prompt when the caller opted in.
-    if (interactiveFallback) {
-      return requestToken({ interactive: true });
-    }
-    throw err;
-  }
+  return requestToken({ interactive: false });
 }
 
 /**
@@ -220,6 +211,8 @@ export async function ensureToken({ interactiveFallback = false } = {}) {
  * instead of gating itself on hasSession(), so none of them needs a second
  * click. Call it straight from the click handler: the popup GIS may open is
  * only exempt from the browser's popup blocker while the gesture is still live.
+ * Holding no live token, it goes straight to an interactive request — ONE
+ * requestAccessToken inside that gesture, exactly what Sign in does.
  *
  * There is deliberately NO once-per-load “already prepared” memo: initAuth() is
  * itself idempotent per Client ID (it no-ops on an unchanged one and
@@ -236,10 +229,8 @@ export async function ensureToken({ interactiveFallback = false } = {}) {
  * @param {boolean} [opts.forceNew=false] Ask GIS for a fresh token instead of
  *        reusing one we already hold. Only for the cases where the held token IS
  *        the problem: the 401/403 re-consent retry after a scope error, where
- *        ensureToken() would hand back that same unusable token and the retry
- *        would fail identically — and Sign in, which has no session to reuse.
- *        The default path tries a silent (prompt: 'none') refresh first, so a
- *        user who already granted the scope usually sees no popup at all.
+ *        the token we already hold would come straight back and the retry would
+ *        fail identically — and Sign in, which has no session to reuse.
  * @returns {Promise<string>} the access token
  */
 export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
@@ -250,9 +241,16 @@ export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
   }
   await waitForGis();
   initAuth(clientId);
-  return forceNew
-    ? requestToken({ interactive: true })
-    : ensureToken({ interactiveFallback: true });
+  if (!forceNew) {
+    const existing = getToken();
+    if (existing) return existing;
+  }
+  // With no usable token this must be the FIRST and ONLY requestAccessToken of
+  // the gesture: a silent (prompt: 'none') attempt first spends the click's
+  // transient activation, and the interactive request that has to follow is
+  // then blocked as a popup — GIS reports popup_failed_to_open and the control
+  // does nothing.
+  return requestToken({ interactive: true });
 }
 
 /**
