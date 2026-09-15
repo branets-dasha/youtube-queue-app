@@ -305,6 +305,7 @@ const SHORTCUT_CHARS = new Set([
   'x', 't', 'p', 'l', 'n', 'm', 'f', // card and player gestures
   '1', '5', '2', // the speed presets
   '/', '[', ']', // the pane keys
+  '\\', // the door into the player frame
   '-', '=', '+', // the speed cycle
 ]);
 
@@ -317,6 +318,7 @@ const PUNCTUATION_CODES = new Map([
   ['BracketRight', ']'],
   ['Minus', '-'],
   ['Equal', '='],
+  ['Backslash', '\\'],
 ]);
 
 /**

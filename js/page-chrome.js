@@ -350,16 +350,18 @@ export function reportIfFatalDb(err) {
 // ---------------------------------------------------------------------------
 
 // Keys whose effect ESCAPES the curtain, so the one gesture that hides the
-// screen cannot be undone by a stray keypress. Only fullscreen does: it hands
-// the player iframe to the browser's own fullscreen layer, which is outside the
+// screen cannot be undone by a stray keypress. Fullscreen does: it hands the
+// player iframe to the browser's own fullscreen layer, which is outside the
 // z-index stack the curtain sits on top of, so the video would play over it.
+// So does '\', the door into that frame: once focus is inside, YouTube's own
+// 'f' fullscreens the same way, and the app never sees the key to refuse it.
 // Every other shortcut stays live — the curtain is a screen COVER, not a lock,
 // and the queue already mutates behind it unprompted (auto-advance on ENDED,
 // the position poll). A Google consent window can also open over the curtain,
 // but NOT from one key worth naming here: ensureAuthorized backs Sign in, both
 // refresh buttons and the stash's Add too, all reachable by Enter/Space on a
 // focused button. A visible popup beats several silently dead controls.
-const SCREEN_ESCAPING_KEYS = new Set(['f']);
+const SCREEN_ESCAPING_KEYS = new Set(['f', '\\']);
 
 /**
  * Bind the curtain's wheel behavior and hand back its controls. The covering
@@ -518,18 +520,53 @@ let statedVisible = null;
 // at that point: the click lands inside the frame, so the outer document sees
 // no pointerdown and no focusin, only a focusout with relatedTarget null and
 // then the window blur — by which time :focus-visible matches nothing. Chrome
-// fires no focusin for the iframe itself, so the note is never the frame here;
-// the guard compares anyway. An element, not an id: this is page chrome and
-// knows no dataset key; whoever consumes it checks isConnected. Cleared by the
-// pointerdown below when an OUTER press has left focus on <body>.
+// fires no focusin for the iframe on a CLICK into it, but does for a
+// programmatic focus (the '\' door below), so the focusin skips an iframe
+// target: the note must go on naming the element focus LEFT, and the guard
+// compares `el !== iframe` anyway. An element, not an id: this is page chrome
+// and knows no dataset key; whoever consumes it checks isConnected. Cleared by
+// the pointerdown below when an OUTER press has left focus on <body>.
 let lastLanding = { el: null, focusVisible: false };
+
+// Whether focus is inside the player frame ON PURPOSE — set by focusFrame's
+// entry, and the reason the guard stands down for it. Two consumers. The
+// guard's deferred check, so a later window blur with focus still in the frame
+// (alt-tab away and back) is not mistaken for a click into it and bounced. And
+// the modality focusin, for the landing that BRINGS FOCUS BACK BY KEYBOARD:
+// Tab and Shift+Tab pressed inside the frame never reach the outer document, so
+// `keyboardGesture` still says whatever the user did before entering — a mouse
+// gesture, and the pane or title link they Tab out onto is marked as a pointer
+// landing and loses its ring. On that one landing the browser's own
+// :focus-visible is right, and is taken. Cleared by every outer event that
+// proves focus is back — a focusin, a pointerdown, a keydown.
+//
+// It is also what the user SEES: the outer document cannot ring a focus that
+// is inside a cross-origin frame, so the note is mirrored as a class on the
+// frame's box (page-supplied, this module naming no selector of its own).
+// Written by setFocusInFrame alone, so the flag and the class cannot disagree.
+// The note rather than :focus-within, which the iframe matches for a CLICK
+// into it too, for the tick before the guard bounces it — a mouse flashing a
+// keyboard ring — and would go on matching in any browser where the bounce
+// failed to take.
+let focusInFrame = false;
+let frameRing = { el: null, className: '' };
+
+function setFocusInFrame(inside) {
+  focusInFrame = inside;
+  const { el, className } = frameRing;
+  if (el && className) el.classList.toggle(className, inside);
+}
 
 function trackInputModality() {
   if (modalityBound) return;
   modalityBound = true;
-  document.addEventListener('keydown', () => { keyboardGesture = true; }, true);
+  document.addEventListener('keydown', () => {
+    keyboardGesture = true;
+    setFocusInFrame(false);
+  }, true);
   document.addEventListener('pointerdown', () => {
     keyboardGesture = false;
+    setFocusInFrame(false);
     // A press on non-focusable chrome — the header, the stats strip, a gutter —
     // drops focus to <body>, and no focusin fires for that, so the note would
     // still name the element the user just LEFT: a later click on the video
@@ -548,7 +585,22 @@ function trackInputModality() {
   // here is already the gesture that caused this landing. The mark may linger on
   // an element focus has left — inert, the rule needs :focus-visible too.
   document.addEventListener('focusin', (e) => {
-    const visible = statedVisible !== null ? statedVisible : keyboardGesture;
+    // A programmatic focus INTO the player frame: focus is leaving the outer
+    // document, not landing in it. Neither note may take the frame — see both.
+    if (e.target.tagName === 'IFRAME') return;
+    let visible;
+    if (statedVisible !== null) {
+      visible = statedVisible;
+    } else if (focusInFrame) {
+      // Back out of the frame by a key the outer document never saw: the
+      // gesture flag is stale, the browser's verdict is not. Resync the flag,
+      // or the next programmatic landing would inherit the stale answer.
+      visible = e.target.matches(':focus-visible');
+      keyboardGesture = visible;
+    } else {
+      visible = keyboardGesture;
+    }
+    setFocusInFrame(false);
     markPointerFocus(visible ? null : e.target);
     lastLanding = { el: e.target, focusVisible: e.target.matches(':focus-visible') };
   }, true);
@@ -630,18 +682,44 @@ export function focusFirst(...candidates) {
  * leaves focus on <body>, as every click used to. What it is handed is the
  * :focus-visible half alone: a pointer mark died with the node it was on, so a
  * mouse-placed card resumed through it is a PLACE, unringed and unselected.
+ *
+ * The ONE way in that the guard lets stand is the returned `focusFrame`, the
+ * '\' key's: YouTube's own controls — captions and their language, audio
+ * tracks, quality — exist nowhere but inside the frame, and the frame is out of
+ * the Tab order (player.js's detachIframeFromTabOrder), so an explicit door is
+ * the only keyboard route to them. Inside, YouTube's shortcuts answer at once
+ * ('c' toggles captions with focus still on the frame's body) and Tab walks its
+ * controls; the app's keys, Esc included, are dead until focus comes back out —
+ * Shift+Tab from any control lands on the pane, since Tab FORWARD is some
+ * fifty stops through the related-videos drawer. (From the bare body Shift+Tab
+ * WRAPS to the frame's last link instead — Chrome gives a body-focused document
+ * no start point — so straight after entering it is Tab, then Shift+Tab;
+ * nothing here can place the inner focus.) The entry is told apart from a
+ * click by the note focusFrame sets, not by any signal of the browser's: the
+ * iframe never matches :hover in the outer document while the pointer is over
+ * it (a site-isolated frame feeds no hit-test state back), so a click and a
+ * programmatic focus look identical at blur time. While it holds, `frameClass`
+ * is on `frameBox` — the ring the outer document paints for a focus it cannot
+ * otherwise show (a focused frame body draws nothing of its own).
  * @param {() => HTMLIFrameElement|null} getIframe
  * @param {object} [opts]
  * @param {(lost: Element|null, ring: {focusVisible: boolean}) => Element|null} [opts.fallback]
+ * @param {Element|null} [opts.frameBox] the element to carry `frameClass`
+ * @param {string} [opts.frameClass] class marking focus deliberately inside
+ *   the frame; with either omitted no class is set
+ * @returns {{ focusFrame: () => boolean }} `focusFrame` puts focus inside the
+ *   player frame and reports whether it took; false with no frame to enter.
  */
-export function bindIframeFocusGuard(getIframe, { fallback } = {}) {
+export function bindIframeFocusGuard(getIframe, { fallback, frameBox = null, frameClass = '' } = {}) {
   trackInputModality(); // lastLanding is its focusin's
+  frameRing = { el: frameBox, className: frameClass };
   window.addEventListener('blur', () => {
     // Defer so document.activeElement settles to the newly-focused iframe.
     setTimeout(() => {
       if (document.hidden) return; // switched tab/app: leave focus alone
       const iframe = getIframe();
       if (!iframe || document.activeElement !== iframe) return;
+      if (focusInFrame) return; // the user asked for this; see focusFrame
       iframe.blur(); // to <body> first: keydown reaches us again whatever follows
       const { el, focusVisible } = lastLanding;
       // Never the frame itself: a browser that fires focusin for it would
@@ -650,6 +728,19 @@ export function bindIframeFocusGuard(getIframe, { fallback } = {}) {
       if (fallback) fallback(el, { focusVisible });
     }, 0);
   });
+  // The note is set AFTER the focus() rather than armed around it: the window
+  // blur it raises fires synchronously in Chrome, but the guard's check is the
+  // deferred one above, which runs once this has returned either way — so the
+  // note reads true there whether the blur was synchronous or not, and stays
+  // false when the focus did not take.
+  const focusFrame = () => {
+    const iframe = getIframe();
+    if (!iframe) return false;
+    iframe.focus();
+    setFocusInFrame(document.activeElement === iframe);
+    return focusInFrame;
+  };
+  return { focusFrame };
 }
 
 // ---------------------------------------------------------------------------

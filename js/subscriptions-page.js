@@ -154,6 +154,10 @@ let queueFocus = null;
 // either. Same arrangement: the keys live in onGlobalKeydown below.
 let paneNav = null;
 
+// The player frame's focus guard, from page-chrome.js's bindIframeFocusGuard();
+// its one method is the '\' key's deliberate entry into the frame.
+let iframeGuard = null;
+
 // DOM references, populated in init().
 const dom = {};
 
@@ -324,6 +328,7 @@ function cacheDom() {
   // Player pane. The pane itself is the scroll container (selected by class,
   // there's no id) so a new video can reset it to the top.
   dom.playerPane = document.querySelector('.workspace__player');
+  dom.playerFrame = document.querySelector('.player__frame');
   dom.playerTitle = byId('player-title');
   dom.playerMeta = byId('player-meta');
   dom.playerDescription = byId('player-description');
@@ -429,12 +434,16 @@ function bindEvents() {
   // :focus-visible half of its ring, the pointer mark having died with the old
   // node; anything else stays on <body>, since sending a toolbar user into the
   // queue is no rescue. closest('.row') holds on a detached card: renderQueue
-  // empties the <ul>, leaving each old subtree intact.
-  bindIframeFocusGuard(getPlayerIframe, {
+  // empties the <ul>, leaving each old subtree intact. The '\' key's entry into
+  // the frame is the one focus the guard leaves alone (its `focusFrame`), and
+  // the frame box carries its ring for as long as it holds.
+  iframeGuard = bindIframeFocusGuard(getPlayerIframe, {
     fallback: (lost, { focusVisible }) =>
       lost && lost.closest && lost.closest('.row') && queueFocus
         ? queueFocus.focusRemembered({ focusVisible })
         : null,
+    frameBox: dom.playerFrame,
+    frameClass: 'player__frame--focused',
   });
 
   // Save the current watch position on hide/unload so a reload can resume.
@@ -2063,6 +2072,16 @@ function onGlobalKeydown(e) {
     // reaches us through normalizeKey's physical Slash fallback.
     e.preventDefault();
     if (paneNav) paneNav.togglePane();
+  } else if (key === '\\') {
+    // '\' puts focus INSIDE the player frame — '/' reaches the pane, '\' the
+    // frame — for the controls YouTube keeps to itself: captions and their
+    // language, audio tracks, quality. From anywhere, like the other absolute
+    // jumps. One-way by construction: the frame swallows every key, this one
+    // and Esc included, so the way back is Shift+Tab (or a click), not a
+    // second press. Gated on playing like m and the seeks — an empty frame has
+    // nothing to reach — and prevented only when the focus took, so with the
+    // frame not yet created '\' keeps its native meaning.
+    if (state.playing && iframeGuard && iframeGuard.focusFrame()) e.preventDefault();
   } else if (key === '[' || key === ']') {
     // [ / ] step the pane CYCLE — nav, toolbar, queue actions, queue, player —
     // wrapping at both ends, where '/' jumps straight between the two big ones.

@@ -140,6 +140,10 @@ let queueFocus = null;
 // either. Same arrangement: the keys live in onGlobalKeydown below.
 let paneNav = null;
 
+// The player frame's focus guard, from page-chrome.js's bindIframeFocusGuard();
+// its one method is the '\' key's deliberate entry into the frame.
+let iframeGuard = null;
+
 // DOM references, populated in init().
 const dom = {};
 
@@ -338,6 +342,7 @@ function cacheDom() {
   // Player pane. The pane itself is the scroll container (selected by class,
   // there's no id) so a new video can reset it to the top.
   dom.playerPane = document.querySelector('.workspace__player');
+  dom.playerFrame = document.querySelector('.player__frame');
   dom.playerTitle = byId('player-title');
   dom.playerMeta = byId('player-meta');
   dom.playerDescription = byId('player-description');
@@ -451,12 +456,16 @@ function bindEvents() {
   // firing — page-chrome puts it back where it was on window blur, ring and all.
   // Same fallback as subscriptions-page.js: a lost CARD resumes at the
   // remembered card with the :focus-visible half of its ring, anything else
-  // stays on <body>.
-  bindIframeFocusGuard(getPlayerIframe, {
+  // stays on <body>. The '\' key's entry into the frame is the one focus the
+  // guard leaves alone (its `focusFrame`), and the frame box carries its ring
+  // for as long as it holds.
+  iframeGuard = bindIframeFocusGuard(getPlayerIframe, {
     fallback: (lost, { focusVisible }) =>
       lost && lost.closest && lost.closest('.row') && queueFocus
         ? queueFocus.focusRemembered({ focusVisible })
         : null,
+    frameBox: dom.playerFrame,
+    frameClass: 'player__frame--focused',
   });
 
   // Save the current watch position on hide/unload so a reload can resume.
@@ -1775,6 +1784,10 @@ function onGlobalKeydown(e) {
     // reaches us through normalizeKey's physical Slash fallback.
     e.preventDefault();
     if (paneNav) paneNav.togglePane();
+  } else if (key === '\\') {
+    // '\' puts focus INSIDE the player frame — see subscriptions-page.js for
+    // the reasoning; same gate, same one-way door, Shift+Tab the way back.
+    if (state.playing && iframeGuard && iframeGuard.focusFrame()) e.preventDefault();
   } else if (key === '[' || key === ']') {
     // [ / ] step the pane CYCLE — nav, toolbar, add form, queue actions, queue,
     // player — wrapping at both ends, where '/' jumps straight between the two

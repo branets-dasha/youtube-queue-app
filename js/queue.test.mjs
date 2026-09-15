@@ -251,6 +251,17 @@ test('normalizeKey lets the PRINTED character win over the physical position', (
   assert.equal(normalizeKey({ key: 'l', code: 'KeyP' }), 'l');
 });
 
+test('normalizeKey binds the player-frame key by cap first, position second', () => {
+  // US, UK and Cyrillic caps all print '\' somewhere and produce it.
+  assert.equal(normalizeKey({ key: '\\', code: 'Backslash' }), '\\');
+  assert.equal(normalizeKey({ key: '\\', code: 'IntlBackslash' }), '\\');
+  // German QWERTZ has '\' only under AltGr (a modifier combo the tables ignore)
+  // and prints '#' on the Backslash position, so the position is the way in.
+  assert.equal(normalizeKey({ key: '#', code: 'Backslash' }), '\\');
+  // A printed shortcut on that position still wins, as everywhere else.
+  assert.equal(normalizeKey({ key: '/', code: 'Backslash' }), '/');
+});
+
 test('normalizeKey leaves every unbound key untouched', () => {
   // Non-character keys report the same e.key on every layout, so they must never
   // be routed through the fallback — their codes carry no character at all.
