@@ -107,6 +107,11 @@ export const QUEUE_DISPLAY_LIMIT = 100;
 // expiring, so an in-flight batch of requests does not fail mid-refresh.
 export const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
 
+// A token minted within this many milliseconds is FRESH — a 401 against it is a
+// grant problem, not expiry (see api.js grantProblem). Well inside the 1h
+// lifetime, generous against clock skew.
+export const FRESH_TOKEN_MS = 5 * 60 * 1000;
+
 // Safety buffer for the INCREMENTAL refresh ("Refresh new"): its per-channel
 // lower bound is (newest stored publishedAt − this), clamped to the floor. The
 // buffer covers YouTube's uploads-playlist lag so a video that appeared slightly

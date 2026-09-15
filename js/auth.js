@@ -13,11 +13,12 @@
 // No client secret and no API key are used anywhere: the OAuth access token
 // authorizes every YouTube Data API call.
 
-import { OAUTH_SCOPE, TOKEN_EXPIRY_MARGIN_MS } from './config.js';
+import { OAUTH_SCOPE, TOKEN_EXPIRY_MARGIN_MS, FRESH_TOKEN_MS } from './config.js';
 
 let tokenClient = null; // google.accounts.oauth2 token client
 let accessToken = null; // in-memory only
 let tokenExpiresAt = 0; // epoch ms when the token expires
+let tokenMintedAt = 0; // epoch ms when the held token arrived (see tokenIsFresh)
 let currentClientId = null;
 
 // Pending request bookkeeping so concurrent requestToken() calls share one
@@ -94,7 +95,8 @@ function handleTokenResponse(resp) {
   accessToken = resp.access_token;
   // expires_in is in seconds; convert and store an absolute expiry instant.
   const expiresInMs = (Number(resp.expires_in) || 3600) * 1000;
-  tokenExpiresAt = Date.now() + expiresInMs;
+  tokenMintedAt = Date.now();
+  tokenExpiresAt = tokenMintedAt + expiresInMs;
   settleResolve(accessToken);
 }
 
@@ -129,9 +131,14 @@ function settleReject(err) {
  *          allow GIS to show consent/select UI when interaction is needed).
  *        - interactive:false -> prompt: 'none' (fully silent refresh; no UI,
  *          rejects if user interaction would be required).
+ * @param {boolean} [opts.consent=false] prompt: 'consent' — ALWAYS show the
+ *        consent screen, so Google mints against a NEW grant. Interactive by
+ *        definition, so it overrides `interactive`. The one way out of a bad
+ *        grant (see api.js grantProblem): prompt: '' skips consent for an
+ *        existing grant and hands back whatever it mints.
  * @returns {Promise<string>} the access token
  */
-export function requestToken({ interactive = true } = {}) {
+export function requestToken({ interactive = true, consent = false } = {}) {
   if (!tokenClient) {
     return Promise.reject(
       new Error('Auth is not initialized. Provide a Client ID first.')
@@ -148,7 +155,8 @@ export function requestToken({ interactive = true } = {}) {
     pendingReject = reject;
     try {
       // prompt: '' asks GIS to reuse an existing grant silently when possible.
-      tokenClient.requestAccessToken({ prompt: interactive ? '' : 'none' });
+      const prompt = consent ? 'consent' : interactive ? '' : 'none';
+      tokenClient.requestAccessToken({ prompt });
     } catch (err) {
       settleReject(err);
     }
@@ -164,6 +172,16 @@ export function getToken() {
   if (!accessToken) return null;
   if (Date.now() >= tokenExpiresAt - TOKEN_EXPIRY_MARGIN_MS) return null;
   return accessToken;
+}
+
+/**
+ * True if the held token arrived within FRESH_TOKEN_MS — api.js's judgement on
+ * a 401 (see its grantProblem). Reads module state only.
+ * @returns {boolean}
+ */
+export function tokenIsFresh() {
+  if (!accessToken) return false;
+  return Date.now() - tokenMintedAt < FRESH_TOKEN_MS;
 }
 
 /**
@@ -231,9 +249,20 @@ export async function ensureToken() {
  *        the problem: the 401/403 re-consent retry after a scope error, where
  *        the token we already hold would come straight back and the retry would
  *        fail identically — and Sign in, which has no session to reuse.
+ * @param {boolean} [opts.consent=false] Force the consent screen (see
+ *        requestToken) so the token comes from a NEW grant. Implies forceNew: a
+ *        held token is from the grant being replaced. Each page passes its
+ *        `reconsent` flag here from every control once a FRESH token has been
+ *        rejected — the flag is set only after that page's router cleared the
+ *        token, so the consent request is still the gesture's one popup — and
+ *        Like's in-gesture retry passes the error's own mark. A normal
+ *        authorization stays prompt: '' — one screen, no new tax.
  * @returns {Promise<string>} the access token
  */
-export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
+export async function ensureAuthorized(
+  clientId,
+  { forceNew = false, consent = false } = {}
+) {
   if (!clientId) {
     // Never let initAuth() build a token client around a missing id — GIS would
     // fail later and far less legibly. Same wording as requestToken()'s guard.
@@ -241,7 +270,7 @@ export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
   }
   await waitForGis();
   initAuth(clientId);
-  if (!forceNew) {
+  if (!forceNew && !consent) {
     const existing = getToken();
     if (existing) return existing;
   }
@@ -250,7 +279,7 @@ export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
   // transient activation, and the interactive request that has to follow is
   // then blocked as a popup — GIS reports popup_failed_to_open and the control
   // does nothing.
-  return requestToken({ interactive: true });
+  return requestToken({ interactive: true, consent });
 }
 
 /**
@@ -259,6 +288,7 @@ export async function ensureAuthorized(clientId, { forceNew = false } = {}) {
 export function clearToken() {
   accessToken = null;
   tokenExpiresAt = 0;
+  tokenMintedAt = 0;
 }
 
 /**
