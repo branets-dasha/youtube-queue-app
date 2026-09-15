@@ -448,8 +448,16 @@ function bindEvents() {
 
   // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
   // which swallows keydown so the page's shortcuts (incl. the Esc curtain) stop
-  // firing — page-chrome hands it back on window blur.
-  bindIframeFocusGuard(getPlayerIframe);
+  // firing — page-chrome puts it back where it was on window blur, ring and all.
+  // Same fallback as subscriptions-page.js: a lost CARD resumes at the
+  // remembered card with the :focus-visible half of its ring, anything else
+  // stays on <body>.
+  bindIframeFocusGuard(getPlayerIframe, {
+    fallback: (lost, { focusVisible }) =>
+      lost && lost.closest && lost.closest('.row') && queueFocus
+        ? queueFocus.focusRemembered({ focusVisible })
+        : null,
+  });
 
   // Save the current watch position on hide/unload so a reload can resume.
   window.addEventListener('pagehide', flushProgress);

@@ -167,8 +167,10 @@ anything downstream.
   because the input modality is what the property reports, and a bare
   `.focus()` out of `browser_evaluate` stands for neither.
 - **`document.body.focus()` blurs nothing** — `<body>` carries no `tabindex`.
-  Use `document.activeElement.blur()` to reproduce where `bindIframeFocusGuard`
-  puts focus after a click on the video.
+  Use `document.activeElement.blur()` to reproduce focus on `<body>` — where a
+  click on non-focusable chrome leaves it, and where `bindIframeFocusGuard`'s
+  fallback leaves a lost non-card. (A click on the video itself now restores the
+  pre-click focus; drive that with a real `page.mouse.click` on the iframe.)
 - **The single-tab Web Lock is per origin.** A second `index.html` in the same
   browser paints "another tab is already open". If a check goes strangely quiet,
   look for a stray tab (`browser_tabs` → `close`): a card's channel link opens
