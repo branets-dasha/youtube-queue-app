@@ -464,31 +464,9 @@ export function initCurtain({
 }
 
 // ---------------------------------------------------------------------------
-// Cross-origin iframe focus guard
+// Programmatic focus: the input modality that decides its ring (focusByGesture,
+// focusFirst), and the cross-origin iframe focus guard built on the same note
 // ---------------------------------------------------------------------------
-
-/**
- * Clicking the video moves keyboard focus INTO the cross-origin player iframe,
- * which swallows keydown so the page's shortcuts (incl. the Esc curtain) stop
- * firing. On window blur, if focus landed on that iframe, hand it back to the
- * document so keydown keeps reaching us. Guarded so alt-tabbing away (page
- * hidden) doesn't yank focus back.
- *
- * The getter is a parameter so this module imports no layer module.
- * @param {() => HTMLIFrameElement|null} getIframe
- */
-export function bindIframeFocusGuard(getIframe) {
-  window.addEventListener('blur', () => {
-    // Defer so document.activeElement settles to the newly-focused iframe.
-    setTimeout(() => {
-      if (document.hidden) return; // switched tab/app: leave focus alone
-      const iframe = getIframe();
-      if (iframe && document.activeElement === iframe) {
-        iframe.blur(); // returns focus to document.body; keydown reaches us again
-      }
-    }, 0);
-  });
-}
 
 // Whether the gesture in flight came from the KEYBOARD, so a programmatic focus
 // can state its ring explicitly instead of leaving it to Chrome.
@@ -527,16 +505,52 @@ function markPointerFocus(el) {
   if (el && el.classList) el.classList.add('is-pointer-focused');
 }
 
+// The ring a focusByGesture call in flight has STATED, for the length of that
+// call; null between calls, when the gesture decides. The focusin below reads it
+// so a landing told to be invisible is marked as a pointer one and vice versa —
+// the caller's word, not the stale global, is what the mark must agree with.
+let statedVisible = null;
+
+// The element focus last LANDED on, with the ring it landed with — the browser's
+// own :focus-visible verdict at that moment, which is the same reading the
+// selection verdicts freeze. For bindIframeFocusGuard, which has to put focus
+// back where it was before a click on the video took it, and cannot read either
+// at that point: the click lands inside the frame, so the outer document sees
+// no pointerdown and no focusin, only a focusout with relatedTarget null and
+// then the window blur — by which time :focus-visible matches nothing. Chrome
+// fires no focusin for the iframe itself, so the note is never the frame here;
+// the guard compares anyway. An element, not an id: this is page chrome and
+// knows no dataset key; whoever consumes it checks isConnected. Cleared by the
+// pointerdown below when an OUTER press has left focus on <body>.
+let lastLanding = { el: null, focusVisible: false };
+
 function trackInputModality() {
   if (modalityBound) return;
   modalityBound = true;
   document.addEventListener('keydown', () => { keyboardGesture = true; }, true);
-  document.addEventListener('pointerdown', () => { keyboardGesture = false; }, true);
+  document.addEventListener('pointerdown', () => {
+    keyboardGesture = false;
+    // A press on non-focusable chrome — the header, the stats strip, a gutter —
+    // drops focus to <body>, and no focusin fires for that, so the note would
+    // still name the element the user just LEFT: a later click on the video
+    // would put it back ringed, a mouse-only sequence producing a selection.
+    // Retire the note once focus has settled. On the DOWN, deferred, because
+    // the down is what moves focus and always fires: mouseup lands wherever
+    // the button is released and click needs the same element for both, so a
+    // press dragged off before release would reach neither. A press the
+    // outer document never sees — one inside the frame — leaves it standing,
+    // which is the case the note exists for.
+    setTimeout(() => {
+      if (document.activeElement === document.body) lastLanding = { el: null, focusVisible: false };
+    }, 0);
+  }, true);
   // pointerdown above runs BEFORE the browser moves focus, so the modality read
   // here is already the gesture that caused this landing. The mark may linger on
   // an element focus has left — inert, the rule needs :focus-visible too.
   document.addEventListener('focusin', (e) => {
-    markPointerFocus(keyboardGesture ? null : e.target);
+    const visible = statedVisible !== null ? statedVisible : keyboardGesture;
+    markPointerFocus(visible ? null : e.target);
+    lastLanding = { el: e.target, focusVisible: e.target.matches(':focus-visible') };
   }, true);
 }
 
@@ -545,13 +559,28 @@ function trackInputModality() {
  * that decision is made: every programmatic landing in the app goes through
  * this or through focusFirst below, so no call site carries a modality argument
  * of its own and the three pages cannot drift apart on it.
+ *
+ * An explicit `opts.focusVisible` WINS over the gesture, for the one caller
+ * that is restoring a landing rather than making one (bindIframeFocusGuard):
+ * the gesture in flight there is whatever happened before the click into the
+ * frame, and the ring wanted is the one the element already had.
  * @param {Element|null|undefined} el
- * @param {FocusOptions} [opts] merged under the focusVisible this decides
+ * @param {FocusOptions} [opts] merged under the focusVisible this decides,
+ *   unless it states one
  * @returns {Element|null} `el` if it took focus, else null
  */
 export function focusByGesture(el, opts = {}) {
   if (!el || !el.focus) return null;
-  el.focus({ ...opts, focusVisible: keyboardGesture });
+  const { focusVisible = keyboardGesture, ...rest } = opts;
+  // Saved and put back rather than nulled: a focusout handler that focuses
+  // something itself re-enters here before the outer focusin has read it.
+  const outer = statedVisible;
+  statedVisible = focusVisible;
+  try {
+    el.focus({ ...rest, focusVisible });
+  } finally {
+    statedVisible = outer;
+  }
   return document.activeElement === el ? el : null;
 }
 
@@ -575,6 +604,54 @@ export function focusFirst(...candidates) {
   return null;
 }
 
+/**
+ * Clicking the video moves keyboard focus INTO the cross-origin player iframe,
+ * which swallows keydown so the page's shortcuts (incl. the Esc curtain) stop
+ * firing. On window blur, if focus landed on that iframe, take it back out —
+ * and put it BACK WHERE IT WAS, ring and all, so the click is a no-op for
+ * focus. Guarded so alt-tabbing away (page hidden) doesn't yank focus back.
+ *
+ * Restoring rather than dropping to <body> is the other half of the selection
+ * rule: with focus on <body> nothing is ringed and nothing applies, which is
+ * honest, but the user's place is silently gone — x / t / 1,5,2 dead until an
+ * arrow re-enters the list, and the ring they were looking at vanished. On the
+ * same node the ring comes back exactly: the pointer-side classes
+ * (row--pointed) survive a blur on their own, and the :focus-visible half is
+ * the note lastLanding took when focus arrived, stated outright because the
+ * gesture global is stale here (the click happened inside the frame).
+ * preventScroll, because a no-op must not scroll a pane the user has since
+ * wheeled away from.
+ *
+ * The getter and the fallback are parameters so this module imports no layer
+ * module and knows no page. The fallback runs when the noted element is gone
+ * or will not take focus — a re-render rebuilt the list under the click, a menu
+ * item whose panel the menu's own focusout just closed — and decides, in the
+ * page's terms, whether there is an honest place to resume; returning null
+ * leaves focus on <body>, as every click used to. What it is handed is the
+ * :focus-visible half alone: a pointer mark died with the node it was on, so a
+ * mouse-placed card resumed through it is a PLACE, unringed and unselected.
+ * @param {() => HTMLIFrameElement|null} getIframe
+ * @param {object} [opts]
+ * @param {(lost: Element|null, ring: {focusVisible: boolean}) => Element|null} [opts.fallback]
+ */
+export function bindIframeFocusGuard(getIframe, { fallback } = {}) {
+  trackInputModality(); // lastLanding is its focusin's
+  window.addEventListener('blur', () => {
+    // Defer so document.activeElement settles to the newly-focused iframe.
+    setTimeout(() => {
+      if (document.hidden) return; // switched tab/app: leave focus alone
+      const iframe = getIframe();
+      if (!iframe || document.activeElement !== iframe) return;
+      iframe.blur(); // to <body> first: keydown reaches us again whatever follows
+      const { el, focusVisible } = lastLanding;
+      // Never the frame itself: a browser that fires focusin for it would
+      // otherwise have this re-focus what it just blurred, and loop.
+      if (el && el !== iframe && el.isConnected && focusByGesture(el, { preventScroll: true, focusVisible })) return;
+      if (fallback) fallback(el, { focusVisible });
+    }, 0);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Queue focus navigation
 //
@@ -596,13 +673,14 @@ export function focusFirst(...candidates) {
 // in a ~531px pane, so a native page advances barely more than one card, and the
 // focus-cursor sync it needs can stall outright.
 //
-// THE REMEMBERED CARD is what a press from OUTSIDE the list enters at — focus
-// lands on <body> constantly, bindIframeFocusGuard (above) putting it there on
-// every click of the video. It is the last-focused card's VIDEOID, never its
-// element, because renderQueue() rebuilds the <ul> and a node reference would be
-// detached one render later; it resolves against the CURRENT list at use time
-// and falls back to the first card. CARDS ONLY: "Show all" is never an honest
-// place to be dropped into the queue.
+// THE REMEMBERED CARD is what a press from OUTSIDE the list enters at — from
+// the toolbar, the player pane, or <body>, where a fresh load starts and where
+// bindIframeFocusGuard (above) leaves focus when the element it would restore is
+// gone. It is the last-focused card's VIDEOID, never its element, because
+// renderQueue() rebuilds the <ul> and a node reference would be detached one
+// render later; it resolves against the CURRENT list at use time and falls back
+// to the first card. CARDS ONLY: "Show all" is never an honest place to be
+// dropped into the queue.
 // ---------------------------------------------------------------------------
 
 /**
@@ -631,7 +709,7 @@ export function focusFirst(...candidates) {
  *   cardCount: () => number, focusCardAt: (index:number) => Element|null,
  *   rememberCard: (videoId:string|null|undefined) => void,
  *   renderKeepingAnchor: (rerender:() => void) => Element|null,
- *   focusRemembered: (opts?:{preventScroll?:boolean}) => Element|null,
+ *   focusRemembered: (opts?:{preventScroll?:boolean, focusVisible?:boolean}) => Element|null,
  *   captureQueueScroll: () => () => void}}
  */
 export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 1080px)' } = {}) {
@@ -811,11 +889,10 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * IT IS A QUESTION ABOUT LAYOUT, not about what happens to hold focus. In the
    * two-pane layout `body.app-active` is a 100dvh flex column whose panes scroll
    * INTERNALLY, so outside the player pane there is no native scroll for a key
-   * to belong to and it belongs to the queue — including from <body>, where
-   * focus keeps landing (bindIframeFocusGuard puts it there on every click of
-   * the video). Stacked (<=1080px) the queue pane is `overflow: visible` and the
-   * DOCUMENT scrolls, so there is one, and only focus genuinely INSIDE the queue
-   * pane is taken.
+   * to belong to and it belongs to the queue — including from <body>, where a
+   * fresh load starts. Stacked (<=1080px) the queue pane is `overflow: visible`
+   * and the DOCUMENT scrolls, so there is one, and only focus genuinely INSIDE
+   * the queue pane is taken.
    *
    * The player pane is out at EVERY width: it scrolls natively and that is the
    * whole reason it is focusable, so these keys must go on scrolling a long
@@ -1119,12 +1196,15 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * @param {object} [opts]
    * @param {boolean} [opts.preventScroll] false = let the focus scroll the card
    *   into view, for a caller that has NOT just positioned the list itself
+   * @param {boolean} [opts.focusVisible] state the ring outright instead of
+   *   taking it from the gesture — for the iframe guard's fallback, which is
+   *   putting back a landing whose ring it already knows
    * @returns {Element|null} the card focused, or null when the list is empty,
    *   which is the caller's cue to fall back to a control of its own
    */
-  function focusRemembered({ preventScroll = true } = {}) {
+  function focusRemembered({ preventScroll = true, focusVisible } = {}) {
     const target = rememberedCard(cards());
-    if (target) focusByGesture(target, { preventScroll });
+    if (target) focusByGesture(target, { preventScroll, focusVisible });
     return target;
   }
 
@@ -1454,12 +1534,13 @@ export function initListWalk({
 // queue has no card to land on, so without the skip the key would die against a
 // region the user cannot see is unreachable.
 //
-// THE ORIGIN FALLS BACK TO THE LAST PANE FOCUS WAS IN, because focus is on
-// <body> constantly — bindIframeFocusGuard puts it there on every click of the
-// video. Reading that as "the queue" would send [ backwards PAST the queue to
-// the queue actions right after a click on the player, the one moment the user
-// is unambiguously standing in the player. Same principle as the remembered
-// card: focus landing outside every pane leaves the note standing.
+// THE ORIGIN FALLS BACK TO THE LAST PANE FOCUS WAS IN, for the times focus is
+// on <body>: a fresh load, and a click on the video whose pre-click element
+// bindIframeFocusGuard could not put focus back on. Reading <body> as "the
+// queue" would send [ backwards PAST the queue to the queue actions right after
+// that click, the one moment the user is unambiguously standing in the player.
+// Same principle as the remembered card: focus landing outside every pane
+// leaves the note standing.
 // ---------------------------------------------------------------------------
 
 /** Everything inside `el` that could plausibly take focus, in DOM order. */

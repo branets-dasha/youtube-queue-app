@@ -422,8 +422,20 @@ function bindEvents() {
 
   // Clicking the video moves keyboard focus INTO the cross-origin player iframe,
   // which swallows keydown so the app's shortcuts (incl. the Esc curtain) stop
-  // firing — page-chrome hands it back on window blur.
-  bindIframeFocusGuard(getPlayerIframe);
+  // firing — page-chrome puts it back where it was on window blur, ring and all.
+  // The fallback is for a pre-click element that is gone or will not take focus
+  // (a re-render rebuilt the list under the click): a CARD resumes at the
+  // remembered card — usually the same videoId, rebuilt — carrying the
+  // :focus-visible half of its ring, the pointer mark having died with the old
+  // node; anything else stays on <body>, since sending a toolbar user into the
+  // queue is no rescue. closest('.row') holds on a detached card: renderQueue
+  // empties the <ul>, leaving each old subtree intact.
+  bindIframeFocusGuard(getPlayerIframe, {
+    fallback: (lost, { focusVisible }) =>
+      lost && lost.closest && lost.closest('.row') && queueFocus
+        ? queueFocus.focusRemembered({ focusVisible })
+        : null,
+  });
 
   // Save the current watch position on hide/unload so a reload can resume.
   window.addEventListener('pagehide', flushProgress);
