@@ -62,11 +62,13 @@ export function initPlayer({ mountId, onEnded, onReady, onProgress }) {
  * next Tab re-entered and bounced again, a loop that killed forward Tab for the
  * rest of the session and stranded every control after the frame.
  *
- * Deliberate cost: YouTube's own in-frame controls are no longer Tab-reachable,
- * and that is not to be "fixed" — a focused cross-origin frame swallows keydown
- * and takes the app's whole keyboard layer with it, so the guard would bounce
- * focus out anyway. A CLICK still focuses the frame (tabindex governs sequential
- * navigation only), so bindIframeFocusGuard is still necessary.
+ * So the frame is not Tab-reachable ON THE WAY IN, and that stays: a focused
+ * cross-origin frame swallows keydown and takes the app's whole keyboard layer
+ * with it. The one keyboard door is the '\' key, page-chrome's `focusFrame`,
+ * which the guard lets stand — YouTube's own controls (captions, audio tracks,
+ * quality) exist nowhere else — and Shift+Tab is the way back out. A CLICK
+ * still focuses the frame (tabindex governs sequential navigation only), so
+ * bindIframeFocusGuard is still necessary.
  */
 function detachIframeFromTabOrder() {
   const iframe = getIframe();

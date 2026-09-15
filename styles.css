@@ -1390,6 +1390,18 @@ body.app-active #app-main.app[hidden] {
   border-radius: var(--radius);
   overflow: hidden;
 }
+/* Focus is INSIDE the cross-origin frame, put there by the '\' key: the outer
+   document cannot ring what it cannot see, and the frame's own body draws
+   nothing, so page-chrome mirrors its note as this class (a class, never
+   :focus-within — see the note's comment there). The .btn ring exactly, and
+   that is the bound: the box is flush to the pane's top and left corner, so
+   above 1080px the ring sits in the 6px band the pane reserves, which holds a
+   4px reach (2px outset over 2px) with 2px over — widen either and the top and
+   left segments clip. Stacked, nothing clips. */
+.player__frame--focused {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 /* The YT iframe replaces #player-mount; it and the empty overlay fill the box. */
 .player__frame iframe,
 .player__frame > * {
