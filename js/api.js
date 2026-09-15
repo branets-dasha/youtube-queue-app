@@ -10,7 +10,7 @@
 // search.list is NEVER used.
 
 import { API_BASE, PAGE_SIZE } from './config.js';
-import { ensureToken, getToken, requestToken } from './auth.js';
+import { ensureToken, getToken, requestToken, tokenIsFresh } from './auth.js';
 import { uploadsPlaylistId, compareIso, parseIsoDuration } from './queue.js';
 
 /**
@@ -21,6 +21,10 @@ import { uploadsPlaylistId, compareIso, parseIsoDuration } from './queue.js';
  *   'notfound'  -> 404 (channel/playlist gone)
  *   'network'   -> fetch failed (offline, CORS, etc.)
  *   'http'      -> other non-2xx
+ * An 'auth' error additionally carries `reconsent: true` when the token that
+ * was rejected was FRESH (see grantProblem below): the GRANT is bad, not the
+ * token's age, so a router should arm the page's next authorization to force the
+ * consent screen rather than reuse the grant.
  */
 export class ApiError extends Error {
   constructor(message, kind, status) {
@@ -28,7 +32,29 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.kind = kind;
     this.status = status;
+    this.reconsent = false;
   }
+}
+
+/**
+ * The 'auth' error for a 401 that a re-auth cannot fix. A token minted within
+ * FRESH_TOKEN_MS cannot have expired, so Google rejecting it means the grant it
+ * came from is bad — Google skipped consent for that grant and still minted a
+ * token its APIs refuse — and a second mint from the same grant (the retry, or
+ * a Sign in with prompt: '') hands back the same rejection. Seen in the field:
+ * a session where Like had worked, Refresh all 401'd `authError` on a
+ * seconds-old token, Sign in reproduced it, and Sign out + Sign in (a revoke,
+ * then a real consent screen) was what fixed it.
+ * @returns {ApiError}
+ */
+function grantProblem() {
+  const err = new ApiError(
+    'YouTube rejected this session’s token. Press Sign in — it will ask for your permission again.',
+    'auth',
+    401
+  );
+  err.reconsent = true;
+  return err;
 }
 
 /**
@@ -58,6 +84,9 @@ async function apiGet(path, params, _retried = false) {
   if (!token) {
     token = await ensureToken();
   }
+  // Judged at SEND time, about the token actually sent: the 401 branch reads it
+  // after a round trip during which the held token could in principle change.
+  const wasFresh = tokenIsFresh();
 
   const url = buildUrl(path, params);
   let resp;
@@ -96,16 +125,18 @@ async function apiGet(path, params, _retried = false) {
     (body && body.error && body.error.message) || resp.statusText || 'Error';
 
   if (resp.status === 401) {
-    if (!_retried) {
-      // Token likely expired/invalid: refresh once and retry silently.
-      try {
-        await requestToken({ interactive: true });
-      } catch {
-        throw new ApiError('Your session expired. Please sign in again.', 'auth', 401);
-      }
-      return apiGet(path, params, true);
+    // A fresh token rejected is a grant problem (see grantProblem); a retried
+    // call's token is fresh by construction, so it is stated once here.
+    if (wasFresh || _retried) throw grantProblem();
+    // Stale token: refresh once and retry. A blocked or closed popup never
+    // learned whether the grant is good, so that stays the plain expiry
+    // wording, unmarked.
+    try {
+      await requestToken({ interactive: true });
+    } catch {
+      throw new ApiError('Your session expired. Please sign in again.', 'auth', 401);
     }
-    throw new ApiError('Your session expired. Please sign in again.', 'auth', 401);
+    return apiGet(path, params, true);
   }
 
   if (resp.status === 403) {
@@ -421,8 +452,10 @@ export async function getChannelAvatars(channelIds) {
  * Classify a non-2xx response and throw an ApiError (no token retry). Shared by
  * the rating write call.
  * @param {Response} resp
+ * @param {boolean} wasFresh the token that was sent was minted within
+ *        FRESH_TOKEN_MS — a 401 against it is a grant problem (see grantProblem)
  */
-async function throwApiError(resp) {
+async function throwApiError(resp, wasFresh) {
   let body = null;
   try {
     body = await resp.json();
@@ -437,6 +470,7 @@ async function throwApiError(resp) {
     (body && body.error && body.error.message) || resp.statusText || 'Error';
 
   if (resp.status === 401) {
+    if (wasFresh) throw grantProblem();
     throw new ApiError(
       'Your session expired or is missing a required permission.',
       'auth',
@@ -468,6 +502,7 @@ async function throwApiError(resp) {
 export async function rateVideo(videoId, rating) {
   let token = getToken();
   if (!token) token = await ensureToken();
+  const wasFresh = tokenIsFresh(); // at send time, as apiGet judges it
   const url = buildUrl('videos/rate', { id: videoId, rating });
   let resp;
   try {
@@ -479,5 +514,5 @@ export async function rateVideo(videoId, rating) {
     throw new ApiError(`Network error contacting YouTube: ${netErr.message}`, 'network', 0);
   }
   if (resp.ok) return; // 204 No Content
-  await throwApiError(resp);
+  await throwApiError(resp, wasFresh);
 }

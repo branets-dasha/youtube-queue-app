@@ -117,6 +117,7 @@ const state = {
   booted: false, // the store read + settings restore have run once this load
   adding: false, // an add is in flight (guards the form AND the token request)
   liking: false, // a like is in flight (guards the button AND the token request)
+  reconsent: false, // a FRESH token was rejected: the next authorization, from any control, forces the consent screen
   playing: null, // videoId currently loaded in the on-page player
   playerInited: false,
   playerCaughtUp: false, // TEXT-selector only: playback stopped because the stash ran out
@@ -529,10 +530,27 @@ function updateAuthUi() {
   updateLikeButton(); // re-evaluate: the label changed, though auth no longer gates it
 }
 
+/**
+ * This page's one authorization gesture: ensureAuthorized under the reconsent
+ * rule, as on index.html. Once a router has flagged a rejected FRESH token,
+ * the next authorization from ANY control — Sign in, Add, Like — is a consent
+ * one (a new grant), and success clears the flag. Still one popup per gesture:
+ * the flag is only ever set after the router clearToken()ed, so the consent
+ * request is the gesture's first. Like's in-gesture retry bypasses this (the
+ * router has not run yet there) and clears the flag itself on success.
+ * @param {{forceNew?: boolean}} [opts]
+ * @returns {Promise<string>} the access token
+ */
+async function authorize(opts = {}) {
+  const token = await ensureAuthorized(state.clientId, { ...opts, consent: state.reconsent });
+  state.reconsent = false;
+  return token;
+}
+
 async function onSignIn() {
   try {
     // forceNew: there is no session to reuse — go straight to GIS.
-    await ensureAuthorized(state.clientId, { forceNew: true });
+    await authorize({ forceNew: true });
     updateAuthUi();
   } catch (err) {
     handleError(err);
@@ -716,7 +734,7 @@ async function runAdd() {
   try {
     if (!hasSession()) showProgress('Authorizing with Google…');
     // Silent when a token is already live; falls back to the consent prompt.
-    await ensureAuthorized(state.clientId);
+    await authorize();
     updateAuthUi(); // a fresh token flips the label + the Like button
 
     showProgress('Looking up the video…');
@@ -769,9 +787,11 @@ async function runAdd() {
       // screen too (the toast alone would understate it).
       handleError(err);
     } else if (err instanceof ApiError && err.kind === 'auth') {
-      // The grant is genuinely dead: end the session so the label and the Like
-      // button agree with the message above.
+      // The token is dead: end the session so the label and the Like button
+      // agree with the message above. Marked (a fresh token was rejected) also
+      // arms Sign in to force the consent screen, as handleError does.
       clearToken();
+      if (err.reconsent) state.reconsent = true;
       updateAuthUi();
     }
   } finally {
@@ -825,7 +845,11 @@ function describeAddFailure(err) {
     return 'Could not save to storage — see the message on screen.';
   }
   if (err instanceof ApiError) {
-    if (err.kind === 'auth') return 'Your session expired. Sign in again, then add the link.';
+    if (err.kind === 'auth') {
+      return err.reconsent
+        ? 'YouTube rejected this session’s token. Press Sign in — it will ask for your permission again — then add the link.'
+        : 'Your session expired. Sign in again, then add the link.';
+    }
     if (err.kind === 'quota') return err.message; // already user-facing
     if (err.kind === 'network') return 'Network error. Check your connection and try again.';
     if (err.kind === 'notfound') {
@@ -1489,7 +1513,7 @@ async function onLike() {
     // Anything thrown here (cancelled popup, GIS missing) lands in the OUTER
     // catch with the like flag UNTOUCHED — which is the whole reason the flip
     // below sits after this await and not before it.
-    await ensureAuthorized(state.clientId);
+    await authorize();
     updateAuthUi(); // a fresh token flips the status label straight away
 
     // Optimistic (visual) update — only now that we are authorized.
@@ -1503,13 +1527,17 @@ async function onLike() {
       if (err instanceof ApiError && (err.kind === 'auth' || err.kind === 'forbidden')) {
         // Write scope not granted yet. forceNew, because the token we already
         // hold IS the problem — the default silent path would hand back that
-        // same scope-less token and the retry would fail identically. No double
-        // prompt: the call above was silent (or its consent produced the token
-        // this one is replacing).
+        // same scope-less token and the retry would fail identically. consent
+        // when the rejected token was FRESH (api.js marks that): the grant is
+        // bad and only a new one helps. Allowed only when authorize() above
+        // short-circuited on a HELD token (no popup has spent the activation)
+        // — that is the case Like self-heals; with the session already cleared
+        // this is the gesture's second popup and fails as "press Sign in".
         try {
           showToast('Requesting YouTube access to like videos…', { type: 'info' });
-          await ensureAuthorized(state.clientId, { forceNew: true });
+          await ensureAuthorized(state.clientId, { forceNew: true, consent: err.reconsent });
           await rateVideo(videoId, nextRating);
+          state.reconsent = false; // the new grant took; no later consent screen owed
           persistRecord(rec).catch(reportIfFatalDb); // persist on success
           return;
         } catch (e2) {
@@ -1859,11 +1887,21 @@ function handleError(err) {
   }
   if (err instanceof ApiError) {
     if (err.kind === 'auth') {
-      // An API call failed auth even after the built-in silent refresh/retry, so
-      // the grant is genuinely dead: end the session BEFORE updateAuthUi() so the
-      // status label and the Like button both flip to signed-out together.
+      // An API call failed auth even after the built-in refresh/retry, so the
+      // token is dead: end the session BEFORE updateAuthUi() so the status
+      // label and the Like button both flip to signed-out together. A MARKED
+      // error (a fresh token was rejected — api.js's grantProblem) also arms
+      // Sign in to force the consent screen; the plain case leaves the flag.
       clearToken();
-      showToast('Your session expired. Please sign in again.', { type: 'error' });
+      if (err.reconsent) {
+        state.reconsent = true;
+        showToast(
+          'YouTube rejected this session’s token. Press Sign in — it will ask for your permission again.',
+          { type: 'error' }
+        );
+      } else {
+        showToast('Your session expired. Please sign in again.', { type: 'error' });
+      }
       updateAuthUi();
       return;
     }
