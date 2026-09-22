@@ -86,57 +86,6 @@ export function isAfterCutoff(record, cutoff) {
 }
 
 /**
- * Merge incoming records into an existing collection, keyed strictly by
- * videoId. Upsert semantics:
- *   - A videoId not already present is INSERTED with state 'new' (unless the
- *     incoming record already carries an explicit state, which is preserved).
- *   - A videoId already present KEEPS its existing state (never reset, never
- *     duplicated). Its display metadata (title, thumbnail, channelTitle,
- *     publishedAt) is refreshed from the incoming record so late edits/renames
- *     are reflected, but the user's state decision is untouched.
- *
- * Neither input array is mutated. Returns a brand-new array of merged records.
- *
- * @param {Array<object>} existing
- * @param {Array<object>} incoming
- * @returns {Array<object>}
- */
-export function upsertVideos(existing, incoming) {
-  const byId = new Map();
-
-  for (const rec of existing) {
-    // Clone so callers' objects are never mutated.
-    byId.set(rec.videoId, { ...rec });
-  }
-
-  for (const inc of incoming) {
-    const prev = byId.get(inc.videoId);
-    if (prev) {
-      // Preserve the existing state; refresh display metadata.
-      byId.set(inc.videoId, {
-        ...prev,
-        title: inc.title !== undefined ? inc.title : prev.title,
-        channelId: inc.channelId !== undefined ? inc.channelId : prev.channelId,
-        channelTitle:
-          inc.channelTitle !== undefined ? inc.channelTitle : prev.channelTitle,
-        publishedAt:
-          inc.publishedAt !== undefined ? inc.publishedAt : prev.publishedAt,
-        thumbnailUrl:
-          inc.thumbnailUrl !== undefined ? inc.thumbnailUrl : prev.thumbnailUrl,
-        // state intentionally left as prev.state.
-      });
-    } else {
-      byId.set(inc.videoId, {
-        ...inc,
-        state: inc.state || STATE_NEW,
-      });
-    }
-  }
-
-  return Array.from(byId.values());
-}
-
-/**
  * Compute the queue view: all records that are strictly newer than the cutoff
  * AND still in state 'new', sorted ascending by publishedAt (oldest first).
  * @param {Array<object>} records
@@ -657,7 +606,8 @@ function channelEntry(rec, channels) {
 
 /**
  * True when a channel is marked ignored in the prefs map — its uploads are
- * skipped entirely on future fetches (existing records stay untouched). Pure.
+ * skipped entirely on future fetches ("Fetch new" leaves its stored records,
+ * "Refresh all" drops them). Pure.
  * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
  * @param {string} channelId
  * @returns {boolean}
@@ -842,40 +792,152 @@ export function pruneChannels(channels, prefs, subs, records) {
   };
 }
 
+/**
+ * The deletion set for "Refresh all"'s sweep of the channels it does NOT mirror:
+ * the videoId of every stored record whose channelId is ABSENT from the
+ * freshly-fetched subscriptions OR marked ignored in `prefs` — whatever the
+ * record's state. A channel you left is simply gone, and Ignore means "stop
+ * fetching, and the backlog goes on the next Refresh all". A record carrying no
+ * channelId is never selected: it cannot be known unmirrored. The complement of
+ * pruneChannels's "still has videos" condition, so running this first is what
+ * lets that prune drop an unsubscribed channel in the same pass — an ignored one
+ * is still subscribed, so its entry stays, which is how it gets un-ignored.
+ *
+ * DEFENSIVE, on the same rule as pruneChannels: an empty (or non-array, or
+ * all-malformed) `subs` selects NOTHING — an empty subscriptions list reads as a
+ * failed/suspect fetch, never as "unsubscribed from everything". Pure.
+ *
+ * @param {Array<object>|null|undefined} records stored video records
+ * @param {Array<{channelId?:string}>|null|undefined} subs freshly fetched subscriptions
+ * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs per-channel prefs
+ * @returns {Array<string>} videoIds to delete, in record order
+ */
+export function unmirroredVideoIds(records, subs, prefs) {
+  if (!Array.isArray(subs) || subs.length === 0) return [];
+  const subscribed = new Set();
+  for (const s of subs) {
+    if (s && s.channelId) subscribed.add(s.channelId);
+  }
+  if (subscribed.size === 0) return []; // only malformed entries: same as a failed fetch
+
+  const ids = [];
+  for (const r of records || []) {
+    if (!r || !r.channelId || !r.videoId) continue;
+    if (!subscribed.has(r.channelId) || isChannelIgnored(prefs, r.channelId)) ids.push(r.videoId);
+  }
+  return ids;
+}
+
 // ---------------------------------------------------------------------------
-// Refresh merge ("Fetch new" / "Refresh all" — the whole composition)
+// Refresh reconcile (one channel's fetch applied to the stored set)
 // ---------------------------------------------------------------------------
 
+// The fields a FETCH owns. A matched record takes these from its incoming copy
+// (late edits and renames show up) and keeps everything else — state,
+// positionSeconds, preferredSpeed, liked, and the backfilled durationSeconds /
+// embeddable / description — which only this app writes.
+const FETCHED_FIELDS = ['title', 'channelId', 'channelTitle', 'publishedAt', 'thumbnailUrl'];
+
 /**
- * The complete refresh merge, as ONE pure step: upsert the freshly fetched
- * records into the stored set (existing state preserved, never duplicated),
- * then fill in each channel's preferred speed on the records that lack one.
- * FILL-IF-ABSENT: a record carrying an explicit `preferredSpeed` is never
- * overwritten or cleared, and records of ignored channels are left as they are.
- *
- * `sweepSpeeds` is the refresh MODE (passed explicitly — never inferred from the
- * fetch bound): "Refresh all" sweeps the WHOLE stored set, so older
- * already-stored videos pick up their channel's speed too, while "Fetch new"
- * reaches only this fetch's arrivals — a video re-returned inside the buffer
- * window counts as already-stored and keeps what it has.
- *
- * Returns a NEW array; neither input array is mutated. Pure.
- *
- * @param {Array<object>} existing stored video records
- * @param {Array<object>} incoming freshly fetched records
- * @param {Record<string,{ignored?:boolean,speed?:number}>|null|undefined} prefs
- * @param {{sweepSpeeds?:boolean}} [options] defaults to the "Fetch new" scope
- * @returns {Array<object>}
+ * A stored record refreshed from its incoming copy: the SAME object by identity
+ * when no fetched field differs, else a copy carrying the incoming values. An
+ * incoming field left undefined keeps the stored value.
+ * @param {object} prev stored record
+ * @param {object} inc incoming record
+ * @returns {object}
  */
-export function mergeRefresh(existing, incoming, prefs, { sweepSpeeds = false } = {}) {
-  const stored = new Set(existing.map((r) => r.videoId));
-  const arrivals = new Set(
-    incoming.map((v) => v.videoId).filter((id) => !stored.has(id))
-  );
-  const merged = upsertVideos(existing, incoming);
-  return sweepSpeeds
-    ? applyChannelSpeeds(merged, prefs, null) // "Refresh all": every record
-    : applyChannelSpeeds(merged, prefs, arrivals); // "Fetch new": arrivals only
+function refreshFetchedFields(prev, inc) {
+  let next = prev;
+  for (const f of FETCHED_FIELDS) {
+    if (inc[f] !== undefined && inc[f] !== prev[f]) {
+      if (next === prev) next = { ...prev };
+      next[f] = inc[f];
+    }
+  }
+  return next;
+}
+
+/**
+ * Apply ONE channel's fetch to the stored record set, as one pure step. The
+ * channel's uploads were paged down to `bound` (exclusive — the same "strictly
+ * after" test as isAfterCutoff, which is the fetch's own inclusion rule), so
+ * `received` is that channel's complete window, and the stored set is brought
+ * to it:
+ *   - a stored record matched by videoId — wherever it sits, whichever channel
+ *     it names — is refreshed from the incoming copy: its FETCHED_FIELDS only,
+ *     its state and every other locally-owned field surviving;
+ *   - an unmatched incoming record is INSERTED as 'new' (an explicit incoming
+ *     state is kept);
+ *   - with `removeMissing`, a stored record OF THIS CHANNEL inside the window
+ *     that the fetch did not return is REMOVED: the owner deleted or hid it.
+ *     Records at or before the bound, and other channels' records, are never
+ *     removed here — outside the window the fetch says nothing about them;
+ *   - the channel's preferred speed is filled (if-absent — an explicit per-video
+ *     speed is never overwritten or cleared; see applyChannelSpeeds) onto the
+ *     records just inserted, or with `sweepSpeeds` onto every record of the
+ *     channel.
+ * "Refresh all" runs it with both flags ON — its window is the floor, so the
+ * channel's whole queue is authoritative; "Fetch new" with both OFF: add and
+ * update only, never delete.
+ *
+ * Returns the new record set plus exactly what the caller has to write:
+ * `changed` is every record object that is not one of the input's (refreshed,
+ * inserted or speed-filled), `removedIds` the deleted videoIds. Untouched
+ * records come back BY IDENTITY — the user may be mutating one mid-refresh —
+ * and when nothing changed at all so does the `records` array itself. Neither
+ * input is mutated. Pure.
+ *
+ * @param {Array<object>} records stored video records
+ * @param {string} channelId the channel fetched
+ * @param {Array<object>} received its fetched records (state omitted)
+ * @param {string|null|undefined} bound the fetch's exclusive lower bound
+ * @param {{removeMissing?:boolean,sweepSpeeds?:boolean,prefs?:(object|null)}} [options]
+ *   both flags default to the "Fetch new" scope
+ * @returns {{records:Array<object>,changed:Array<object>,removedIds:Array<string>,insertedIds:Array<string>}}
+ */
+export function reconcileChannel(
+  records,
+  channelId,
+  received,
+  bound,
+  { removeMissing = false, sweepSpeeds = false, prefs = null } = {}
+) {
+  const stored = Array.isArray(records) ? records : [];
+  const incoming = new Map();
+  for (const v of Array.isArray(received) ? received : []) {
+    if (v && v.videoId) incoming.set(v.videoId, v);
+  }
+
+  const removedIds = [];
+  const insertedIds = [];
+  const next = [];
+  for (const rec of stored) {
+    const inc = rec ? incoming.get(rec.videoId) : undefined;
+    if (inc) {
+      incoming.delete(rec.videoId); // matched, so not an insert
+      next.push(refreshFetchedFields(rec, inc));
+    } else if (removeMissing && rec && rec.channelId === channelId && isAfterCutoff(rec, bound)) {
+      removedIds.push(rec.videoId);
+    } else {
+      next.push(rec);
+    }
+  }
+  for (const inc of incoming.values()) {
+    next.push({ ...inc, state: inc.state || STATE_NEW });
+    insertedIds.push(inc.videoId);
+  }
+
+  const scope = sweepSpeeds
+    ? next.filter((r) => r && r.channelId === channelId).map((r) => r.videoId)
+    : insertedIds;
+  const filled = applyChannelSpeeds(next, prefs, scope);
+
+  const inputs = new Set(stored);
+  const changed = filled.filter((r) => !inputs.has(r));
+  if (changed.length === 0 && removedIds.length === 0) {
+    return { records, changed, removedIds, insertedIds };
+  }
+  return { records: filled, changed, removedIds, insertedIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,7 +1161,7 @@ export function stashToClean(records) {
 
 /**
  * Add one video to the stash — a pasted link on stash.html, or a subscriptions
- * card's "Add to stash" — as ONE pure step, the same idea as mergeRefresh, so
+ * card's "Add to stash" — as ONE pure step, the same idea as reconcileChannel, so
  * the tests exercise the real composition instead of a mirror of it.
  *
  * A NEW videoId is APPENDED (the stash's order is arrival order), stamped

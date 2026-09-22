@@ -202,21 +202,37 @@ export async function getSubscriptions(onProgress) {
  * playlistItems are returned newest-first, so we page until we hit an item
  * whose publish time is <= cutoff, then stop (everything after is older).
  *
+ * `thorough` buys a COMPLETE window: the walk stops only once a whole page holds
+ * nothing newer than the cutoff, instead of at the first older item. Playlist
+ * position is UPLOAD order while the stored publish time is the video's own
+ * (a premiere, a scheduled upload), so an item filed among older ones on the
+ * same page is still picked up. The caller that DELETES what it did not
+ * receive ("Refresh all") needs that; it costs about one extra page per channel
+ * with anything in the window, so the incremental fetch leaves it off.
+ *
  * @param {string} channelId
  * @param {string|null} cutoff ISO timestamp low-water mark (exclusive)
  * @param {string} [subscriptionTitle] fallback channel title
- * @returns {Promise<Array<object>>} video records (state omitted; assigned by queue upsert)
+ * @param {{thorough?:boolean}} [options]
+ * @returns {Promise<Array<object>>} video records (state omitted; assigned by the queue reconcile)
  */
-export async function getChannelVideosSince(channelId, cutoff, subscriptionTitle) {
+export async function getChannelVideosSince(
+  channelId,
+  cutoff,
+  subscriptionTitle,
+  { thorough = false } = {}
+) {
   const playlistId = uploadsPlaylistId(channelId);
   if (!playlistId) {
     // Rare: channel id not starting with "UC". Resolve its uploads playlist
-    // via channels.list (costs 1 unit). Then recurse with a synthetic id.
+    // via channels.list (costs 1 unit). Then recurse with a synthetic id. No
+    // playlist is an ERROR, never an empty window: the mirror deletes whatever
+    // an empty window did not return.
     const resolved = await resolveUploadsPlaylist(channelId);
-    if (!resolved) return [];
-    return getChannelVideosByPlaylist(resolved, cutoff, channelId, subscriptionTitle);
+    if (!resolved) throw new ApiError('Uploads playlist not found', 'notfound', 404);
+    return getChannelVideosByPlaylist(resolved, cutoff, channelId, subscriptionTitle, thorough);
   }
-  return getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscriptionTitle);
+  return getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscriptionTitle, thorough);
 }
 
 async function resolveUploadsPlaylist(channelId) {
@@ -242,7 +258,7 @@ async function resolveUploadsPlaylist(channelId) {
   return null;
 }
 
-async function getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscriptionTitle) {
+async function getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscriptionTitle, thorough) {
   const records = [];
   let pageToken = '';
   let stop = false;
@@ -255,6 +271,8 @@ async function getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscri
       pageToken,
     });
 
+    let older = false; // this page held an item at/before the cutoff
+    let newer = false; // ... and one strictly after it
     for (const item of data.items || []) {
       const snip = item.snippet || {};
       const cd = item.contentDetails || {};
@@ -264,11 +282,14 @@ async function getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscri
 
       if (!videoId || !publishedAt) continue;
 
-      // Newest-first: once we reach the cutoff, everything after is older.
       if (cutoff && compareIso(publishedAt, cutoff) <= 0) {
-        stop = true;
-        break;
+        older = true;
+        // Newest-first: everything after is older — unless we are being
+        // thorough, where a newer item filed out of order may still follow.
+        if (!thorough) break;
+        continue;
       }
+      newer = true;
 
       records.push({
         videoId,
@@ -280,6 +301,9 @@ async function getChannelVideosByPlaylist(playlistId, cutoff, channelId, subscri
       });
     }
 
+    // A page that reached the cutoff ends the walk; a thorough one only when it
+    // also held nothing newer (a mixed page means one more page to be sure).
+    stop = older && !(thorough && newer);
     pageToken = stop ? '' : data.nextPageToken || '';
   } while (pageToken);
 

@@ -7,7 +7,6 @@
 
 import assert from 'node:assert';
 import {
-  upsertVideos,
   computeQueue,
   computeVisible,
   computeCutoff,
@@ -33,7 +32,8 @@ import {
   applyChannelSpeeds,
   setChannelPref,
   pruneChannels,
-  mergeRefresh,
+  unmirroredVideoIds,
+  reconcileChannel,
   parseVideoId,
   parseStartSeconds,
   sortStash,
@@ -954,24 +954,82 @@ test('pruneChannels hands malformed or absent maps straight back by identity', (
   }
 });
 
-// --- preferredSpeed: an explicitly-set per-video speed always survives a refresh ---
+// --- unmirroredVideoIds: "Refresh all" drops the channels it does not mirror ---
 
-test('upsertVideos never overwrites or clears an explicitly-set preferredSpeed', () => {
-  const existing = [
-    { ...rec('a', T1, 'new'), preferredSpeed: 1 },
-    { ...rec('b', T2, 'skipped'), preferredSpeed: 2 },
-  ];
-  const incoming = [
-    { ...rec('a', T1, undefined), preferredSpeed: 2 }, // speed on incoming
-    rec('b', T2, undefined), // no speed on incoming
-    { ...rec('c', T3, undefined), preferredSpeed: 2 }, // genuinely new record
-  ];
-  const byId = new Map(upsertVideos(existing, incoming).map((r) => [r.videoId, r]));
-  assert.equal(byId.get('a').preferredSpeed, 1); // incoming speed ignored
-  assert.equal(byId.get('b').preferredSpeed, 2); // stored speed not cleared
-  assert.equal(byId.get('c').preferredSpeed, 2); // new record keeps the preset
-  assert.equal(byId.get('b').state, 'skipped'); // and state stays preserved
+const MIXED = [
+  { ...rec('k1', T1, 'new'), channelId: 'UCkeep' },
+  { ...rec('g1', T2, 'new'), channelId: 'UCgone' },
+  { ...rec('g2', T3, 'skipped'), channelId: 'UCgone' }, // handled: goes all the same
+  { ...rec('k2', T4, 'skipped'), channelId: 'UCkeep' },
+];
+
+test('unmirroredVideoIds selects every record of an unsubscribed channel, whatever its state', () => {
+  assert.deepEqual(unmirroredVideoIds(MIXED, SUBS, {}), ['g1', 'g2']); // record order
+  assert.deepEqual(unmirroredVideoIds(MIXED, SUBS, null), ['g1', 'g2']); // no prefs at all
 });
+
+test('unmirroredVideoIds selects an IGNORED channel too, and only for Ignore', () => {
+  // Ignore is "stop fetching, and the backlog goes on the next Refresh all".
+  const subs = [...SUBS, { channelId: 'UCgone' }]; // everything subscribed
+  assert.deepEqual(unmirroredVideoIds(MIXED, subs, {}), []);
+  assert.deepEqual(unmirroredVideoIds(MIXED, subs, { UCkeep: { ignored: true } }), ['k1', 'k2']);
+  assert.deepEqual(unmirroredVideoIds(MIXED, subs, { UCkeep: { speed: 2 } }), []); // a speed is not Ignore
+  // Unsubscribed and ignored together: the union, still in record order.
+  assert.deepEqual(unmirroredVideoIds(MIXED, SUBS, { UCkeep: { ignored: true } }), [
+    'k1',
+    'g1',
+    'g2',
+    'k2',
+  ]);
+});
+
+test('unmirroredVideoIds hands pruneChannels a record set it can drop the channel from', () => {
+  // The pair: the videos go first, then an UNSUBSCRIBED channel (now drained)
+  // prunes in the same pass. An ignored one is still in `subs`, so it keeps its
+  // entry and its Ignore — that entry is how the user un-ignores it.
+  const prefs = { UCkeep: { ignored: true } };
+  const gone = new Set(unmirroredVideoIds(MIXED, SUBS, prefs));
+  const left = MIXED.filter((r) => !gone.has(r.videoId));
+  assert.deepEqual(left, []);
+  const pruned = pruneChannels(CHANNELS, prefs, SUBS, left);
+  assert.deepEqual(pruned.removed.sort(), ['UCdrain', 'UCgone']);
+  assert.strictEqual(pruned.channels.UCkeep, CHANNELS.UCkeep); // ignored, subscribed: stays
+  assert.strictEqual(pruned.prefs, prefs); // and so does its Ignore
+  assert.equal(pruneChannels(CHANNELS, {}, SUBS, MIXED).removed.includes('UCgone'), false);
+});
+
+test('unmirroredVideoIds selects NOTHING when the subs list is empty or not an array', () => {
+  // The whole queue would otherwise be wiped by a failed subscriptions fetch —
+  // the same guard, and the same all-malformed case, as pruneChannels. Ignore
+  // does not override it: with no subs there is no run to sweep for.
+  for (const subs of [[], null, undefined, 'UCkeep', {}, [{ noChannelId: 1 }], [null]]) {
+    assert.deepEqual(unmirroredVideoIds(MIXED, subs, { UCkeep: { ignored: true } }), []);
+  }
+});
+
+test('unmirroredVideoIds skips a record with no channelId (it cannot be known unmirrored)', () => {
+  const records = [
+    null,
+    { videoId: 'orphan' },
+    { videoId: 'blank', channelId: '' },
+    { channelId: 'UCgone' }, // no videoId: nothing to delete by
+    ...MIXED,
+  ];
+  assert.deepEqual(unmirroredVideoIds(records, SUBS, {}), ['g1', 'g2']);
+  assert.deepEqual(unmirroredVideoIds(null, SUBS, {}), []);
+  assert.deepEqual(unmirroredVideoIds([], SUBS, {}), []);
+});
+
+test('unmirroredVideoIds never mutates its inputs', () => {
+  const records = MIXED.map((r) => ({ ...r }));
+  const subs = [null, { channelId: '' }, ...SUBS];
+  const prefs = { UCkeep: { ignored: true } };
+  const before = JSON.stringify({ records, subs, prefs });
+  unmirroredVideoIds(records, subs, prefs);
+  assert.equal(JSON.stringify({ records, subs, prefs }), before);
+});
+
+// --- preferredSpeed: an explicitly-set per-video speed always survives a refresh ---
 
 test('applyChannelSpeeds fills the channel speed only where a video has none', () => {
   const prefs = { UCa: { speed: 2 }, UCi: { ignored: true, speed: 2 } };
@@ -1020,75 +1078,211 @@ test('applyChannelSpeeds never mutates its input and tolerates garbage prefs', (
   assert.deepEqual(applyChannelSpeeds(undefined, { UCa: { speed: 2 } }), []);
 });
 
-// --- mergeRefresh: the real refresh composition (upsert, then fill-if-absent) ---
+// --- reconcileChannel: one channel's fetch applied to the stored set ---
 
-// Index the merged array by videoId so the assertions read like the store does.
-const merged = (existing, incoming, prefs, options) =>
-  new Map(mergeRefresh(existing, incoming, prefs, options).map((r) => [r.videoId, r]));
+const BOUND = T1; // the fetch's exclusive lower bound (the floor, for "Refresh all")
+const CHAN = 'UCa';
+// A stored record of the channel, and what its fetch hands back (no state).
+const full = (videoId, publishedAt, state, extra = {}) => ({
+  ...rec(videoId, publishedAt, state),
+  channelId: CHAN,
+  ...extra,
+});
+const fetched = (videoId, publishedAt, extra = {}) => {
+  const { state, ...r } = full(videoId, publishedAt, undefined, extra);
+  return r;
+};
 
-test('mergeRefresh: a brand-new video arrives carrying its channel speed', () => {
-  const prefs = { UCa: { speed: 2 } };
-  const incoming = [{ ...rec('a', T1, undefined), channelId: 'UCa' }];
-  // The fill runs AFTER the upsert, so brand-new arrivals are in scope either way.
-  assert.equal(merged([], incoming, prefs, { sweepSpeeds: false }).get('a').preferredSpeed, 2);
-  assert.equal(merged([], incoming, prefs, { sweepSpeeds: true }).get('a').preferredSpeed, 2);
+const STORED = [
+  full('keep', T2, 'skipped', {
+    positionSeconds: 30,
+    liked: true,
+    durationSeconds: 100,
+    embeddable: true,
+    description: 'd',
+    preferredSpeed: 1,
+  }), // re-returned, renamed
+  full('gone', T3, 'new'), // in the window, NOT re-returned: deleted or hidden upstream
+  full('atBound', T1, 'new'), // exactly AT the bound: outside the window
+  full('older', '2026-01-01T00:00:00Z', 'new'), // below the bound
+  { ...full('other', T4, 'new'), channelId: 'UCother' }, // another channel's
+];
+const RECEIVED = [
+  fetched('keep', T2, { title: 'renamed', channelTitle: 'Ch!', thumbnailUrl: 'k.jpg' }),
+  fetched('fresh', T4),
+];
+// Index the result by videoId so the assertions read like the store does.
+const byId = (out) => new Map(out.records.map((r) => [r.videoId, r]));
+
+test('reconcileChannel (Refresh all) removes the in-window records the fetch did not return, and only those', () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  assert.deepEqual(out.removedIds, ['gone']);
+  assert.deepEqual(out.insertedIds, ['fresh']);
+  assert.deepEqual(
+    out.records.map((r) => r.videoId).sort(),
+    ['atBound', 'fresh', 'keep', 'older', 'other']
+  );
 });
 
-const REFRESH_EXISTING = [
-  { ...rec('old', T1, 'new'), channelId: 'UCa' }, // stored, speed-less, not re-fetched
-  { ...rec('buf', T2, 'skipped'), channelId: 'UCa' }, // re-returned inside the buffer window
-  { ...rec('own', T3, 'new'), channelId: 'UCa', preferredSpeed: 1 }, // explicit per-video speed
-  { ...rec('ign', T4, 'new'), channelId: 'UCi' }, // ignored channel
-];
-const REFRESH_INCOMING = [
-  { ...rec('buf', T2, undefined), channelId: 'UCa' },
-  { ...rec('own', T3, undefined), channelId: 'UCa' },
-  { ...rec('fresh', T4, undefined), channelId: 'UCa' },
-];
-const REFRESH_PREFS = { UCa: { speed: 2 }, UCi: { ignored: true, speed: 2 } };
+test('reconcileChannel keeps the record exactly AT the bound — the fetch excludes it by the same test', () => {
+  // The fetch stops at compareIso(publishedAt, cutoff) <= 0; the window is
+  // isAfterCutoff, i.e. > 0. One comparator, so a record on the bound can never
+  // be "not received" AND "in the window" at once.
+  assert.ok(compareIso(T1, BOUND) <= 0);
+  const out = reconcileChannel(STORED, CHAN, [], BOUND, { removeMissing: true });
+  assert.ok(out.records.some((r) => r.videoId === 'atBound'));
+  assert.ok(!out.removedIds.includes('atBound'));
+});
 
-test('mergeRefresh: "Fetch new" speeds only the newly-inserted records', () => {
-  const byId = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {
-    sweepSpeeds: false,
+test('reconcileChannel hands back other channels and out-of-window records BY IDENTITY', () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  const got = byId(out);
+  assert.strictEqual(got.get('other'), STORED[4]); // never this fetch's business
+  assert.strictEqual(got.get('older'), STORED[3]);
+  assert.strictEqual(got.get('atBound'), STORED[2]);
+});
+
+test("reconcileChannel refreshes a match's fetched fields and preserves every locally-owned one", () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  const keep = byId(out).get('keep');
+  assert.equal(keep.title, 'renamed');
+  assert.equal(keep.channelTitle, 'Ch!');
+  assert.equal(keep.thumbnailUrl, 'k.jpg');
+  assert.equal(keep.state, 'skipped');
+  assert.equal(keep.positionSeconds, 30);
+  assert.equal(keep.liked, true);
+  assert.equal(keep.durationSeconds, 100);
+  assert.equal(keep.embeddable, true);
+  assert.equal(keep.description, 'd');
+  assert.equal(keep.preferredSpeed, 1);
+  assert.notStrictEqual(keep, STORED[0]); // a copy: the stored object is untouched
+  assert.equal(STORED[0].title, 'keep');
+  // An identical re-return is the same object, not a copy.
+  const one = [full('a', T2, 'new')];
+  assert.strictEqual(reconcileChannel(one, CHAN, [fetched('a', T2)], BOUND).records[0], one[0]);
+});
+
+test('reconcileChannel inserts an unmatched incoming record as new (an explicit state kept)', () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND);
+  const fresh = byId(out).get('fresh');
+  assert.equal(fresh.state, 'new');
+  assert.notStrictEqual(fresh, RECEIVED[1]); // the 'new' lands on a copy
+  assert.equal(RECEIVED[1].state, undefined);
+  const explicit = reconcileChannel([], CHAN, [{ ...fetched('s', T2), state: 'skipped' }], BOUND);
+  assert.equal(explicit.records[0].state, 'skipped');
+});
+
+test('reconcileChannel: an EMPTY fetch with removeMissing clears the window — a channel quiet since the floor', () => {
+  const out = reconcileChannel(STORED, CHAN, [], BOUND, { removeMissing: true });
+  assert.deepEqual(out.removedIds.sort(), ['gone', 'keep']);
+  assert.deepEqual(out.records.map((r) => r.videoId).sort(), ['atBound', 'older', 'other']);
+  assert.deepEqual(out.changed, []); // nothing to put, only deletes
+});
+
+test('reconcileChannel (Fetch new) with removeMissing off deletes nothing', () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND);
+  assert.deepEqual(out.removedIds, []);
+  assert.equal(out.records.length, STORED.length + 1);
+  assert.ok(out.records.some((r) => r.videoId === 'gone'));
+  // And an empty incremental fetch changes nothing at all.
+  assert.strictEqual(reconcileChannel(STORED, CHAN, [], BOUND).records, STORED);
+});
+
+test('reconcileChannel returns the input array by identity, and nothing to write, when nothing differs', () => {
+  const stored = [full('a', T2, 'new'), full('b', T3, 'skipped', { positionSeconds: 9 })];
+  const out = reconcileChannel(stored, CHAN, [fetched('a', T2), fetched('b', T3)], BOUND, {
+    removeMissing: true,
+    sweepSpeeds: true,
+    prefs: { UCa: { speed: 2 } },
   });
-  assert.equal(byId.get('fresh').preferredSpeed, 2); // newly inserted
-  assert.equal(byId.get('buf').preferredSpeed, undefined); // re-returned in the buffer: untouched
-  assert.equal(byId.get('old').preferredSpeed, undefined); // older queue: untouched
-  assert.equal(byId.get('own').preferredSpeed, 1); // explicit speed never overwritten
-  assert.equal(byId.get('ign').preferredSpeed, undefined); // ignored channel excluded
-  assert.equal(byId.get('buf').state, 'skipped'); // upsert preserved the state
-});
-
-test('mergeRefresh: "Refresh all" speeds every stored record that has none', () => {
-  const byId = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {
+  // (the speed IS filled here — so `records` is new; without a pref it is not)
+  assert.notStrictEqual(out.records, stored);
+  const bare = reconcileChannel(stored, CHAN, [fetched('a', T2), fetched('b', T3)], BOUND, {
+    removeMissing: true,
     sweepSpeeds: true,
   });
-  assert.equal(byId.get('fresh').preferredSpeed, 2);
-  assert.equal(byId.get('buf').preferredSpeed, 2);
-  assert.equal(byId.get('old').preferredSpeed, 2); // swept even though not re-fetched
-  assert.equal(byId.get('own').preferredSpeed, 1); // explicit speed still wins
-  assert.equal(byId.get('ign').preferredSpeed, undefined); // ignored channel still excluded
+  assert.strictEqual(bare.records, stored);
+  assert.deepEqual(bare.changed, []);
+  assert.deepEqual(bare.removedIds, []);
+  assert.deepEqual(bare.insertedIds, []);
 });
 
-test('mergeRefresh: omitted options / {} default to the "Fetch new" scope', () => {
-  const bare = new Map(
-    mergeRefresh(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS).map((r) => [r.videoId, r])
+test('reconcileChannel lists in `changed` exactly the records to write', () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  assert.deepEqual(out.changed.map((r) => r.videoId).sort(), ['fresh', 'keep']);
+  const got = byId(out);
+  assert.strictEqual(out.changed.find((r) => r.videoId === 'keep'), got.get('keep'));
+  assert.strictEqual(out.changed.find((r) => r.videoId === 'fresh'), got.get('fresh'));
+});
+
+test('reconcileChannel fills the channel speed on the inserted records ("Fetch new") …', () => {
+  const prefs = { UCa: { speed: 2 }, UCother: { speed: 1.5 } };
+  const got = byId(reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { prefs }));
+  assert.equal(got.get('fresh').preferredSpeed, 2); // inserted
+  assert.equal(got.get('keep').preferredSpeed, 1); // explicit per-video speed wins
+  assert.equal(got.get('gone').preferredSpeed, undefined); // already stored: untouched
+  assert.equal(got.get('atBound').preferredSpeed, undefined);
+  assert.equal(got.get('older').preferredSpeed, undefined);
+  assert.equal(got.get('other').preferredSpeed, undefined); // another channel: never
+});
+
+test("reconcileChannel … and on the channel's WHOLE set with sweepSpeeds (\"Refresh all\")", () => {
+  const prefs = { UCa: { speed: 2 }, UCother: { speed: 1.5 } };
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, {
+    removeMissing: true,
+    sweepSpeeds: true,
+    prefs,
+  });
+  const got = byId(out);
+  assert.equal(got.get('fresh').preferredSpeed, 2);
+  assert.equal(got.get('keep').preferredSpeed, 1); // explicit still wins
+  assert.equal(got.get('atBound').preferredSpeed, 2); // the channel's, out of the window too
+  assert.equal(got.get('older').preferredSpeed, 2);
+  assert.equal(got.get('other').preferredSpeed, undefined); // another channel: never
+  // The filled records are written too.
+  assert.deepEqual(
+    out.changed.map((r) => r.videoId).sort(),
+    ['atBound', 'fresh', 'keep', 'older']
   );
-  assert.equal(bare.get('old').preferredSpeed, undefined); // not swept
-  assert.equal(bare.get('fresh').preferredSpeed, 2);
-  const empty = merged(REFRESH_EXISTING, REFRESH_INCOMING, REFRESH_PREFS, {});
-  assert.equal(empty.get('old').preferredSpeed, undefined);
-  assert.equal(empty.get('fresh').preferredSpeed, 2);
 });
 
-test('mergeRefresh never mutates its inputs', () => {
-  const existing = [{ ...rec('old', T1, 'new'), channelId: 'UCa' }];
-  const incoming = [{ ...rec('fresh', T2, undefined), channelId: 'UCa' }];
-  mergeRefresh(existing, incoming, { UCa: { speed: 2 } }, { sweepSpeeds: true });
-  assert.equal(existing.length, 1);
-  assert.equal(existing[0].preferredSpeed, undefined);
-  assert.equal(incoming[0].preferredSpeed, undefined);
-  assert.equal(incoming[0].state, undefined); // the 'new' default lands on the copy only
+test('reconcileChannel never overwrites or clears an explicitly-set preferredSpeed', () => {
+  const existing = [
+    full('a', T2, 'new', { preferredSpeed: 1 }),
+    full('b', T3, 'skipped', { preferredSpeed: 2 }),
+  ];
+  const incoming = [
+    fetched('a', T2, { preferredSpeed: 2 }), // speed on incoming: not a fetched field
+    fetched('b', T3), // no speed on incoming
+    fetched('c', T4, { preferredSpeed: 2 }), // genuinely new record
+  ];
+  const got = byId(
+    reconcileChannel(existing, CHAN, incoming, BOUND, {
+      removeMissing: true,
+      sweepSpeeds: true,
+      prefs: { UCa: { speed: 1.5 } },
+    })
+  );
+  assert.equal(got.get('a').preferredSpeed, 1); // incoming speed ignored
+  assert.equal(got.get('b').preferredSpeed, 2); // stored speed not cleared
+  assert.equal(got.get('c').preferredSpeed, 2); // new record keeps its preset over the channel's
+  assert.equal(got.get('b').state, 'skipped'); // and state stays preserved
+});
+
+test('reconcileChannel never mutates its inputs and tolerates garbage', () => {
+  const stored = STORED.map((r) => ({ ...r }));
+  const received = RECEIVED.map((r) => ({ ...r }));
+  const before = JSON.stringify({ stored, received });
+  reconcileChannel(stored, CHAN, received, BOUND, {
+    removeMissing: true,
+    sweepSpeeds: true,
+    prefs: { UCa: { speed: 2 } },
+  });
+  assert.equal(JSON.stringify({ stored, received }), before);
+  assert.deepEqual(reconcileChannel(undefined, CHAN, undefined, BOUND).records, undefined);
+  assert.deepEqual(reconcileChannel(null, CHAN, [fetched('x', T2)], BOUND).records.length, 1);
+  assert.deepEqual(reconcileChannel([], CHAN, [null, { title: 'no id' }], BOUND).records, []);
+  assert.deepEqual(reconcileChannel([null], CHAN, [], BOUND, { removeMissing: true }).records, [null]);
 });
 
 // --- parseDescription: linkify timestamps + urls, exact round-trip ---
