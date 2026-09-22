@@ -67,7 +67,8 @@ import {
   subscriptionChannelInfo,
   isChannelIgnored,
   pruneChannels,
-  mergeRefresh,
+  unmirroredVideoIds,
+  reconcileChannel,
   addToStash,
   normalizeKey,
 } from './queue.js';
@@ -260,12 +261,12 @@ async function init() {
     try {
       await cleanup();
     } catch (err) {
-      // cleanup()'s only await is deleteVideos(), so a throw here is a fatal DB
-      // condition (blocked/unavailable) — it must surface, not be swallowed.
-      // Anything else falls through and renders whatever we have. Note cleanup()
-      // drops the pruned records from state.records BEFORE awaiting the delete,
-      // so on failure memory and IndexedDB diverge until the next reload re-reads
-      // and re-prunes.
+      // cleanup()'s only await is commitRecords()'s deleteVideos(), so a throw
+      // here is a fatal DB condition (blocked/unavailable) — it must surface, not
+      // be swallowed. Anything else falls through and renders whatever we have.
+      // Note commitRecords() drops the records from state.records BEFORE awaiting
+      // the delete, so on failure memory and IndexedDB diverge until the next
+      // reload re-reads and re-prunes.
       reportIfFatalDb(err);
     }
   }
@@ -678,10 +679,11 @@ async function onSignOut() {
 
 /**
  * "Refresh all" (full): the per-channel lower bound is the FLOOR, so every
- * channel is paged down to the floor (the full back-catalog since the cutoff).
+ * channel is paged down to the floor (the full back-catalog since the cutoff),
+ * and the run MIRRORS the subscriptions from there — see runRefresh's `mirror`.
  */
 async function onRefresh() {
-  return runRefresh(state.floor, true);
+  return runRefresh(state.floor, { mirror: true });
 }
 
 /**
@@ -694,17 +696,35 @@ async function onRefresh() {
  */
 async function onRefreshNew() {
   const bound = incrementalSince(state.records, state.floor, INCREMENTAL_REFRESH_BUFFER_MS);
-  return runRefresh(bound, false);
+  return runRefresh(bound, { mirror: false });
 }
 
 /**
  * Shared refresh pipeline. `bound` is the per-channel lower bound passed to the
- * uploads fetch, and `sweepSpeeds` says how far a channel's preferred speed
- * reaches — the ONLY two things that differ between "Refresh all" (floor, sweep)
- * and "Refresh new" (incremental, newly-inserted records only). The mode is
- * passed explicitly, never inferred from the bound. Everything else —
- * subscriptions + avatars, the per-channel uploads paging, details backfill,
- * upsert, cleanup, render, the progress toast and the summary — is identical.
+ * uploads fetch, and `mode.mirror` the ONLY other thing that differs between
+ * the two buttons — passed explicitly, never inferred from the bound.
+ *
+ * "Refresh all" MIRRORS the subscriptions from the floor onward: the videos of
+ * every channel it will not fetch — unsubscribed or ignored — are deleted
+ * first, then each fetched channel's stored window is brought to exactly what
+ * came back (missing ones deleted, matches refreshed, new ones inserted; see
+ * reconcileChannel) with the channel's preferred speed filled across its whole
+ * set. "Fetch new" only adds and updates — never deletes — and speeds only what
+ * it inserted. Everything else — auth, subscriptions + avatars, the per-channel
+ * paging, cleanup, the channel prune, the details backfill, the progress toast
+ * and the summary — is identical.
+ *
+ * Each channel's result is APPLIED AND WRITTEN as soon as it arrives — just the
+ * records it changed plus its deletes, never the whole set — and nothing is
+ * RENDERED until the end: one place-keeping render after the details backfill,
+ * or on the way out of a failed run when something was written. So a run cut
+ * short by quota, auth or the network keeps every channel that completed and
+ * loses only the failing channel's pages. The user may be watching and marking
+ * while it runs: every step reads state.records LIVE and hands untouched
+ * records back by identity, so a mark or a position written mid-run rides into
+ * the next write instead of being undone by it; a record a step deletes is a
+ * silent no-op to any action that then looks for it, as with cleanup(); and
+ * state.visible is re-derived per step, so auto-advance never picks one.
  *
  * Signed out is not a special case: the run AUTHORIZES ON DEMAND as its first
  * step (inside the click, so the GIS popup is not blocked) and then keeps going,
@@ -712,9 +732,9 @@ async function onRefreshNew() {
  * what stops a second click (either button, or the keyboard) from stacking a
  * second token request, which auth.js rejects outright while one is in flight.
  * @param {string|null} bound ISO lower bound for the per-channel uploads fetch
- * @param {boolean} sweepSpeeds fill channel speeds across ALL stored records
+ * @param {{mirror:boolean}} mode true for "Refresh all" (see above)
  */
-async function runRefresh(bound, sweepSpeeds) {
+async function runRefresh(bound, { mirror }) {
   if (state.refreshing) return;
   state.refreshing = true;
   // Kept alongside updateAuthUi's pair: nothing calls that on the way IN.
@@ -722,6 +742,8 @@ async function runRefresh(bound, sweepSpeeds) {
   if (dom.refreshNewBtn) dom.refreshNewBtn.setAttribute('aria-disabled', 'true');
   hideProgress();
 
+  // Whether any step has written the store yet — what a failed run renders on.
+  let dirty = false;
   try {
     // Silent when a token is already live; falls back to the consent prompt.
     if (!hasSession()) showProgress('Authorizing with Google…');
@@ -746,71 +768,97 @@ async function runRefresh(bound, sweepSpeeds) {
     // cached at startup — so edits made in a Channels tab apply to this fetch.
     const prefs = loadChannelPrefs();
 
-    // Per-channel uploads are paged only until they reach `bound` (floor for a
-    // full refresh, newest-minus-buffer for an incremental one).
-    const collected = [];
-    let skipped = 0;
-    let fetched = 0;
     // Ignored count precomputed so the progress counter runs contiguously over
     // the channels actually fetched (never jumping across ignored ones).
     const ignored = subs.filter((s) => isChannelIgnored(prefs, s.channelId)).length;
     const fetchTotal = subs.length - ignored;
 
+    // "Refresh all" only: the videos of the channels this run will NOT fetch —
+    // unsubscribed or ignored — go first. `subs` is complete here
+    // (getSubscriptions pages fully or throws), it costs no network, and ahead
+    // of the loop no channel's failure can skip it.
+    const swept = mirror ? await dropUnmirroredVideos(subs, prefs) : 0;
+    if (swept > 0) dirty = true;
+
+    // Per-channel uploads are paged only until they reach `bound` (floor for a
+    // full refresh, newest-minus-buffer for an incremental one).
+    let skipped = 0;
+    let fetched = 0;
+    let fetchedItems = 0;
+    let gone = 0;
     for (const sub of subs) {
       // Ignored channels are skipped entirely — no uploads request at all (also
-      // saves quota). Their already-stored records are untouched.
+      // saves quota). "Refresh all" swept their records above; "Fetch new"
+      // leaves them.
       if (isChannelIgnored(prefs, sub.channelId)) continue;
       fetched++;
       // Updates the SINGLE progress toast in place (no new toast per tick).
       showProgress(`Fetching channel ${fetched} of ${fetchTotal}: ${sub.channelTitle}`);
+      let vids;
       try {
-        const vids = await getChannelVideosSince(
-          sub.channelId,
-          bound,
-          sub.channelTitle
-        );
-        for (const v of vids) collected.push(v);
+        // Thorough paging exactly when the result is about to be treated as the
+        // channel's complete window (see getChannelVideosSince).
+        vids = await getChannelVideosSince(sub.channelId, bound, sub.channelTitle, {
+          thorough: mirror,
+        });
       } catch (err) {
         if (err instanceof ApiError && err.kind === 'notfound') {
-          // Deleted/hidden channel: skip without aborting the whole refresh.
+          // Deleted/hidden channel: skip without aborting the whole refresh. Its
+          // records are untouched — an error is not an empty window.
           skipped++;
           continue;
         }
-        if (err instanceof ApiError && err.kind === 'quota') {
-          // Quota exhausted mid-run: persist what we have, then report.
-          await mergeAndPersist(collected, prefs, sweepSpeeds);
-          throw err;
-        }
-        // auth/network/http: abort the run and report.
+        // quota/auth/network/http: abort and report. Every channel before this
+        // one is already written; only this one's pages are lost.
         throw err;
       }
+      fetchedItems += vids.length;
+
+      // ONE synchronous step from the LIVE records to the assignment — no await
+      // between, nothing computed from an earlier snapshot — so a card the user
+      // marked while this channel was fetching keeps its mark.
+      const result = reconcileChannel(state.records, sub.channelId, vids, bound, {
+        removeMissing: mirror,
+        sweepSpeeds: mirror,
+        prefs,
+      });
+      if (result.records === state.records) continue; // nothing to write
+      gone += result.removedIds.length;
+      dirty = true;
+      await commitRecords(result.records, result);
     }
 
-    await mergeAndPersist(collected, prefs, sweepSpeeds);
-
-    // SYNC is a CLEANUP site: after upserting, recompute the marker, delete the
-    // handled prefix, and advance the floor.
+    // SYNC is a CLEANUP site: with the set brought up to date, recompute the
+    // marker, delete the handled prefix, and advance the floor.
     await cleanup();
 
-    // Silent housekeeping, run on the FINAL record set of this refresh (after
-    // the merge AND the cleanup above), so a channel whose last video was just
-    // deleted drops in the same pass. Only reachable past the non-empty-subs
-    // early return, so `subs` always describes a real subscriptions fetch.
+    // Silent housekeeping, run on the FINAL record set of this refresh, so a
+    // channel whose last video was just deleted drops in the same pass. Only
+    // reachable past the non-empty-subs early return, so `subs` always
+    // describes a real subscriptions fetch.
     pruneStaleChannels(subs);
 
     // Duration + embeddability are not in playlistItems: batch
     // videos.list?part=contentDetails,status (<=50 ids/call, 1 unit each; adding
     // `status` is 0 extra quota) for the surviving visible videos lacking either
-    // (covers newly fetched + backfill of older ones). Then the final render.
+    // (covers newly fetched + backfill of older ones). Then THE render — the
+    // only one of the run — keeping the user's place: nobody asked for it, and
+    // a bare render() would yank them to the top and drop focus to <body>.
     showProgress('Fetching video details…');
     await backfillDetails();
     rerenderKeepingPlace(recompute);
 
-    const parts = [`Refreshed. ${collected.length} item(s) fetched.`];
+    const parts = [`Refreshed. ${fetchedItems} item(s) fetched.`];
     if (skipped > 0) parts.push(`${skipped} channel(s) skipped (deleted/unavailable).`);
     if (ignored > 0) parts.push(`${ignored} channel(s) ignored.`);
+    if (swept > 0) {
+      parts.push(`${swept} video(s) from unsubscribed or ignored channels removed.`);
+    }
+    if (gone > 0) parts.push(`${gone} video(s) no longer on their channel removed.`);
     showToast(parts.join(' '), { type: 'success' });
   } catch (err) {
+    // The channels that completed are written: show them before reporting.
+    if (dirty) rerenderKeepingPlace(recompute);
     handleError(err);
   } finally {
     // Always dismiss the progress toast when a refresh ends (success/error/early).
@@ -821,21 +869,20 @@ async function runRefresh(bound, sweepSpeeds) {
 }
 
 /**
- * Merge freshly fetched records into the store and persist. The merge itself is
- * the pure `mergeRefresh` (upsert by videoId preserving state, then fill in each
- * channel's preferred speed where a video has none — see its doc for the reach
- * of `sweepSpeeds`); here it is one write of the merged set, then a recompute.
- * @param {Array<object>} incoming
+ * "Refresh all"'s sweep of the channels it does not mirror: delete every stored
+ * video of a channel absent from `subs` or ignored in `prefs`, whatever its
+ * state. The selection is the pure `unmirroredVideoIds`, which carries the same
+ * guard as `pruneChannels`: an empty or malformed `subs` deletes nothing, an
+ * empty subscriptions list reading as a failed fetch. The stash is not touched:
+ * nothing there is fetched by subscription.
+ * @param {Array<{channelId:string}>} subs the freshly-fetched subscriptions
  * @param {Record<string,{ignored?:boolean,speed?:number}>} prefs per-channel prefs
- * @param {boolean} sweepSpeeds fill across ALL stored records, not just new ones
+ * @returns {Promise<number>} how many videos went, for the summary toast
  */
-async function mergeAndPersist(incoming, prefs, sweepSpeeds) {
-  state.records = mergeRefresh(state.records, incoming, prefs, { sweepSpeeds });
-  await putVideos(state.records);
-  // Nobody asked for this render — it lands mid-fetch, seconds after the click,
-  // on a user who may have gone on arrowing through the queue. Keeping the place
-  // is what stops it yanking them to the top and dropping focus to <body>.
-  rerenderKeepingPlace(recompute);
+async function dropUnmirroredVideos(subs, prefs) {
+  const ids = unmirroredVideoIds(state.records, subs, prefs);
+  if (ids.length > 0) await removeVideos(ids);
+  return ids.length;
 }
 
 /**
@@ -843,8 +890,9 @@ async function mergeAndPersist(incoming, prefs, sweepSpeeds) {
  * `yqa_channel_prefs` stop growing forever. The condition is the pure
  * `pruneChannels`: gone from `subs` AND no stored record left (a channel with
  * videos still queued keeps its entry — the cards need its avatar/title — and
- * drops on a later refresh once they drain). It sweeps both maps, so an orphan
- * prefs entry with no channels entry goes the same way. Prefs are re-read FRESH
+ * drops on a later refresh once they drain; "Refresh all" has just drained it,
+ * so there the two land together). It sweeps both maps, so an orphan prefs
+ * entry with no channels entry goes the same way. Prefs are re-read FRESH
  * here rather than reusing the refresh's snapshot: a Channels tab may have
  * edited them mid-run. Silent — no toast; and each map is written only if it
  * changed, since a prune can touch just one of the two.
@@ -1144,26 +1192,50 @@ function applyHandledDelta(fromState, toState) {
 }
 
 /**
- * CLEANUP — the ONLY place videos are deleted and the FLOOR advances. Recompute
- * the live cutoff marker, delete every present video with publishedAt <= cutoff,
- * advance the floor to the cutoff, and persist both. Runs in exactly three
- * places: page load (init), sync-with-YouTube, and the Cleanup button. It does
- * NOT render — callers recompute()/render afterwards.
+ * The page's ONE write-back of a changed record set: adopt `records` as the live
+ * set, re-derive the lists, react if the PLAYING record went, then persist
+ * exactly the difference — `removedIds` deleted, `changed` put. Three callers —
+ * removeVideos() (cleanup and the unmirrored sweep) and runRefresh's
+ * per-channel reconcile — and nothing else on this page deletes a video. It
+ * does NOT render: callers recompute()/render afterwards.
+ * @param {Array<object>} records the new live set
+ * @param {{removedIds?:Array<string>,changed?:Array<object>}} diff what to persist
+ */
+async function commitRecords(records, { removedIds = [], changed = [] }) {
+  state.records = records;
+  deriveLists();
+  // The deleted set can include the PLAYING record — its card goes, but
+  // state.playing still names it, so the bar stays up and the video plays on
+  // behind it.
+  if (state.playing && !playingRecord()) showPlayerEmpty(true);
+  if (removedIds.length > 0) await deleteVideos(removedIds);
+  if (changed.length > 0) await putVideos(changed);
+}
+
+/**
+ * Drop `ids` from memory, then from the store — through commitRecords.
+ * @param {Array<string>} ids videoIds to delete; non-empty
+ */
+async function removeVideos(ids) {
+  const idSet = new Set(ids);
+  await commitRecords(
+    state.records.filter((r) => !idSet.has(r.videoId)),
+    { removedIds: ids }
+  );
+}
+
+/**
+ * CLEANUP — the ONLY place the FLOOR advances on its own. Recompute the live
+ * cutoff marker, delete every present video with publishedAt <= cutoff, advance
+ * the floor to the cutoff, and persist both. Runs in exactly three places: page
+ * load (init), sync-with-YouTube, and the Cleanup button. It does NOT render —
+ * callers recompute()/render afterwards.
  */
 async function cleanup() {
   const cutoff = computeCutoff(state.records, state.floor);
 
   const toClean = videosToClean(state.records, cutoff);
-  if (toClean.length > 0) {
-    const ids = toClean.map((r) => r.videoId);
-    const idSet = new Set(ids);
-    state.records = state.records.filter((r) => !idSet.has(r.videoId));
-    // The deleted set can include the PLAYING record — its card goes, but
-    // state.playing still names it, so the bar stays up and the video plays on
-    // behind it. One check here covers every caller of this single deletion site.
-    if (state.playing && !playingRecord()) showPlayerEmpty(true);
-    await deleteVideos(ids);
-  }
+  if (toClean.length > 0) await removeVideos(toClean.map((r) => r.videoId));
 
   // The floor advances to the deletion boundary; persist it.
   if (cutoff && cutoff !== state.floor) {
@@ -1709,12 +1781,21 @@ async function onLike() {
 // Derivation + rendering
 // ---------------------------------------------------------------------------
 
-function recompute() {
-  // The render list is FLOOR-based and includes ALL in-window videos (any state)
-  // — so a marked video with publishedAt > floor stays visible (greyed) and does
-  // NOT disappear on marking. The queue is the still-'new' subset for the count.
+/**
+ * The two derived lists, from the live records and floor — no render. The
+ * render list is FLOOR-based and includes ALL in-window videos (any state) — so
+ * a marked video with publishedAt > floor stays visible (greyed) and does NOT
+ * disappear on marking. The queue is the still-'new' subset for the count.
+ * Also run by commitRecords, so auto-advance and "Start the queue" never pick a
+ * record a refresh step has just deleted while the list waits for its render.
+ */
+function deriveLists() {
   state.visible = computeVisible(state.records, state.floor);
   state.queue = computeQueue(state.records, state.floor);
+}
+
+function recompute() {
+  deriveLists();
   render();
 }
 
