@@ -41,6 +41,9 @@ import {
   addToStash,
   reconcileStash,
   normalizeKey,
+  sortTime,
+  isUnaired,
+  needsDetails,
 } from './queue.js';
 import { SHORTS_MAX_SECONDS } from './config.js';
 
@@ -1125,8 +1128,8 @@ test('reconcileChannel (Refresh all) removes the in-window records the fetch did
 });
 
 test('reconcileChannel keeps the record exactly AT the bound — the fetch excludes it by the same test', () => {
-  // The fetch stops at compareIso(publishedAt, cutoff) <= 0; the window is
-  // isAfterCutoff, i.e. > 0. One comparator, so a record on the bound can never
+  // The fetch stops at compareIso(publishedAt, cutoff) <= 0; the removal window
+  // is publishedAt > bound. One comparator, so a record on the bound can never
   // be "not received" AND "in the window" at once.
   assert.ok(compareIso(T1, BOUND) <= 0);
   const out = reconcileChannel(STORED, CHAN, [], BOUND, { removeMissing: true });
@@ -1970,6 +1973,81 @@ test('reconcileStash mutates neither input', () => {
   assert.equal(fresh[0].state, 'new'); // adopted by reference, never rewritten
   assert.notStrictEqual(out.records, current);
   assert.notStrictEqual(out.records, fresh);
+});
+
+// --- Premieres and live streams: sortTime, isUnaired, needsDetails ---
+
+// A premiere published (announced) at A, airing at C; the queue burnt down to B.
+const PA = '2026-03-01T00:00:00Z';
+const PB = '2026-03-05T00:00:00Z';
+const PC = '2026-03-10T00:00:00Z';
+const premiere = (extra = {}) => ({ ...rec('prem', PA, 'new'), scheduledStartTime: PC, ...extra });
+
+test('sortTime is the later of publishedAt and the start time, actual over scheduled', () => {
+  assert.equal(sortTime(rec('v', PA, 'new')), PA); // an ordinary upload
+  assert.equal(sortTime(premiere()), PC); // unaired: files at the schedule
+  assert.equal(sortTime(premiere({ actualStartTime: PB })), PB); // aired: the actual start wins
+  // A stream run BEFORE it went public files where it went public, never below it.
+  assert.equal(sortTime({ ...rec('v', PC, 'new'), actualStartTime: PA }), PC);
+  assert.equal(sortTime(premiere({ scheduledStartTime: 'garbage' })), PA);
+});
+
+test('computeVisible sorts an unaired premiere by its air time, past later uploads', () => {
+  const list = [premiere(), rec('b', PB, 'new'), rec('a', '2026-03-02T00:00:00Z', 'new')];
+  assert.deepEqual(computeVisible(list, null).map((r) => r.videoId), ['a', 'b', 'prem']);
+});
+
+test('the cutoff reaches B past a premiere published at A and airing at C, and cleanup keeps it', () => {
+  const records = [
+    rec('x', '2026-03-02T00:00:00Z', 'skipped'),
+    rec('y', PB, 'skipped'),
+    premiere(),
+  ];
+  const cutoff = computeCutoff(records, '2026-02-01T00:00:00Z');
+  assert.equal(cutoff, PB);
+  assert.deepEqual(videosToClean(records, cutoff).map((r) => r.videoId).sort(), ['x', 'y']);
+  assert.deepEqual(computeVisible(records, cutoff).map((r) => r.videoId), ['prem']);
+});
+
+test('reconcileChannel (Refresh all) with bound B keeps a stored premiere published at A', () => {
+  // The fetch never returns it (publishedAt A <= B), and that is not a deletion.
+  const stored = [{ ...premiere(), channelId: CHAN }];
+  const out = reconcileChannel(stored, CHAN, [], PB, { removeMissing: true });
+  assert.deepEqual(out.removedIds, []);
+  assert.strictEqual(out.records, stored);
+});
+
+test('incrementalSince ignores a future air time: it bounds by publishedAt', () => {
+  const since = incrementalSince([premiere({ scheduledStartTime: '2099-01-01T00:00:00Z' })], null, 0);
+  assert.equal(since, new Date(PA).toISOString());
+});
+
+test('isUnaired: a future schedule with no actual start, judged against the clock', () => {
+  const before = Date.parse(PB);
+  const after = Date.parse('2026-03-11T00:00:00Z');
+  assert.equal(isUnaired(premiere(), before), true);
+  assert.equal(isUnaired(premiere(), after), false); // self-heals once the time passes
+  assert.equal(isUnaired(premiere({ actualStartTime: PB }), before), false);
+  assert.equal(isUnaired(rec('v', PA, 'new'), before), false);
+  assert.equal(isUnaired(null, before), false);
+});
+
+test('firstPlayable / nextPlayable skip an unaired video, and only when given the time', () => {
+  const now = Date.parse(PB);
+  const list = [premiere(), rec('b', PB, 'new')];
+  assert.equal(firstPlayable(list, now).videoId, 'b');
+  assert.equal(nextPlayable([rec('a', PA, 'new'), premiere()], 'a', now), null);
+  assert.equal(firstPlayable(list).videoId, 'prem'); // no clock: no unaired check
+  assert.equal(firstPlayable(list, Date.parse('2026-03-11T00:00:00Z')).videoId, 'prem');
+});
+
+test('needsDetails: a missing field, no live marker yet, or still upcoming/live', () => {
+  const done = { durationSeconds: 60, embeddable: true, description: '', liveBroadcastContent: 'none' };
+  assert.equal(needsDetails(done), false);
+  assert.equal(needsDetails({ ...done, liveBroadcastContent: undefined }), true); // pre-existing record
+  assert.equal(needsDetails({ ...done, liveBroadcastContent: 'upcoming' }), true);
+  assert.equal(needsDetails({ ...done, liveBroadcastContent: 'live' }), true);
+  assert.equal(needsDetails({ ...done, durationSeconds: undefined }), true);
 });
 
 console.log(`\n${passed} passed`);

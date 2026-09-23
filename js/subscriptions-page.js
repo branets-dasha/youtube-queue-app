@@ -60,6 +60,7 @@ import {
   lastSkipped,
   nextPlayable,
   firstPlayable,
+  needsDetails,
   resumeStart,
   effectiveSpeed,
   daysAgoIso,
@@ -838,10 +839,10 @@ async function runRefresh(bound, { mirror }) {
     // describes a real subscriptions fetch.
     pruneStaleChannels(subs);
 
-    // Duration + embeddability are not in playlistItems: batch
-    // videos.list?part=contentDetails,status (<=50 ids/call, 1 unit each; adding
-    // `status` is 0 extra quota) for the surviving visible videos lacking either
-    // (covers newly fetched + backfill of older ones). Then THE render — the
+    // Duration, embeddability and premiere/stream times are not in
+    // playlistItems: batch videos.list (<=50 ids/call, 1 unit each; extra parts
+    // are 0 extra quota) for the surviving visible videos that need them (see
+    // backfillDetails). Then THE render — the
     // only one of the run — keeping the user's place: nobody asked for it, and
     // a bare render() would yank them to the top and drop focus to <body>.
     showProgress('Fetching video details…');
@@ -931,20 +932,18 @@ function updateChannelsFromSubs(subs) {
 }
 
 /**
- * Fill in durationSeconds + embeddable for currently-visible videos that lack
- * either (covers both newly fetched videos and backfill of older ones), via a
- * batched videos.list. These are enhancements (badges + playability), so
- * failures are swallowed — a refresh is never failed over them. The one
- * exception is a fatal DB condition, which is reported (see reportIfFatalDb).
+ * Fill in the videos.list details for currently-visible videos that need them
+ * (needsDetails: a field missing — newly fetched or older — or still upcoming /
+ * live, which is re-checked on EVERY refresh so a reschedule or the actual start
+ * lands), via a batched videos.list. These are enhancements (badges, playability,
+ * the premiere sort time), so failures are swallowed — a refresh is never failed
+ * over them. The one exception is a fatal DB condition, which is reported (see
+ * reportIfFatalDb). A changed start time reorders the list and can move the
+ * cutoff, so the marker is recomputed; the caller renders.
  */
 async function backfillDetails() {
   const missing = computeVisible(state.records, state.floor)
-    .filter(
-      (r) =>
-        typeof r.durationSeconds !== 'number' ||
-        typeof r.embeddable !== 'boolean' ||
-        typeof r.description !== 'string'
-    )
+    .filter(needsDetails)
     .map((r) => r.videoId);
   if (missing.length === 0) return;
   try {
@@ -956,8 +955,15 @@ async function backfillDetails() {
       if (typeof d.durationSeconds === 'number') r.durationSeconds = d.durationSeconds;
       if (typeof d.embeddable === 'boolean') r.embeddable = d.embeddable;
       if (typeof d.description === 'string') r.description = d.description;
+      r.liveBroadcastContent = d.liveBroadcastContent;
+      // Set or cleared outright: the API is the authority on both times.
+      for (const f of ['scheduledStartTime', 'actualStartTime']) {
+        if (d[f]) r[f] = d[f];
+        else delete r[f];
+      }
     }
     await putVideos(state.records);
+    refreshMarkerAndStats();
   } catch (err) {
     // Enhancements only; never fail a refresh over them — but a fatal DB state
     // (blocked by another tab) still has to surface instead of vanishing here.
@@ -1226,7 +1232,7 @@ async function removeVideos(ids) {
 
 /**
  * CLEANUP — the ONLY place the FLOOR advances on its own. Recompute the live
- * cutoff marker, delete every present video with publishedAt <= cutoff, advance
+ * cutoff marker, delete every present video with sortTime <= cutoff, advance
  * the floor to the cutoff, and persist both. Runs in exactly three places: page
  * load (init), sync-with-YouTube, and the Cleanup button. It does NOT render —
  * callers recompute()/render afterwards.
@@ -1367,7 +1373,7 @@ function playVideo(videoId) {
  * list can change between paint and click) — it just re-syncs the button.
  */
 function onStartQueue() {
-  const first = firstPlayable(state.visible);
+  const first = firstPlayable(state.visible, Date.now());
   if (!first) {
     updatePlayingControls(); // nothing to play after all: hide the stale button
     return;
@@ -1401,7 +1407,7 @@ function onPlayerEnded(endedId) {
   const rec = state.records.find((r) => r.videoId === endedId);
   if (rec) rec.positionSeconds = 0;
   setVideoState(endedId, STATE_SKIPPED); // persists rec (incl. position)
-  const next = nextPlayable(state.visible, endedId);
+  const next = nextPlayable(state.visible, endedId, Date.now());
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
 }
@@ -1507,7 +1513,7 @@ function updatePlayingControls() {
   // from its own aspect-ratio (not from siblings) and the pane is top-aligned, so
   // the bar appearing/disappearing below it never moves or resizes the video.
   setVisible(dom.playerBar, !!state.playing);
-  const canStart = !state.playing && !!firstPlayable(state.visible);
+  const canStart = !state.playing && !!firstPlayable(state.visible, Date.now());
   setVisible(dom.startQueueBtn, canStart);
   // Exactly ONE of {button, text} — "Select a video to play" next to a button that
   // does exactly that contradicts it. The text is HIDDEN (not blanked) so it takes
@@ -1784,7 +1790,7 @@ async function onLike() {
 /**
  * The two derived lists, from the live records and floor — no render. The
  * render list is FLOOR-based and includes ALL in-window videos (any state) — so
- * a marked video with publishedAt > floor stays visible (greyed) and does NOT
+ * a marked video with sortTime > floor stays visible (greyed) and does NOT
  * disappear on marking. The queue is the still-'new' subset for the count.
  * Also run by commitRecords, so auto-advance and "Start the queue" never pick a
  * record a refresh step has just deleted while the list waits for its render.
@@ -2001,7 +2007,7 @@ function updateStats() {
 
 /**
  * Update the Cleanup button's label + disabled state. Count = present videos
- * with publishedAt <= cutoff (the set CLEANUP would delete); disabled at 0 or
+ * with sortTime <= cutoff (the set CLEANUP would delete); disabled at 0 or
  * while a refresh is running.
  */
 function updateCleanupUi() {

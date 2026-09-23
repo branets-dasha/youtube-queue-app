@@ -1240,7 +1240,7 @@ function playVideo(videoId) {
  * stale click and just re-syncs the button.
  */
 function onStartQueue() {
-  const first = firstPlayable(state.records);
+  const first = firstPlayable(state.records, Date.now());
   if (!first) {
     updatePlayingControls();
     return;
@@ -1273,7 +1273,7 @@ function onPlayerEnded(endedId) {
   const rec = state.records.find((r) => r.videoId === endedId);
   if (rec) rec.positionSeconds = 0;
   setVideoState(endedId, STATE_SKIPPED); // persists rec (incl. the reset position)
-  const next = nextPlayable(state.records, endedId);
+  const next = nextPlayable(state.records, endedId, Date.now());
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
 }
@@ -1365,7 +1365,7 @@ function updatePlayingControls() {
   // meta are empty and every control is a disabled stub, so hide the bar outright.
   // VISIBILITY layer only — each control keeps its own disabled logic underneath.
   setVisible(dom.playerBar, !!state.playing);
-  const canStart = !state.playing && !!firstPlayable(state.records);
+  const canStart = !state.playing && !!firstPlayable(state.records, Date.now());
   setVisible(dom.startQueueBtn, canStart);
   setVisible(dom.playerEmptyText, !canStart);
   if (dom.playerEmptyText) {

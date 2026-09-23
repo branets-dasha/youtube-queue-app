@@ -11,7 +11,7 @@
 // and everything here simply renders the answer it is handed.
 
 import { STATE_NEW } from './config.js';
-import { formatDuration, isShort, parseDescription } from './queue.js';
+import { formatDuration, isShort, isUnaired, parseDescription, sortTime } from './queue.js';
 
 // ---------------------------------------------------------------------------
 // Small DOM helpers
@@ -423,17 +423,26 @@ export function renderPlayerMeta(container, rec, resolveChannel) {
   if (!container) return;
   clear(container);
   if (!rec) return;
-  container.append(
-    buildChannelBadge(rec, resolveChannel, [
-      ...metaSeparator(),
-      el('time', {
-        class: 'row__time-abs',
-        datetime: rec.publishedAt,
-        text: formatAbsolute(rec.publishedAt),
-        title: rec.publishedAt,
-      }),
-    ])
-  );
+  container.append(buildChannelBadge(rec, resolveChannel, [...metaSeparator(), buildTime(rec)]));
+}
+
+/**
+ * The meta row's date, for a card and the now-playing bar alike: the record's
+ * SORT time (queue.js's sortTime), so a premiere shows when it airs — the very
+ * time it is filed at — and an unaired one says so in words, which is what a
+ * screen reader gets (the thumbnail badge is aria-hidden like SHORTS). A
+ * premiere has an uploaded file and so a duration; a scheduled live stream has
+ * none, which is the only tell the API gives between the two.
+ * @param {object} rec video record
+ * @returns {HTMLElement}
+ */
+function buildTime(rec) {
+  const at = sortTime(rec);
+  let text = formatAbsolute(at);
+  if (isUnaired(rec, Date.now())) {
+    text = `${rec.durationSeconds > 0 ? 'Premieres' : 'Streams'} ${text}`;
+  }
+  return el('time', { class: 'row__time-abs', datetime: at, text, title: at });
 }
 
 /**
@@ -781,7 +790,8 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   if (primarySrc) thumb.src = primarySrc; // img.src only
 
   // Absolute-positioned thumbnail overlays — no layout impact, so card height is
-  // unchanged: video length bottom-right, and a SHORTS tag for likely Shorts.
+  // unchanged: video length bottom-right, a SHORTS tag for likely Shorts, and
+  // an UPCOMING / LIVE tag for premieres and streams.
   const overlays = [];
   const durSecs = rec.durationSeconds;
   if (typeof durSecs === 'number' && durSecs > 0) {
@@ -791,6 +801,15 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   }
   if (isShort(durSecs)) {
     overlays.push(el('span', { class: 'row__shorts', 'aria-hidden': 'true', text: 'SHORTS' }));
+  }
+  // Premieres and live streams: UPCOMING until it airs (the date says when),
+  // LIVE while the last re-check found it on air. Top-RIGHT, clear of SHORTS.
+  if (isUnaired(rec, Date.now())) {
+    overlays.push(el('span', { class: 'row__live', 'aria-hidden': 'true', text: 'UPCOMING' }));
+  } else if (rec.liveBroadcastContent === 'live') {
+    overlays.push(
+      el('span', { class: 'row__live row__live--on', 'aria-hidden': 'true', text: 'LIVE' })
+    );
   }
 
   // Hover overlay on the thumbnail. Embeddable cards get the in-app PLAY (▶)
@@ -882,12 +901,7 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     text: rec.title, // safe
   });
 
-  const timeAbs = el('time', {
-    class: 'row__time-abs',
-    datetime: rec.publishedAt,
-    text: formatAbsolute(rec.publishedAt),
-    title: rec.publishedAt,
-  });
+  const timeAbs = buildTime(rec);
   const channelBadge = buildChannelBadge(rec, resolveChannel, [
     ...metaSeparator(),
     timeAbs,

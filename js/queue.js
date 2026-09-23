@@ -13,13 +13,16 @@
 //     title:        string,
 //     channelId:    string,
 //     channelTitle: string,
-//     publishedAt:  string,   // ISO 8601 timestamp
+//     publishedAt:  string,   // ISO 8601 timestamp — when it went PUBLIC
 //     thumbnailUrl: string,
 //     durationSeconds: number, // optional; video length, backfilled via videos.list
 //     embeddable:   boolean,   // optional; can be played in the on-page player
 //     positionSeconds: number, // optional; last watch position, for resume
 //     liked:        boolean,   // optional; locally-tracked YouTube like state
 //     preferredSpeed: number,  // optional; per-video preferred speed (1 | 1.5 | 2)
+//     liveBroadcastContent: 'none' | 'upcoming' | 'live', // optional; backfilled
+//     scheduledStartTime: string, // optional ISO; premieres + live streams only
+//     actualStartTime:    string, // optional ISO; set once it has aired
 //     state:        'new' | 'skipped'   // 'skipped' is the single "handled" state
 //   }
 
@@ -55,7 +58,65 @@ export function compareIso(a, b) {
 }
 
 /**
- * Return a NEW array of records sorted ascending by publishedAt (oldest
+ * The time a record is ORDERED by — the key of the queue sort, the FLOOR/CUTOFF
+ * walk and cleanup: the LATER of `publishedAt` and the start time
+ * (`actualStartTime`, else `scheduledStartTime`). A premiere or live stream thus
+ * files where it airs, and an unaired one sits past everything that has.
+ *
+ * The later of the two, never the start time alone: a stream run privately and
+ * made public months later would otherwise file below the floor and be cleaned
+ * up unwatched. It also keeps sortTime >= publishedAt, which is what lets the
+ * FETCH side go on judging by publishedAt alone (see reconcileChannel).
+ *
+ * Derived on every call, never stored, so a refreshed publishedAt or a
+ * re-checked schedule can never leave a stale key behind. Pure.
+ * @param {object} rec
+ * @returns {string} ISO timestamp
+ */
+export function sortTime(rec) {
+  const start = rec.actualStartTime || rec.scheduledStartTime;
+  if (!start || Number.isNaN(Date.parse(start))) return rec.publishedAt;
+  if (!rec.publishedAt) return start;
+  return compareIso(start, rec.publishedAt) > 0 ? start : rec.publishedAt;
+}
+
+/**
+ * Whether a record has NOT AIRED yet as of `nowMs`: a scheduled start in the
+ * future and no actual start. Judged against the clock rather than the stored
+ * `liveBroadcastContent`, so it self-heals once the time passes with no
+ * re-check — which matters for the stash, which never re-checks at all. Pure:
+ * the caller passes the time.
+ * @param {object|null|undefined} rec
+ * @param {number} nowMs epoch millis
+ * @returns {boolean}
+ */
+export function isUnaired(rec, nowMs) {
+  if (!rec || rec.actualStartTime || !rec.scheduledStartTime) return false;
+  const t = Date.parse(rec.scheduledStartTime);
+  return !Number.isNaN(t) && t > nowMs;
+}
+
+/**
+ * Whether a record needs its videos.list details (re-)requested: a backfilled
+ * field is missing, or it is still upcoming/live. The second is a RE-CHECK on
+ * every refresh — a premiere can be rescheduled and its actual start exists only
+ * once it airs, while the playlist fetch stops re-seeing it once its publishedAt
+ * falls below the bound. `liveBroadcastContent` doubles as the "live details
+ * fetched" marker, videos.list always returning it. Pure.
+ * @param {object} rec
+ * @returns {boolean}
+ */
+export function needsDetails(rec) {
+  return (
+    typeof rec.durationSeconds !== 'number' ||
+    typeof rec.embeddable !== 'boolean' ||
+    typeof rec.description !== 'string' ||
+    rec.liveBroadcastContent !== 'none'
+  );
+}
+
+/**
+ * Return a NEW array of records sorted ascending by sortTime (oldest
  * first). Does not mutate the input array. Ties are broken by videoId to keep
  * the ordering stable and deterministic across environments.
  * @param {Array<object>} records
@@ -63,7 +124,7 @@ export function compareIso(a, b) {
  */
 export function sortAscending(records) {
   return records.slice().sort((r1, r2) => {
-    const c = compareIso(r1.publishedAt, r2.publishedAt);
+    const c = compareIso(sortTime(r1), sortTime(r2));
     if (c !== 0) return c;
     // Deterministic tie-break.
     if (r1.videoId < r2.videoId) return -1;
@@ -73,8 +134,8 @@ export function sortAscending(records) {
 }
 
 /**
- * Return true if a record belongs in the active window: strictly newer than
- * the cutoff. publishedAt === cutoff is OUT (considered handled/pruned).
+ * Return true if a record belongs in the active window: its sortTime strictly
+ * newer than the cutoff. sortTime === cutoff is OUT (considered handled/pruned).
  * A null/empty cutoff means "no cutoff" and everything is in-window.
  * @param {object} record
  * @param {string|null|undefined} cutoff ISO timestamp
@@ -82,12 +143,12 @@ export function sortAscending(records) {
  */
 export function isAfterCutoff(record, cutoff) {
   if (!cutoff) return true;
-  return compareIso(record.publishedAt, cutoff) > 0;
+  return compareIso(sortTime(record), cutoff) > 0;
 }
 
 /**
  * Compute the queue view: all records that are strictly newer than the cutoff
- * AND still in state 'new', sorted ascending by publishedAt (oldest first).
+ * AND still in state 'new', sorted ascending by sortTime (oldest first).
  * @param {Array<object>} records
  * @param {string|null|undefined} cutoff ISO timestamp
  * @returns {Array<object>}
@@ -102,7 +163,7 @@ export function computeQueue(records, cutoff) {
 /**
  * Compute the RENDER list: all records strictly newer than the cutoff,
  * REGARDLESS of state (new / skipped), sorted ascending by
- * publishedAt (oldest first). Unlike computeQueue this KEEPS marked videos in
+ * sortTime (oldest first). Unlike computeQueue this KEEPS marked videos in
  * the list (they are greyed out in the UI) until a reload advances the cutoff
  * and prunes the contiguous handled prefix. Pure; does not mutate the input.
  * @param {Array<object>} records
@@ -120,29 +181,37 @@ export function computeVisible(records, cutoff) {
  * handled 'skipped' video) AND is embeddable (embeddable !== false).
  * If `currentVideoId` is not in the list, the search starts from the beginning
  * (graceful). Returns null when nothing eligible remains. Pure.
- * @param {Array<object>} sorted visible records, ascending by publishedAt
+ * @param {Array<object>} sorted visible records, ascending by sortTime
  * @param {string} currentVideoId
+ * @param {number} [nowMs] epoch millis, for the unaired check (see isPlayable)
  * @returns {object|null}
  */
-export function nextPlayable(sorted, currentVideoId) {
+export function nextPlayable(sorted, currentVideoId, nowMs) {
   const list = Array.isArray(sorted) ? sorted : [];
   const idx = list.findIndex((r) => r && r.videoId === currentVideoId);
   const start = idx < 0 ? 0 : idx + 1;
   for (let k = start; k < list.length; k++) {
-    if (isPlayable(list[k])) return list[k];
+    if (isPlayable(list[k], nowMs)) return list[k];
   }
   return null;
 }
 
 /**
  * The single eligibility rule shared by nextPlayable and firstPlayable: a record
- * is playable when it is still 'new' (skips any handled video) and embeddable
- * (embeddable !== false — undefined means "not known to be blocked").
+ * is playable when it is still 'new' (skips any handled video), embeddable
+ * (embeddable !== false — undefined means "not known to be blocked") and, given
+ * a `nowMs`, not unaired (isUnaired).
  * @param {object|null|undefined} r
+ * @param {number} [nowMs] epoch millis; omitted skips the unaired check
  * @returns {boolean}
  */
-function isPlayable(r) {
-  return !!r && r.state === STATE_NEW && r.embeddable !== false;
+function isPlayable(r, nowMs) {
+  return (
+    !!r &&
+    r.state === STATE_NEW &&
+    r.embeddable !== false &&
+    !(typeof nowMs === 'number' && isUnaired(r, nowMs))
+  );
 }
 
 /**
@@ -152,13 +221,14 @@ function isPlayable(r) {
  * oldest still-'new', embeddable video. Returns null when nothing is eligible
  * (empty list, everything handled, or every remaining video non-embeddable).
  * Pure; does not mutate.
- * @param {Array<object>} sorted visible records, ascending by publishedAt
+ * @param {Array<object>} sorted visible records, ascending by sortTime
+ * @param {number} [nowMs] epoch millis, for the unaired check (see isPlayable)
  * @returns {object|null}
  */
-export function firstPlayable(sorted) {
+export function firstPlayable(sorted, nowMs) {
   const list = Array.isArray(sorted) ? sorted : [];
   for (let k = 0; k < list.length; k++) {
-    if (isPlayable(list[k])) return list[k];
+    if (isPlayable(list[k], nowMs)) return list[k];
   }
   return null;
 }
@@ -170,7 +240,7 @@ export function firstPlayable(sorted) {
  * list they actually render, so any active view filter (Hide skipped) or display
  * windowing is already applied by the caller and honoured here. Returns null when
  * the list is empty or holds no handled record. Pure; does not mutate.
- * @param {Array<object>} records rendered records, ascending by publishedAt
+ * @param {Array<object>} records rendered records, ascending by sortTime
  * @returns {object|null} the last handled record, or null
  */
 export function lastSkipped(records) {
@@ -321,8 +391,8 @@ export function normalizeKey(e) {
  *
  * Sort ascending (tie-safe). Walk from the oldest present video (strictly after
  * `floor`): while it is handled (state !== 'new') advance the result to
- * its publishedAt; stop at the first 'new'. TIE-SAFETY: the result is always
- * STRICTLY LESS than the earliest still-'new' video's publishedAt, so a handled
+ * its sortTime; stop at the first 'new'. TIE-SAFETY: the result is always
+ * STRICTLY LESS than the earliest still-'new' video's sortTime, so a handled
  * video sharing a timestamp with a 'new' one never pulls the cutoff onto (or
  * past) that 'new' video. If the oldest present video is 'new' (or there are no
  * records), returns `floor`. The result is ALWAYS >= floor.
@@ -344,7 +414,7 @@ export function computeCutoff(records, floor) {
   for (const rec of sorted) {
     if (!isAfterCutoff(rec, base)) continue;
     if (rec.state === STATE_NEW) {
-      firstNewTs = rec.publishedAt;
+      firstNewTs = sortTime(rec);
       break;
     }
   }
@@ -354,17 +424,17 @@ export function computeCutoff(records, floor) {
   for (const rec of sorted) {
     if (!isAfterCutoff(rec, base)) continue; // at/before floor: ignore
     if (rec.state === STATE_NEW) break; // first unmarked video: stop
-    if (firstNewTs != null && compareIso(rec.publishedAt, firstNewTs) >= 0) {
+    if (firstNewTs != null && compareIso(sortTime(rec), firstNewTs) >= 0) {
       // Ties (or is newer than) the earliest 'new' video: don't advance onto it.
       break;
     }
-    result = rec.publishedAt;
+    result = sortTime(rec);
   }
   return result;
 }
 
 /**
- * The deletion set for CLEANUP: every record with publishedAt <= cutoff. Pure;
+ * The deletion set for CLEANUP: every record with sortTime <= cutoff. Pure;
  * does not mutate.
  * @param {Array<object>} records
  * @param {string|null|undefined} cutoff
@@ -372,7 +442,7 @@ export function computeCutoff(records, floor) {
  */
 export function videosToClean(records, cutoff) {
   if (cutoff == null) return [];
-  return records.filter((r) => compareIso(r.publishedAt, cutoff) <= 0);
+  return records.filter((r) => compareIso(sortTime(r), cutoff) <= 0);
 }
 
 /**
@@ -406,7 +476,9 @@ export function daysAgoIso(days, nowMs) {
  * already have. Returns `floor` when there are no stored records (so the first
  * run behaves like a full refresh). Otherwise takes the NEWEST stored
  * publishedAt, subtracts `bufferMs` (a lag safety margin), and returns the LATER
- * of that and `floor` — the result is ALWAYS >= floor. Pure.
+ * of that and `floor` — the result is ALWAYS >= floor. publishedAt, NEVER
+ * sortTime: this bounds a playlist fetch, which knows only publishedAt, and an
+ * unaired premiere's future sortTime would push the bound past everything. Pure.
  * @param {Array<object>} records stored video records
  * @param {string|null|undefined} floor the deletion/fetch floor (lower bound)
  * @param {number} bufferMs safety buffer subtracted from the newest timestamp
@@ -859,8 +931,8 @@ function refreshFetchedFields(prev, inc) {
 
 /**
  * Apply ONE channel's fetch to the stored record set, as one pure step. The
- * channel's uploads were paged down to `bound` (exclusive — the same "strictly
- * after" test as isAfterCutoff, which is the fetch's own inclusion rule), so
+ * channel's uploads were paged down to `bound` (exclusive, on publishedAt — the
+ * fetch's own inclusion rule, NOT isAfterCutoff's sortTime), so
  * `received` is that channel's complete window, and the stored set is brought
  * to it:
  *   - a stored record matched by videoId — wherever it sits, whichever channel
@@ -871,7 +943,10 @@ function refreshFetchedFields(prev, inc) {
  *   - with `removeMissing`, a stored record OF THIS CHANNEL inside the window
  *     that the fetch did not return is REMOVED: the owner deleted or hid it.
  *     Records at or before the bound, and other channels' records, are never
- *     removed here — outside the window the fetch says nothing about them;
+ *     removed here — outside the window the fetch says nothing about them. A
+ *     premiere announced below the bound but airing above it sits in the RENDER
+ *     window yet not in this one: judged by sortTime, "not returned" would read
+ *     as "deleted";
  *   - the channel's preferred speed is filled (if-absent — an explicit per-video
  *     speed is never overwritten or cleared; see applyChannelSpeeds) onto the
  *     records just inserted, or with `sweepSpeeds` onto every record of the
@@ -916,7 +991,12 @@ export function reconcileChannel(
     if (inc) {
       incoming.delete(rec.videoId); // matched, so not an insert
       next.push(refreshFetchedFields(rec, inc));
-    } else if (removeMissing && rec && rec.channelId === channelId && isAfterCutoff(rec, bound)) {
+    } else if (
+      removeMissing &&
+      rec &&
+      rec.channelId === channelId &&
+      (!bound || compareIso(rec.publishedAt, bound) > 0)
+    ) {
       removedIds.push(rec.videoId);
     } else {
       next.push(rec);
@@ -1147,7 +1227,7 @@ export function sortStash(records) {
  *
  * CONTRAST with videosToClean(records, cutoff) — and it is the whole reason the
  * stash needs neither a floor nor a cutoff: that one is POSITION-based
- * (publishedAt <= cutoff), so it can only ever delete a contiguous PREFIX of the
+ * (sortTime <= cutoff), so it can only ever delete a contiguous PREFIX of the
  * list; this one is STATE-based and takes no cutoff at all, so it deletes
  * handled records from ANYWHERE in the list, gaps included. Pure; does not
  * mutate.

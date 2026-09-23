@@ -351,16 +351,18 @@ function channelAvatar(thumbnails) {
 }
 
 /**
- * Batch-fetch video details via videos.list?part=contentDetails,status,snippet,
- * UP TO 50 ids per call (1 quota unit each — extra parts like `status` and
- * `snippet` cost 0 extra quota, so the description rides along free in this call).
- * Returns a Map videoId -> { durationSeconds, embeddable, description, title,
- * channelId, channelTitle, publishedAt, thumbnailUrl }. IDs the API omits
+ * Batch-fetch video details via
+ * videos.list?part=contentDetails,status,snippet,liveStreamingDetails, UP TO 50
+ * ids per call (1 quota unit each — extra parts cost 0 extra quota, so the
+ * description and the premiere/stream times ride along free in this call).
+ * Returns a Map videoId -> { liveBroadcastContent, scheduledStartTime,
+ * actualStartTime, durationSeconds, embeddable, description, title, channelId,
+ * channelTitle, publishedAt, thumbnailUrl }. IDs the API omits
  * (deleted/private) are simply absent from the map; fields it omits are undefined.
  * Widening is backward compatible — callers reading only the first three fields
  * never see the rest.
  * @param {Array<string>} videoIds
- * @returns {Promise<Map<string, {durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string, title:string, channelId:string, channelTitle:string, publishedAt:string, thumbnailUrl:string}>>}
+ * @returns {Promise<Map<string, {liveBroadcastContent:string, scheduledStartTime:(string|undefined), actualStartTime:(string|undefined), durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string, title:string, channelId:string, channelTitle:string, publishedAt:string, thumbnailUrl:string}>>}
  */
 export async function getVideoDetails(videoIds) {
   const out = new Map();
@@ -368,7 +370,7 @@ export async function getVideoDetails(videoIds) {
   for (let i = 0; i < ids.length; i += 50) {
     const batch = ids.slice(i, i + 50);
     const data = await apiGet('videos', {
-      part: 'contentDetails,status,snippet',
+      part: 'contentDetails,status,snippet,liveStreamingDetails',
       id: batch.join(','),
     });
     for (const item of data.items || []) {
@@ -376,7 +378,12 @@ export async function getVideoDetails(videoIds) {
       const cd = item.contentDetails || {};
       const st = item.status || {};
       const snip = item.snippet || {};
+      // Present only on premieres and live streams; absent means an ordinary upload.
+      const live = item.liveStreamingDetails || {};
       out.set(item.id, {
+        liveBroadcastContent: snip.liveBroadcastContent || 'none',
+        scheduledStartTime: live.scheduledStartTime || undefined,
+        actualStartTime: live.actualStartTime || undefined,
         durationSeconds: cd.duration ? parseIsoDuration(cd.duration) : undefined,
         embeddable: typeof st.embeddable === 'boolean' ? st.embeddable : undefined,
         description: snip.description || '',
@@ -410,7 +417,7 @@ export async function getVideoDetails(videoIds) {
  * getChannelVideosSince leaves `state` to the queue upsert.
  *
  * @param {Array<string>} videoIds
- * @returns {Promise<Array<{videoId:string, title:string, channelId:string, channelTitle:string, publishedAt:string, thumbnailUrl:string, durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string}>>} records in the order given
+ * @returns {Promise<Array<{videoId:string, title:string, channelId:string, channelTitle:string, publishedAt:string, thumbnailUrl:string, durationSeconds:(number|undefined), embeddable:(boolean|undefined), description:string, liveBroadcastContent:string, scheduledStartTime?:string, actualStartTime?:string}>>} records in the order given
  */
 export async function getVideosByIds(videoIds) {
   const ids = Array.from(new Set((videoIds || []).filter(Boolean)));
@@ -433,6 +440,10 @@ export async function getVideosByIds(videoIds) {
       durationSeconds: d.durationSeconds,
       embeddable: d.embeddable,
       description: d.description,
+      liveBroadcastContent: d.liveBroadcastContent,
+      // Keys omitted rather than undefined when absent: an ordinary upload.
+      ...(d.scheduledStartTime ? { scheduledStartTime: d.scheduledStartTime } : {}),
+      ...(d.actualStartTime ? { actualStartTime: d.actualStartTime } : {}),
     });
   }
   return records;
