@@ -737,6 +737,23 @@ body.app-active .blocked-overlay {
   line-height: 1.2;
   pointer-events: none;
 }
+.row__live {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  pointer-events: none;
+}
+.row__live--on {
+  background: #cc0000;
+}
 
 /* Play (▶) overlay — revealed on hover of the thumbnail button. */
 .row__play {
