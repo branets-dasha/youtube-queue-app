@@ -83,8 +83,8 @@ Each YouTube Data API call spends quota units associated with your Client. The d
 The app is deliberately quota-frugal. It uses the following methods:
 
 - `subscriptions.list` — gets a list of subscribed channels. **1 unit per page** (page size is 50 results max).
-- `playlistItems.list` — gets channel videos. **1 unit per page**, requested **per channel**, paging stops once it reaches the cutoff point (for "Refresh all", which reads to the end of that page and one page more, so a video filed out of publish order — a premiere — is not taken for deleted) or the point of the last saved video + 6h buffer (for "Fetch new"). Upload playlist ids are derived cheaply by replacing the leading `UC` of a channel id with `UU` (no extra call); the rare non-`UC` channel costs one additional `channels.list` request.
-- `videos.list?part=contentDetails,status,snippet` — backfills video durations, descriptions and embeddability. Batched **≤ 50 ids per call, 1 unit** each.
+- `playlistItems.list` — gets channel videos. **1 unit per page**, requested **per channel**, paging stops once it reaches the cutoff point (for "Refresh all") or the point of the last saved video + 6h buffer (for "Fetch new"). Upload playlist ids are derived cheaply by replacing the leading `UC` of a channel id with `UU` (no extra call); the rare non-`UC` channel costs one additional `channels.list` request.
+- `videos.list?part=contentDetails,status,snippet` — backfills video durations, descriptions and embeddability, and on "Refresh all" confirms that a video its channel's listing no longer returned is really gone before deleting it. Batched **≤ 50 ids per call, 1 unit** each.
 - `videos.rate` (the Like button) — roughly **50 units** per like/unlike.
 
 ### Data & privacy

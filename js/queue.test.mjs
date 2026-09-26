@@ -34,6 +34,7 @@ import {
   pruneChannels,
   unmirroredVideoIds,
   reconcileChannel,
+  dropUnverified,
   parseVideoId,
   parseStartSeconds,
   sortStash,
@@ -1105,7 +1106,7 @@ const STORED = [
     description: 'd',
     preferredSpeed: 1,
   }), // re-returned, renamed
-  full('gone', T3, 'new'), // in the window, NOT re-returned: deleted or hidden upstream
+  full('gone', T3, 'new'), // in the window, NOT re-returned: a removal candidate
   full('atBound', T1, 'new'), // exactly AT the bound: outside the window
   full('older', '2026-01-01T00:00:00Z', 'new'), // below the bound
   { ...full('other', T4, 'new'), channelId: 'UCother' }, // another channel's
@@ -1117,14 +1118,16 @@ const RECEIVED = [
 // Index the result by videoId so the assertions read like the store does.
 const byId = (out) => new Map(out.records.map((r) => [r.videoId, r]));
 
-test('reconcileChannel (Refresh all) removes the in-window records the fetch did not return, and only those', () => {
-  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
-  assert.deepEqual(out.removedIds, ['gone']);
+test('reconcileChannel (Refresh all) reports the in-window records the fetch did not return, and keeps them', () => {
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { reportMissing: true });
+  assert.deepEqual(out.missingIds, ['gone']);
   assert.deepEqual(out.insertedIds, ['fresh']);
   assert.deepEqual(
     out.records.map((r) => r.videoId).sort(),
-    ['atBound', 'fresh', 'keep', 'older', 'other']
+    ['atBound', 'fresh', 'gone', 'keep', 'older', 'other']
   );
+  assert.strictEqual(byId(out).get('gone'), STORED[1]); // a candidate, not a write
+  assert.ok(!out.changed.some((r) => r.videoId === 'gone'));
 });
 
 test('reconcileChannel keeps the record exactly AT the bound — the fetch excludes it by the same test', () => {
@@ -1132,13 +1135,13 @@ test('reconcileChannel keeps the record exactly AT the bound — the fetch exclu
   // is publishedAt > bound. One comparator, so a record on the bound can never
   // be "not received" AND "in the window" at once.
   assert.ok(compareIso(T1, BOUND) <= 0);
-  const out = reconcileChannel(STORED, CHAN, [], BOUND, { removeMissing: true });
+  const out = reconcileChannel(STORED, CHAN, [], BOUND, { reportMissing: true });
   assert.ok(out.records.some((r) => r.videoId === 'atBound'));
-  assert.ok(!out.removedIds.includes('atBound'));
+  assert.ok(!out.missingIds.includes('atBound'));
 });
 
 test('reconcileChannel hands back other channels and out-of-window records BY IDENTITY', () => {
-  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { reportMissing: true });
   const got = byId(out);
   assert.strictEqual(got.get('other'), STORED[4]); // never this fetch's business
   assert.strictEqual(got.get('older'), STORED[3]);
@@ -1146,7 +1149,7 @@ test('reconcileChannel hands back other channels and out-of-window records BY ID
 });
 
 test("reconcileChannel refreshes a match's fetched fields and preserves every locally-owned one", () => {
-  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { reportMissing: true });
   const keep = byId(out).get('keep');
   assert.equal(keep.title, 'renamed');
   assert.equal(keep.channelTitle, 'Ch!');
@@ -1175,16 +1178,16 @@ test('reconcileChannel inserts an unmatched incoming record as new (an explicit 
   assert.equal(explicit.records[0].state, 'skipped');
 });
 
-test('reconcileChannel: an EMPTY fetch with removeMissing clears the window — a channel quiet since the floor', () => {
-  const out = reconcileChannel(STORED, CHAN, [], BOUND, { removeMissing: true });
-  assert.deepEqual(out.removedIds.sort(), ['gone', 'keep']);
-  assert.deepEqual(out.records.map((r) => r.videoId).sort(), ['atBound', 'older', 'other']);
-  assert.deepEqual(out.changed, []); // nothing to put, only deletes
+test('reconcileChannel: an EMPTY fetch with reportMissing reports the whole window and changes nothing', () => {
+  const out = reconcileChannel(STORED, CHAN, [], BOUND, { reportMissing: true });
+  assert.deepEqual(out.missingIds.sort(), ['gone', 'keep']);
+  assert.strictEqual(out.records, STORED); // nothing written: candidates only
+  assert.deepEqual(out.changed, []);
 });
 
-test('reconcileChannel (Fetch new) with removeMissing off deletes nothing', () => {
+test('reconcileChannel (Fetch new) with reportMissing off reports nothing', () => {
   const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND);
-  assert.deepEqual(out.removedIds, []);
+  assert.deepEqual(out.missingIds, []);
   assert.equal(out.records.length, STORED.length + 1);
   assert.ok(out.records.some((r) => r.videoId === 'gone'));
   // And an empty incremental fetch changes nothing at all.
@@ -1194,24 +1197,24 @@ test('reconcileChannel (Fetch new) with removeMissing off deletes nothing', () =
 test('reconcileChannel returns the input array by identity, and nothing to write, when nothing differs', () => {
   const stored = [full('a', T2, 'new'), full('b', T3, 'skipped', { positionSeconds: 9 })];
   const out = reconcileChannel(stored, CHAN, [fetched('a', T2), fetched('b', T3)], BOUND, {
-    removeMissing: true,
+    reportMissing: true,
     sweepSpeeds: true,
     prefs: { UCa: { speed: 2 } },
   });
   // (the speed IS filled here — so `records` is new; without a pref it is not)
   assert.notStrictEqual(out.records, stored);
   const bare = reconcileChannel(stored, CHAN, [fetched('a', T2), fetched('b', T3)], BOUND, {
-    removeMissing: true,
+    reportMissing: true,
     sweepSpeeds: true,
   });
   assert.strictEqual(bare.records, stored);
   assert.deepEqual(bare.changed, []);
-  assert.deepEqual(bare.removedIds, []);
+  assert.deepEqual(bare.missingIds, []);
   assert.deepEqual(bare.insertedIds, []);
 });
 
 test('reconcileChannel lists in `changed` exactly the records to write', () => {
-  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { removeMissing: true });
+  const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, { reportMissing: true });
   assert.deepEqual(out.changed.map((r) => r.videoId).sort(), ['fresh', 'keep']);
   const got = byId(out);
   assert.strictEqual(out.changed.find((r) => r.videoId === 'keep'), got.get('keep'));
@@ -1232,7 +1235,7 @@ test('reconcileChannel fills the channel speed on the inserted records ("Fetch n
 test("reconcileChannel … and on the channel's WHOLE set with sweepSpeeds (\"Refresh all\")", () => {
   const prefs = { UCa: { speed: 2 }, UCother: { speed: 1.5 } };
   const out = reconcileChannel(STORED, CHAN, RECEIVED, BOUND, {
-    removeMissing: true,
+    reportMissing: true,
     sweepSpeeds: true,
     prefs,
   });
@@ -1241,11 +1244,12 @@ test("reconcileChannel … and on the channel's WHOLE set with sweepSpeeds (\"Re
   assert.equal(got.get('keep').preferredSpeed, 1); // explicit still wins
   assert.equal(got.get('atBound').preferredSpeed, 2); // the channel's, out of the window too
   assert.equal(got.get('older').preferredSpeed, 2);
+  assert.equal(got.get('gone').preferredSpeed, 2); // a candidate is still the channel's
   assert.equal(got.get('other').preferredSpeed, undefined); // another channel: never
   // The filled records are written too.
   assert.deepEqual(
     out.changed.map((r) => r.videoId).sort(),
-    ['atBound', 'fresh', 'keep', 'older']
+    ['atBound', 'fresh', 'gone', 'keep', 'older']
   );
 });
 
@@ -1261,7 +1265,7 @@ test('reconcileChannel never overwrites or clears an explicitly-set preferredSpe
   ];
   const got = byId(
     reconcileChannel(existing, CHAN, incoming, BOUND, {
-      removeMissing: true,
+      reportMissing: true,
       sweepSpeeds: true,
       prefs: { UCa: { speed: 1.5 } },
     })
@@ -1277,7 +1281,7 @@ test('reconcileChannel never mutates its inputs and tolerates garbage', () => {
   const received = RECEIVED.map((r) => ({ ...r }));
   const before = JSON.stringify({ stored, received });
   reconcileChannel(stored, CHAN, received, BOUND, {
-    removeMissing: true,
+    reportMissing: true,
     sweepSpeeds: true,
     prefs: { UCa: { speed: 2 } },
   });
@@ -1285,7 +1289,42 @@ test('reconcileChannel never mutates its inputs and tolerates garbage', () => {
   assert.deepEqual(reconcileChannel(undefined, CHAN, undefined, BOUND).records, undefined);
   assert.deepEqual(reconcileChannel(null, CHAN, [fetched('x', T2)], BOUND).records.length, 1);
   assert.deepEqual(reconcileChannel([], CHAN, [null, { title: 'no id' }], BOUND).records, []);
-  assert.deepEqual(reconcileChannel([null], CHAN, [], BOUND, { removeMissing: true }).records, [null]);
+  assert.deepEqual(reconcileChannel([null], CHAN, [], BOUND, { reportMissing: true }).records, [null]);
+});
+
+// --- dropUnverified: applying the videos.list check of removal candidates ---
+
+test('dropUnverified drops the candidates videos.list did NOT return, and only those', () => {
+  const found = new Map([['keep', {}]]); // getVideoDetails' shape: a Map by videoId
+  const out = dropUnverified(STORED, ['gone', 'keep'], found);
+  assert.deepEqual(out.removedIds, ['gone']);
+  assert.deepEqual(out.records.map((r) => r.videoId).sort(), ['atBound', 'keep', 'older', 'other']);
+  // Survivors come back BY IDENTITY.
+  const got = byId(out);
+  for (const r of STORED) if (r.videoId !== 'gone') assert.strictEqual(got.get(r.videoId), r);
+});
+
+test('dropUnverified: all candidates returned (unlisted included) means the same array back', () => {
+  const out = dropUnverified(STORED, ['gone', 'keep'], new Set(['gone', 'keep']));
+  assert.strictEqual(out.records, STORED);
+  assert.deepEqual(out.removedIds, []);
+  assert.strictEqual(dropUnverified(STORED, [], new Set()).records, STORED);
+});
+
+test('dropUnverified: a candidate no longer present is a no-op, and only candidates ever go', () => {
+  const out = dropUnverified(STORED, new Set(['vanished', 'gone']), new Set());
+  assert.deepEqual(out.removedIds, ['gone']); // 'vanished' is not reported as removed
+  assert.equal(out.records.length, STORED.length - 1); // non-candidates untouched
+});
+
+test('dropUnverified never mutates its inputs and tolerates garbage', () => {
+  const stored = STORED.map((r) => ({ ...r }));
+  const before = JSON.stringify(stored);
+  dropUnverified(stored, ['gone'], new Set());
+  assert.equal(JSON.stringify(stored), before);
+  assert.deepEqual(dropUnverified(undefined, ['x'], new Set()).removedIds, []);
+  assert.deepEqual(dropUnverified([null, rec('x', T2, 'new')], ['x', null], null).records, [null]);
+  assert.strictEqual(dropUnverified(STORED, undefined, undefined).records, STORED);
 });
 
 // --- parseDescription: linkify timestamps + urls, exact round-trip ---
@@ -2012,8 +2051,8 @@ test('the cutoff reaches B past a premiere published at A and airing at C, and c
 test('reconcileChannel (Refresh all) with bound B keeps a stored premiere published at A', () => {
   // The fetch never returns it (publishedAt A <= B), and that is not a deletion.
   const stored = [{ ...premiere(), channelId: CHAN }];
-  const out = reconcileChannel(stored, CHAN, [], PB, { removeMissing: true });
-  assert.deepEqual(out.removedIds, []);
+  const out = reconcileChannel(stored, CHAN, [], PB, { reportMissing: true });
+  assert.deepEqual(out.missingIds, []);
   assert.strictEqual(out.records, stored);
 });
 
