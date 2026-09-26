@@ -940,42 +940,46 @@ function refreshFetchedFields(prev, inc) {
  *     its state and every other locally-owned field surviving;
  *   - an unmatched incoming record is INSERTED as 'new' (an explicit incoming
  *     state is kept);
- *   - with `removeMissing`, a stored record OF THIS CHANNEL inside the window
- *     that the fetch did not return is REMOVED: the owner deleted or hid it.
- *     Records at or before the bound, and other channels' records, are never
- *     removed here — outside the window the fetch says nothing about them. A
- *     premiere announced below the bound but airing above it sits in the RENDER
- *     window yet not in this one: judged by sortTime, "not returned" would read
- *     as "deleted";
+ *   - with `reportMissing`, a stored record OF THIS CHANNEL inside the window
+ *     that the fetch did not return is reported in `missingIds` — a removal
+ *     CANDIDATE, kept in the set. Playlist position is upload order while the
+ *     window is judged on the video's own publishedAt, so a premiere filed below
+ *     the page where the walk stopped reads as missing without being gone; only
+ *     a videos.list lookup can confirm it (see dropUnverified). Records at or
+ *     before the bound, and other channels' records, are never reported —
+ *     outside the window the fetch says nothing about them. A premiere
+ *     announced below the bound but airing above it sits in the RENDER window
+ *     yet not in this one: judged by sortTime, "not returned" would read as
+ *     "missing";
  *   - the channel's preferred speed is filled (if-absent — an explicit per-video
  *     speed is never overwritten or cleared; see applyChannelSpeeds) onto the
  *     records just inserted, or with `sweepSpeeds` onto every record of the
  *     channel.
  * "Refresh all" runs it with both flags ON — its window is the floor, so the
  * channel's whole queue is authoritative; "Fetch new" with both OFF: add and
- * update only, never delete.
+ * update only, nothing reported.
  *
  * Returns the new record set plus exactly what the caller has to write:
  * `changed` is every record object that is not one of the input's (refreshed,
- * inserted or speed-filled), `removedIds` the deleted videoIds. Untouched
- * records come back BY IDENTITY — the user may be mutating one mid-refresh —
- * and when nothing changed at all so does the `records` array itself. Neither
- * input is mutated. Pure.
+ * inserted or speed-filled); `missingIds` is not a write. Untouched records
+ * come back BY IDENTITY — the user may be mutating one mid-refresh — and when
+ * nothing changed at all so does the `records` array itself. Neither input is
+ * mutated. Pure.
  *
  * @param {Array<object>} records stored video records
  * @param {string} channelId the channel fetched
  * @param {Array<object>} received its fetched records (state omitted)
  * @param {string|null|undefined} bound the fetch's exclusive lower bound
- * @param {{removeMissing?:boolean,sweepSpeeds?:boolean,prefs?:(object|null)}} [options]
+ * @param {{reportMissing?:boolean,sweepSpeeds?:boolean,prefs?:(object|null)}} [options]
  *   both flags default to the "Fetch new" scope
- * @returns {{records:Array<object>,changed:Array<object>,removedIds:Array<string>,insertedIds:Array<string>}}
+ * @returns {{records:Array<object>,changed:Array<object>,missingIds:Array<string>,insertedIds:Array<string>}}
  */
 export function reconcileChannel(
   records,
   channelId,
   received,
   bound,
-  { removeMissing = false, sweepSpeeds = false, prefs = null } = {}
+  { reportMissing = false, sweepSpeeds = false, prefs = null } = {}
 ) {
   const stored = Array.isArray(records) ? records : [];
   const incoming = new Map();
@@ -983,7 +987,7 @@ export function reconcileChannel(
     if (v && v.videoId) incoming.set(v.videoId, v);
   }
 
-  const removedIds = [];
+  const missingIds = [];
   const insertedIds = [];
   const next = [];
   for (const rec of stored) {
@@ -991,16 +995,17 @@ export function reconcileChannel(
     if (inc) {
       incoming.delete(rec.videoId); // matched, so not an insert
       next.push(refreshFetchedFields(rec, inc));
-    } else if (
-      removeMissing &&
+      continue;
+    }
+    if (
+      reportMissing &&
       rec &&
       rec.channelId === channelId &&
       (!bound || compareIso(rec.publishedAt, bound) > 0)
     ) {
-      removedIds.push(rec.videoId);
-    } else {
-      next.push(rec);
+      missingIds.push(rec.videoId);
     }
+    next.push(rec);
   }
   for (const inc of incoming.values()) {
     next.push({ ...inc, state: inc.state || STATE_NEW });
@@ -1014,10 +1019,41 @@ export function reconcileChannel(
 
   const inputs = new Set(stored);
   const changed = filled.filter((r) => !inputs.has(r));
-  if (changed.length === 0 && removedIds.length === 0) {
-    return { records, changed, removedIds, insertedIds };
+  if (changed.length === 0) return { records, changed, missingIds, insertedIds };
+  return { records: filled, changed, missingIds, insertedIds };
+}
+
+/**
+ * Apply a videos.list verification of removal candidates (reconcileChannel's
+ * `missingIds`): drop from `records` every candidate the lookup did NOT return
+ * — deleted or private — and keep everything it did, unlisted included. Only
+ * records still present are dropped, so a candidate that has since gone is a
+ * no-op; `removedIds` is exactly what went. Pass the lookup's result, never a
+ * stand-in for a failed one: an absent id here READS AS DELETED, so a lookup
+ * that did not complete must not reach this function at all.
+ *
+ * Untouched records come back BY IDENTITY, and when nothing goes so does the
+ * `records` array itself. Pure; neither input is mutated.
+ *
+ * @param {Array<object>} records stored video records
+ * @param {Iterable<string>} candidateIds the ids that were looked up
+ * @param {{has:function(string):boolean}} found the ids videos.list returned (a Set or Map)
+ * @returns {{records:Array<object>,removedIds:Array<string>}}
+ */
+export function dropUnverified(records, candidateIds, found) {
+  const stored = Array.isArray(records) ? records : [];
+  const gone = new Set();
+  for (const id of candidateIds || []) {
+    if (id && !(found && found.has(id))) gone.add(id);
   }
-  return { records: filled, changed, removedIds, insertedIds };
+  const removedIds = [];
+  const next = stored.filter((r) => {
+    if (!r || !gone.has(r.videoId)) return true;
+    removedIds.push(r.videoId);
+    return false;
+  });
+  if (removedIds.length === 0) return { records, removedIds };
+  return { records: next, removedIds };
 }
 
 // ---------------------------------------------------------------------------

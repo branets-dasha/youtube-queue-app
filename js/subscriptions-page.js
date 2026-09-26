@@ -70,6 +70,7 @@ import {
   pruneChannels,
   unmirroredVideoIds,
   reconcileChannel,
+  dropUnverified,
   addToStash,
   normalizeKey,
 } from './queue.js';
@@ -707,20 +708,22 @@ async function onRefreshNew() {
  *
  * "Refresh all" MIRRORS the subscriptions from the floor onward: the videos of
  * every channel it will not fetch — unsubscribed or ignored — are deleted
- * first, then each fetched channel's stored window is brought to exactly what
- * came back (missing ones deleted, matches refreshed, new ones inserted; see
- * reconcileChannel) with the channel's preferred speed filled across its whole
- * set. "Fetch new" only adds and updates — never deletes — and speeds only what
- * it inserted. Everything else — auth, subscriptions + avatars, the per-channel
- * paging, cleanup, the channel prune, the details backfill, the progress toast
- * and the summary — is identical.
+ * first, then each fetched channel's stored window is brought to what came back
+ * (matches refreshed, new ones inserted; see reconcileChannel) with the
+ * channel's preferred speed filled across its whole set, and what did NOT come
+ * back is only a removal candidate, deleted after the loop once videos.list
+ * confirms it gone (dropVerifiedMissing). "Fetch new" only adds and updates —
+ * never deletes — and speeds only what it inserted. Everything else — auth,
+ * subscriptions + avatars, the per-channel paging, cleanup, the channel prune,
+ * the details backfill, the progress toast and the summary — is identical.
  *
  * Each channel's result is APPLIED AND WRITTEN as soon as it arrives — just the
- * records it changed plus its deletes, never the whole set — and nothing is
- * RENDERED until the end: one place-keeping render after the details backfill,
- * or on the way out of a failed run when something was written. So a run cut
- * short by quota, auth or the network keeps every channel that completed and
- * loses only the failing channel's pages. The user may be watching and marking
+ * records it changed, never the whole set — and nothing is RENDERED until the
+ * end: one place-keeping render after the details backfill, or on the way out
+ * of a failed run when something was written. So a run cut short by quota,
+ * auth or the network keeps every channel that completed and loses only the
+ * failing channel's pages — and deletes none of the candidates, which exist
+ * only in this run's memory. The user may be watching and marking
  * while it runs: every step reads state.records LIVE and hands untouched
  * records back by identity, so a mark or a position written mid-run rides into
  * the next write instead of being undone by it; a record a step deletes is a
@@ -786,7 +789,9 @@ async function runRefresh(bound, { mirror }) {
     let skipped = 0;
     let fetched = 0;
     let fetchedItems = 0;
-    let gone = 0;
+    // Removal candidates across every channel, verified in ONE batch after the
+    // loop rather than per channel.
+    const candidates = new Set();
     for (const sub of subs) {
       // Ignored channels are skipped entirely — no uploads request at all (also
       // saves quota). "Refresh all" swept their records above; "Fetch new"
@@ -797,11 +802,7 @@ async function runRefresh(bound, { mirror }) {
       showProgress(`Fetching channel ${fetched} of ${fetchTotal}: ${sub.channelTitle}`);
       let vids;
       try {
-        // Thorough paging exactly when the result is about to be treated as the
-        // channel's complete window (see getChannelVideosSince).
-        vids = await getChannelVideosSince(sub.channelId, bound, sub.channelTitle, {
-          thorough: mirror,
-        });
+        vids = await getChannelVideosSince(sub.channelId, bound, sub.channelTitle);
       } catch (err) {
         if (err instanceof ApiError && err.kind === 'notfound') {
           // Deleted/hidden channel: skip without aborting the whole refresh. Its
@@ -819,15 +820,20 @@ async function runRefresh(bound, { mirror }) {
       // between, nothing computed from an earlier snapshot — so a card the user
       // marked while this channel was fetching keeps its mark.
       const result = reconcileChannel(state.records, sub.channelId, vids, bound, {
-        removeMissing: mirror,
+        reportMissing: mirror,
         sweepSpeeds: mirror,
         prefs,
       });
+      for (const id of result.missingIds) candidates.add(id);
       if (result.records === state.records) continue; // nothing to write
-      gone += result.removedIds.length;
       dirty = true;
       await commitRecords(result.records, result);
     }
+
+    // Ahead of cleanup, the prune (which counts stored records) and the
+    // backfill (which would spend quota on a record about to go).
+    const gone = await dropVerifiedMissing(candidates);
+    if (gone > 0) dirty = true;
 
     // SYNC is a CLEANUP site: with the set brought up to date, recompute the
     // marker, delete the handled prefix, and advance the floor.
@@ -884,6 +890,31 @@ async function dropUnmirroredVideos(subs, prefs) {
   const ids = unmirroredVideoIds(state.records, subs, prefs);
   if (ids.length > 0) await removeVideos(ids);
   return ids.length;
+}
+
+/**
+ * "Refresh all"'s deletion of what the uploads walk did not return: ONE batched
+ * videos.list over every channel's candidates (reconcileChannel's missingIds),
+ * then one commitRecords deleting only those the API did not return — deleted
+ * or private; an unlisted video comes back and stays. The walk stops at the
+ * first item at or below the bound while the window is judged on each video's
+ * own publishedAt, so "not returned" alone would delete a premiere filed below
+ * the stopping point, its watch position with it. The lookup is therefore a
+ * precondition, not an enhancement: if it throws, nothing is deleted and the
+ * error propagates to the run's error path — an absent answer is not proof of
+ * deletion. The result is applied to the LIVE records after the await
+ * (dropUnverified), so a mark made during the lookup rides along and a record
+ * already gone is a no-op.
+ * @param {Set<string>} candidates videoIds reported missing by the reconciles
+ * @returns {Promise<number>} how many videos went, for the summary toast
+ */
+async function dropVerifiedMissing(candidates) {
+  if (candidates.size === 0) return 0;
+  showProgress('Checking videos missing from their channel…');
+  const found = await getVideoDetails([...candidates]);
+  const result = dropUnverified(state.records, candidates, found);
+  if (result.removedIds.length > 0) await commitRecords(result.records, result);
+  return result.removedIds.length;
 }
 
 /**
@@ -1200,9 +1231,10 @@ function applyHandledDelta(fromState, toState) {
 /**
  * The page's ONE write-back of a changed record set: adopt `records` as the live
  * set, re-derive the lists, react if the PLAYING record went, then persist
- * exactly the difference — `removedIds` deleted, `changed` put. Three callers —
- * removeVideos() (cleanup and the unmirrored sweep) and runRefresh's
- * per-channel reconcile — and nothing else on this page deletes a video. It
+ * exactly the difference — `removedIds` deleted, `changed` put. Its deleting
+ * callers are removeVideos() (cleanup and the unmirrored sweep) and
+ * dropVerifiedMissing — nothing else on this page deletes a video; runRefresh's
+ * per-channel reconcile writes through it too, but only puts. It
  * does NOT render: callers recompute()/render afterwards.
  * @param {Array<object>} records the new live set
  * @param {{removedIds?:Array<string>,changed?:Array<object>}} diff what to persist
