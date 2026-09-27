@@ -990,8 +990,8 @@ body.app-active .blocked-overlay {
    gap) inside a queue pane fixed at 400px, so it tightens its own gaps a little
    and Skip gives back the rest — rather than squeezing ▶ Play below its label
    width, which (min-width: auto) would overflow the card instead of shrinking.
-   Both rules are scoped with :has, so the stash footer, which renders no menu,
-   keeps its exact previous proportions. */
+   Both rules are scoped with :has, so a footer that renders no menu keeps its
+   exact previous proportions. */
 .row__actions:has(.row__menu) {
   gap: 6px;
 }
@@ -1144,6 +1144,67 @@ body.app-active .blocked-overlay {
 .row__menu-item:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
+}
+
+/* ---- Drag-to-reorder (stash) ---- */
+
+/* The positioning context for the grip and the drop line. No z-index, so the
+   card makes no stacking context and the menu panel still clears the sticky
+   header exactly as before. */
+.row--reorderable {
+  position: relative;
+}
+/* Top-CENTRE of the thumbnail, clear of SHORTS (left) and UPCOMING/LIVE
+   (right), in the same dark badge style. Shown on hover only: it is a mouse
+   affordance, and the keyboard has the menu and the Shift keys. The glyph is a
+   `content` like the menu trigger's (U+283F, a 6-dot grip). */
+.row__grip {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  padding: 2px 12px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  cursor: grab;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.row__grip::before {
+  content: "\283F";
+}
+.row:hover .row__grip,
+.row--dragging .row__grip {
+  opacity: 1;
+}
+.row__grip:active {
+  cursor: grabbing;
+}
+.row--dragging {
+  opacity: 0.5;
+}
+/* The drop line, centred in the 16px gap between cards (.queue's gap). */
+.row--drop-before::before,
+.row--drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.row--drop-before::before {
+  top: -11px;
+}
+.row--drop-after::after {
+  bottom: -11px;
 }
 
 /* ---- Non-embeddable cards (↗ YouTube) ---- */

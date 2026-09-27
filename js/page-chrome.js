@@ -792,6 +792,8 @@ export function bindIframeFocusGuard(getIframe, { fallback, frameBox = null, fra
  *   PRECEDES the queue in the markup, so Tab reaches it on the way IN, and '/'
  *   reaches it from the queue; once focused it scrolls natively, the only way to
  *   read a long description without tabbing through every card's controls.
+ * @param {HTMLElement|null} [opts.queueHeader] the sticky `.queue-header`, which
+ *   covers the top of the scrollport — read only by visibleQueueBand.
  * @param {string} [opts.narrowQuery] media query for the STACKED layout, where
  *   the document scrolls rather than the panes — the question initCurtain asks,
  *   asked the same way.
@@ -799,11 +801,20 @@ export function bindIframeFocusGuard(getIframe, { fallback, frameBox = null, fra
  *   focusEdge: (dir:number) => boolean,
  *   cardCount: () => number, focusCardAt: (index:number) => Element|null,
  *   rememberCard: (videoId:string|null|undefined) => void,
- *   renderKeepingAnchor: (rerender:() => void) => Element|null,
+ *   renderKeepingAnchor: (rerender:() => void, opts?:{pin?:string}) => Element|null,
  *   focusRemembered: (opts?:{preventScroll?:boolean, focusVisible?:boolean}) => Element|null,
- *   captureQueueScroll: () => () => void}}
+ *   captureQueueScroll: () => () => void,
+ *   scrollQueueBy: (dy:number) => number,
+ *   visibleQueueBand: () => {top:number, bottom:number},
+ *   isCardSelected: () => boolean}}
  */
-export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery = '(max-width: 1080px)' } = {}) {
+export function initQueueFocus({
+  queueList,
+  queuePane,
+  playerPane,
+  queueHeader = null,
+  narrowQuery = '(max-width: 1080px)',
+} = {}) {
   trackInputModality();
   // The videoId of the card the walk resumes at — an id, never a node, so it
   // survives every re-render. Null until the user has been in the list. Focus
@@ -1172,6 +1183,35 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
   }
 
   /**
+   * Scroll the queue by `dy` px — whichever element scrolls it at this width —
+   * and report how far it actually moved (0 once clamped). For the stash's
+   * drag auto-scroll, which must not ask the layout question itself.
+   * @param {number} dy
+   * @returns {number}
+   */
+  function scrollQueueBy(dy) {
+    const before = queueScrollTop();
+    setQueueScrollTop(before + dy);
+    return queueScrollTop() - before;
+  }
+
+  /**
+   * The screen band the list is VISIBLE through: the scrollport clipped to the
+   * viewport (inView's intersection), with its top lowered past the sticky
+   * queue header, which covers the scrollport's top at both widths. Where the
+   * header is not stuck it sits above the list, so the band's top is simply at
+   * or above the list's own top.
+   * @returns {{top:number, bottom:number}}
+   */
+  function visibleQueueBand() {
+    const pane = queuePane ? queuePane.getBoundingClientRect() : null;
+    let top = pane ? Math.max(pane.top, 0) : 0;
+    const bottom = pane ? Math.min(pane.bottom, window.innerHeight) : window.innerHeight;
+    if (queueHeader) top = Math.max(top, queueHeader.getBoundingClientRect().bottom);
+    return { top, bottom };
+  }
+
+  /**
    * Take the queue's scroll offset now and hand back a function that puts it
    * back — for a re-render that keeps the same cards, where an absolute restore
    * is exact (stash-page.js's renderKeepingPlace). Captured as a closure so the
@@ -1239,16 +1279,22 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
    * and re-focuses the same control: that is exact for a cross-tab reconcile,
    * where membership only grows so the anchor cannot vanish and focus never left
    * the list. Keep the two separate.
+   * `pin` separates the SCROLL from the place, for a drag-and-drop: the place is
+   * still the dragged card, but holding IT at its old screen y would scroll the
+   * list away from where it was just dropped, so the scroll holds a card the
+   * drop did not move.
    * @param {() => void} rerender the page's own render, called exactly once
+   * @param {{pin?: string}} [opts] videoId of the card to hold still on screen
    * @returns {Element|null} the card focus was restored to, or null — focus was
    *   not in the list, or no card is left to hold it. A caller whose own control
    *   disables itself tells those apart by its own gate, not by this.
    */
-  function renderKeepingAnchor(rerender) {
+  function renderKeepingAnchor(rerender, { pin } = {}) {
     const rowsBefore = cards();
     const beforeIds = rowsBefore.map((c) => c.dataset.videoId);
     const id = anchorId();
-    const before = id ? rowsBefore.find((c) => c.dataset.videoId === id) : null;
+    const pinned = pin ? rowsBefore.find((c) => c.dataset.videoId === pin) : null;
+    const before = pinned || (id ? rowsBefore.find((c) => c.dataset.videoId === id) : null);
     const anchorTop = before ? before.getBoundingClientRect().top : null;
     // Read BEFORE the rerender: renderQueue empties the <ul>, so by the time we
     // could ask, focus has already fallen to <body> and the answer is lost.
@@ -1257,12 +1303,11 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     const after = cards();
     const survivor = nearestSurvivor(beforeIds, id, after.map((c) => c.dataset.videoId));
     const target = survivor ? after.find((c) => c.dataset.videoId === survivor) : null;
-    if (target) {
-      rememberedId = survivor;
-      if (anchorTop != null) {
-        const delta = target.getBoundingClientRect().top - anchorTop;
-        if (delta) setQueueScrollTop(queueScrollTop() + delta);
-      }
+    if (target) rememberedId = survivor;
+    const held = pinned ? after.find((c) => c.dataset.videoId === pin) : target;
+    if (held && anchorTop != null) {
+      const delta = held.getBoundingClientRect().top - anchorTop;
+      if (delta) setQueueScrollTop(queueScrollTop() + delta);
     }
     // Last, so the scroll it must not disturb is already settled. Not gated on
     // `target`: with nothing recognisable left (a refresh can replace the whole
@@ -1326,6 +1371,8 @@ export function initQueueFocus({ queueList, queuePane, playerPane, narrowQuery =
     renderKeepingAnchor,
     focusRemembered,
     captureQueueScroll,
+    scrollQueueBy,
+    visibleQueueBand,
     isCardSelected,
   };
 }

@@ -1898,8 +1898,7 @@ function render() {
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
       // This page's menu model for a card — one command today. Returning a
       // non-empty array is what renders the card menu at all (see
-      // buildQueueRow); stash-page.js passes no cardMenu, so its cards keep the
-      // same three controls. It runs per card during render: cheap, no effects.
+      // buildQueueRow). It runs per card during render: cheap, no effects.
       cardMenu: (rec) => [
         { label: 'Add to stash', onSelect: () => addCardToStash(rec.videoId) },
       ],
