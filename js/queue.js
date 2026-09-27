@@ -1219,32 +1219,44 @@ function addedAtMs(rec) {
 }
 
 /**
- * Return a NEW array of stash records in the stash's ONLY order: oldest
- * `addedAt` first. NOT publishedAt — the stash is hand-curated, so the order the
- * user added things in IS the user's order. Ties break by videoId, exactly like
- * sortAscending, so the result is deterministic.
+ * A stash record's position in the stash's order: its `order` when that is a
+ * finite number (the user moved it), else its `addedAt` instant. Both are epoch
+ * millis — one number line — so a moved record slots in among unmoved ones with
+ * no migration, and a new add (addedAt = now) still lands after everything.
+ * @param {object|null|undefined} rec
+ * @returns {number} +Infinity for an unmoved record with no usable addedAt
+ */
+function stashKey(rec) {
+  const o = rec ? rec.order : undefined;
+  return typeof o === 'number' && Number.isFinite(o) ? o : addedAtMs(rec);
+}
+
+/**
+ * Return a NEW array of stash records in the stash's ONLY order: ascending
+ * stashKey — the `order` a move wrote, else `addedAt`, so an untouched stash is
+ * oldest-added first. NOT publishedAt — the stash is hand-curated, so the order
+ * the user added things in IS the user's order. Ties break by videoId, exactly
+ * like sortAscending, so the result is deterministic.
  *
- * A record with a missing or unparseable `addedAt` sorts LAST: every record the
- * app writes is stamped, so an unstamped one is foreign / hand-edited data, and
- * the tail is where it does the least damage (sorting it first would park a
- * mystery row right next to play).
+ * An unmoved record with a missing or unparseable `addedAt` sorts LAST: every
+ * record the app writes is stamped, so an unstamped one is foreign / hand-edited
+ * data, and the tail is where it does the least damage (sorting it first would
+ * park a mystery row right next to play).
  *
  * NOT built on compareIso: that helper falls back to a LEXICAL compare for
  * unparseable input, which would order a missing `addedAt` arbitrarily instead
  * of last. Parsed instants are compared here, so '...T12:00:00+02:00' and
  * '...T10:00:00Z' compare as the same instant rather than as two strings.
  *
- * This is deliberately the SINGLE sort site for the stash: when drag-to-reorder
- * lands it adds an `order` field and changes exactly this one function. Pure;
- * does not mutate.
+ * This is deliberately the SINGLE sort site for the stash. Pure; does not mutate.
  * @param {Array<object>} records stash records
  * @returns {Array<object>}
  */
 export function sortStash(records) {
   const list = Array.isArray(records) ? records : [];
   return list.slice().sort((r1, r2) => {
-    const t1 = addedAtMs(r1);
-    const t2 = addedAtMs(r2);
+    const t1 = stashKey(r1);
+    const t2 = stashKey(r2);
     // Compared, never subtracted: Infinity - Infinity is NaN.
     if (t1 !== t2) return t1 < t2 ? -1 : 1;
     // Deterministic tie-break.
@@ -1254,6 +1266,87 @@ export function sortStash(records) {
     if (id1 > id2) return 1;
     return 0;
   });
+}
+
+/**
+ * `count` strictly increasing finite keys strictly between `lo` and `hi`, or
+ * null when floating point has no room left there. A null bound is OPEN (the
+ * end of the list), where keys step 1ms away from the other bound.
+ * @param {number|null} lo
+ * @param {number|null} hi
+ * @param {number} count
+ * @returns {number[]|null}
+ */
+function spreadStashKeys(lo, hi, count) {
+  const keys = [];
+  for (let i = 0; i < count; i++) {
+    if (lo !== null && hi !== null) keys.push(lo + ((hi - lo) * (i + 1)) / (count + 1));
+    else if (lo !== null) keys.push(lo + i + 1);
+    else if (hi !== null) keys.push(hi - (count - i));
+    else keys.push(i);
+  }
+  let prev = lo === null ? -Infinity : lo;
+  for (const k of keys) {
+    if (!Number.isFinite(k) || !(k > prev)) return null;
+    prev = k;
+  }
+  return hi !== null && !(prev < hi) ? null : keys;
+}
+
+/**
+ * Move one stash record to index `toIndex` of the sorted stash — the ONE step
+ * behind the card menu, Shift+arrow/Home/End and drag-and-drop. `toIndex` is the
+ * record's index AFTER the move (clamped), so 0 is "bring to top".
+ *
+ * It writes an `order` key, and as FEW records as it can: normally only the
+ * moved one, keyed halfway between its new neighbours (or 1ms past the end one
+ * at either end). That matters beyond tidiness — the stash has writers in two
+ * tabs and only single-key upserts, so a move that rewrote every position would
+ * be a whole-list write in all but name. Only when floating point runs out of
+ * room between the neighbours (repeated moves into one gap, two records sharing
+ * a key, an unmoved record with no usable addedAt) does it widen the renumbered
+ * run outward, one neighbour at a time, until the run's keys fit.
+ *
+ * `changed` holds the COPIES to persist (empty = nothing moved), `records` the
+ * new sorted list with those copies substituted. Pure; mutates neither input.
+ * @param {Array<object>} records stash records (any order)
+ * @param {string} videoId the record to move
+ * @param {number} toIndex its index in the sorted stash after the move
+ * @returns {{records:Array<object>, changed:Array<object>}}
+ */
+export function moveInStash(records, videoId, toIndex) {
+  const sorted = sortStash(records);
+  const from = sorted.findIndex((r) => r && r.videoId === videoId);
+  if (from === -1) return { records: sorted, changed: [] };
+  const rest = sorted.slice(0, from).concat(sorted.slice(from + 1));
+  const to = Math.max(0, Math.min(rest.length, Math.trunc(Number(toIndex)) || 0));
+  if (to === from) return { records: sorted, changed: [] };
+
+  // The run [a, b) of `rest` renumbered along with the moved record; starts
+  // empty, so the common case keys the moved record alone.
+  let a = to;
+  let b = to;
+  let keys = null;
+  for (let grow = 0; ; grow++) {
+    const lo = a > 0 ? stashKey(rest[a - 1]) : null;
+    const hiKey = b < rest.length ? stashKey(rest[b]) : null;
+    // An infinite key above is as good as an open end; one BELOW is unusable
+    // (nothing finite sorts after it), so the run has to take it in.
+    const hi = hiKey === Infinity ? null : hiKey;
+    if (lo !== Infinity) keys = spreadStashKeys(lo, hi, b - a + 1);
+    if (keys) break;
+    // Alternate sides, taking whichever side still has room to grow.
+    if ((grow % 2 === 0 && a > 0) || b >= rest.length) a--;
+    else b++;
+  }
+
+  const run = rest.slice(a, to).concat([sorted[from]], rest.slice(to, b));
+  const replaced = new Map();
+  run.forEach((rec, i) => {
+    if (rec && stashKey(rec) !== keys[i]) replaced.set(rec.videoId, { ...rec, order: keys[i] });
+  });
+  const next = sorted.map((r) => (r && replaced.has(r.videoId) ? replaced.get(r.videoId) : r));
+  return { records: sortStash(next), changed: Array.from(replaced.values()) };
 }
 
 /**

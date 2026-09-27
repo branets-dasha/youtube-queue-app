@@ -38,6 +38,7 @@ import {
   parseVideoId,
   parseStartSeconds,
   sortStash,
+  moveInStash,
   stashToClean,
   addToStash,
   reconcileStash,
@@ -1639,6 +1640,117 @@ test('sortStash returns [] for an empty or non-array input', () => {
   assert.deepEqual(sortStash([]), []);
   assert.deepEqual(sortStash(undefined), []);
   assert.deepEqual(sortStash(null), []);
+});
+
+test('sortStash puts a record with an `order` where that key falls among addedAt instants', () => {
+  const between = Date.parse(A1) + 1000; // after A1, before A2
+  const recs = [
+    stashRec('a', A1, 'new'),
+    stashRec('b', A2, 'new'),
+    { ...stashRec('c', A3, 'new'), order: between },
+    // An unstamped record that was MOVED sorts by its order, not last.
+    { ...stashRec('moved', undefined, 'new'), order: Date.parse(A1) - 1 },
+    // A non-finite order is ignored: back to addedAt.
+    { ...stashRec('d', A3, 'new'), order: NaN },
+  ];
+  assert.deepEqual(sortStash(recs).map((r) => r.videoId), ['moved', 'a', 'c', 'b', 'd']);
+});
+
+// --- moveInStash: one reorder step, writing as few records as it can ---
+
+const ids = (recs) => recs.map((r) => r.videoId);
+const five = () => ['a', 'b', 'c', 'd', 'e'].map((id, i) => stashRec(id, `2026-05-0${i + 1}T10:00:00.000Z`, 'new'));
+
+test('moveInStash moves up / down / to top / to bottom, writing ONLY the moved record', () => {
+  const cases = [
+    ['c', 1, ['a', 'c', 'b', 'd', 'e']], // up
+    ['c', 3, ['a', 'b', 'd', 'c', 'e']], // down
+    ['d', 0, ['d', 'a', 'b', 'c', 'e']], // top
+    ['b', 4, ['a', 'c', 'd', 'e', 'b']], // bottom
+  ];
+  for (const [id, to, want] of cases) {
+    const out = moveInStash(five(), id, to);
+    assert.deepEqual(ids(out.records), want, `${id} -> ${to}`);
+    assert.deepEqual(ids(out.changed), [id]);
+    assert.equal(typeof out.changed[0].order, 'number');
+    // The order is what the store will hold: re-sorting the persisted shape agrees.
+    assert.deepEqual(ids(sortStash(out.records)), want);
+  }
+});
+
+test('moveInStash keys the moved record BETWEEN its neighbours, 1ms past an end', () => {
+  const t = (i) => Date.parse(`2026-05-0${i}T10:00:00.000Z`);
+  assert.equal(moveInStash(five(), 'e', 1).changed[0].order, (t(1) + t(2)) / 2);
+  assert.equal(moveInStash(five(), 'c', 0).changed[0].order, t(1) - 1);
+  // Bottom stays just past the last record, so a later add (addedAt = now) still
+  // lands after it.
+  assert.equal(moveInStash(five(), 'a', 4).changed[0].order, t(5) + 1);
+});
+
+test('moveInStash is a no-op at the edges and for an unknown id', () => {
+  for (const [id, to] of [['a', 0], ['a', -3], ['e', 4], ['e', 99], ['zz', 0]]) {
+    const out = moveInStash(five(), id, to);
+    assert.deepEqual(out.changed, [], `${id} -> ${to}`);
+    assert.deepEqual(ids(out.records), ['a', 'b', 'c', 'd', 'e']);
+  }
+  assert.deepEqual(moveInStash([], 'a', 0), { records: [], changed: [] });
+  assert.deepEqual(moveInStash(null, 'a', 0), { records: [], changed: [] });
+});
+
+test('moveInStash works over a mix of moved (order) and unmoved (addedAt) records', () => {
+  let recs = five();
+  recs = moveInStash(recs, 'e', 0).records; // e a b c d
+  recs = moveInStash(recs, 'a', 4).records; // e b c d a
+  recs = moveInStash(recs, 'c', 1).records; // e c b d a
+  assert.deepEqual(ids(recs), ['e', 'c', 'b', 'd', 'a']);
+  assert.deepEqual(ids(sortStash(recs.slice().reverse())), ['e', 'c', 'b', 'd', 'a']);
+});
+
+test('moveInStash renumbers a widening run when floating point leaves no room', () => {
+  // Neighbours one ULP apart (1e12 is in [2^39, 2^40), where a ULP is 2^-13):
+  // no double lies strictly between them.
+  const lo = 1e12;
+  const ulp = 2 ** -13;
+  assert.ok(lo + ulp > lo && lo + ulp / 2 === lo); // the premise, checked
+  const tight = [
+    { ...stashRec('a', A1, 'new'), order: lo },
+    { ...stashRec('b', A1, 'new'), order: lo + ulp },
+    { ...stashRec('c', A1, 'new'), order: lo + 2 * ulp },
+    stashRec('z', A3, 'new'),
+  ];
+  const out = moveInStash(tight, 'z', 1);
+  assert.deepEqual(ids(out.records), ['a', 'z', 'b', 'c']);
+  assert.ok(out.changed.length > 1, 'more than the moved record was rewritten');
+  assert.deepEqual(ids(sortStash(out.records)), ['a', 'z', 'b', 'c']);
+  // Every key is distinct and finite: the sort does not lean on the tie-break.
+  const keys = out.records.map((r) => (Number.isFinite(r.order) ? r.order : Date.parse(r.addedAt)));
+  assert.equal(new Set(keys).size, keys.length);
+});
+
+test('moveInStash separates records that TIE on addedAt', () => {
+  const recs = [stashRec('a', A1, 'new'), stashRec('b', A1, 'new'), stashRec('c', A2, 'new')];
+  const out = moveInStash(recs, 'c', 1); // between two equal keys
+  assert.deepEqual(ids(out.records), ['a', 'c', 'b']);
+  assert.ok(out.changed.length >= 2);
+});
+
+test('moveInStash can move among records with NO usable addedAt', () => {
+  const recs = [stashRec('a', A1, 'new'), stashRec('x', undefined, 'new'), stashRec('y', 'junk', 'new')];
+  assert.deepEqual(ids(moveInStash(recs, 'y', 1).records), ['a', 'y', 'x']);
+  assert.deepEqual(ids(moveInStash(recs, 'a', 2).records), ['x', 'y', 'a']);
+  const top = moveInStash(recs, 'y', 0);
+  assert.deepEqual(ids(top.records), ['y', 'a', 'x']);
+  assert.deepEqual(ids(top.changed), ['y']);
+});
+
+test('moveInStash mutates neither input nor its records', () => {
+  const recs = five();
+  const snapshot = JSON.stringify(recs);
+  const out = moveInStash(recs, 'd', 0);
+  assert.equal(JSON.stringify(recs), snapshot);
+  assert.notEqual(out.changed[0], recs[3]);
+  // Untouched records come back BY IDENTITY.
+  assert.equal(out.records[1], recs[0]);
 });
 
 // --- stashToClean: STATE-based deletion set (contrast: videosToClean is positional) ---

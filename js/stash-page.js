@@ -56,6 +56,7 @@ import {
   parseStartSeconds,
   stashChannelInfo,
   sortStash,
+  moveInStash,
   stashToClean,
   addToStash,
   reconcileStash,
@@ -113,7 +114,7 @@ import {
 
 const state = {
   clientId: null,
-  records: [], // the whole stash, kept sorted by sortStash (oldest addedAt first)
+  records: [], // the whole stash, kept sorted by sortStash (the user's order)
   booted: false, // the store read + settings restore have run once this load
   adding: false, // an add is in flight (guards the form AND the token request)
   liking: false, // a like is in flight (guards the button AND the token request)
@@ -404,6 +405,7 @@ function bindEvents() {
     queueList: dom.queueList,
     queuePane: dom.queuePane,
     playerPane: dom.playerPane,
+    queueHeader: dom.queueHeader,
   });
 
   // "Skip to queue" lands on the FIRST CARD, not on the <ul>. It is a keyboard
@@ -1023,6 +1025,87 @@ function updateCleanupUi() {
 }
 
 // ---------------------------------------------------------------------------
+// Reordering: the card menu's four moves, Shift+↑/↓/Home/End, and drag-and-drop
+// all land here. The key arithmetic is moveInStash's (queue.js); this is the
+// optimistic apply, the re-render and the write.
+// ---------------------------------------------------------------------------
+
+/**
+ * Move a record to `toIndex` of the sorted stash (its index AFTER the move).
+ * Memory and the list change first; the write follows, one putStashVideo per
+ * record moveInStash rewrote — normally just this one — and a failure reverts
+ * only the `order` field it set, so a mark made meanwhile is not undone.
+ *
+ * renderKeepingAnchor, not renderKeepingPlace, though no card leaves: the
+ * absolute offset holds the SCROLL still, so a card moved to the top or bottom
+ * would leave the screen with focus on it. The anchor is the moved card itself
+ * (it holds focus for the keys and the menu), so the list scrolls to keep it
+ * where the user was looking; a drop passes `pin` instead — see there.
+ * @param {string} videoId
+ * @param {number} toIndex
+ * @param {{pin?: string}} [opts] the card to hold still on screen (a drop)
+ * @returns {boolean} whether anything moved
+ */
+function moveStashCard(videoId, toIndex, { pin } = {}) {
+  const { records, changed } = moveInStash(state.records, videoId, toIndex);
+  if (changed.length === 0) return false;
+  const byId = new Map(state.records.map((r) => [r.videoId, r]));
+  const previous = new Map(changed.map((rec) => [rec.videoId, byId.get(rec.videoId)]));
+  state.records = records;
+  rerenderAfterMove({ pin });
+
+  Promise.all(changed.map((rec) => persistRecord(rec))).catch((err) => {
+    for (const [id, old] of previous) {
+      const cur = state.records.find((r) => r.videoId === id);
+      if (!cur || !old) continue;
+      if ('order' in old) cur.order = old.order;
+      else delete cur.order;
+    }
+    rerenderAfterMove();
+    handleError(err);
+  });
+  return true;
+}
+
+function rerenderAfterMove(opts) {
+  if (queueFocus) queueFocus.renderKeepingAnchor(render, opts);
+  else render();
+}
+
+/**
+ * The index a keyboard or menu move sends `videoId` to, or -1 when it is
+ * already there. `where`: 'top' | 'up' | 'down' | 'bottom'.
+ */
+function moveTargetIndex(videoId, where) {
+  const from = state.records.findIndex((r) => r.videoId === videoId);
+  const last = state.records.length - 1;
+  if (from === -1) return -1;
+  const to = { top: 0, up: from - 1, down: from + 1, bottom: last }[where];
+  return to >= 0 && to <= last && to !== from ? to : -1;
+}
+
+/** Card menu / Shift-key move; true when the card moved. */
+function moveCardTo(videoId, where) {
+  const to = moveTargetIndex(videoId, where);
+  return to !== -1 && moveStashCard(videoId, to);
+}
+
+/**
+ * This page's card menu model. The first and last ids come from render(), read
+ * once per render, so this stays a constant-time check per card.
+ */
+function stashCardMenu(rec, firstId, lastId) {
+  const atTop = rec.videoId === firstId;
+  const atBottom = rec.videoId === lastId;
+  return [
+    { label: 'Bring to top', disabled: atTop, onSelect: () => moveCardTo(rec.videoId, 'top') },
+    { label: 'Bring up', disabled: atTop, onSelect: () => moveCardTo(rec.videoId, 'up') },
+    { label: 'Bring down', disabled: atBottom, onSelect: () => moveCardTo(rec.videoId, 'down') },
+    { label: 'Bring to bottom', disabled: atBottom, onSelect: () => moveCardTo(rec.videoId, 'bottom') },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Cross-tab sync: the OTHER tab wrote the `stash` store
 //
 // index.html's "Add to stash" writes this store from a tab holding a different
@@ -1584,7 +1667,7 @@ async function onLike() {
 // ---------------------------------------------------------------------------
 
 function render() {
-  // sortStash is the stash's SINGLE ordering site: oldest addedAt first.
+  // sortStash is the stash's SINGLE ordering site.
   state.records = sortStash(state.records);
 
   const total = state.records.length;
@@ -1607,6 +1690,10 @@ function render() {
   // CLASS is unchanged, so setCardState and the CSS still key off it.
   // ONE fresh yqa_channels read for the WHOLE render (see channelResolver):
   // never a boot snapshot, and never re-parsed once per card.
+  // The menu's edges are the FULL list's, not the window's: "Bring down" on the
+  // last rendered card still has somewhere to go.
+  const firstId = hasItems ? state.records[0].videoId : null;
+  const lastId = hasItems ? state.records[total - 1].videoId : null;
   renderQueue(
     dom.queueList,
     windowed,
@@ -1614,6 +1701,14 @@ function render() {
       onSkip: (id) => toggleRemove(id),
       onPlay: (id) => playVideo(id),
       onCardSpeed: (id, speed) => onCardSpeed(id, speed),
+      cardMenu: (rec) => stashCardMenu(rec, firstId, lastId),
+      // The rendered cards are a PREFIX of state.records, so a drop's index
+      // among them is its index in the whole stash.
+      onReorder: (id, toIndex, opts) => moveStashCard(id, toIndex, opts),
+      // The drag's edge auto-scroll: page-chrome knows which element scrolls
+      // the list at this width, and where the sticky header ends.
+      queueBand: () => queueFocus.visibleQueueBand(),
+      scrollQueueBy: (dy) => queueFocus.scrollQueueBy(dy),
     },
     channelResolver(loadChannels()),
     more,
@@ -1670,8 +1765,8 @@ function updateDefaultSpeedButton() {
 
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts. STASH: ↑/↓ move, PgUp/PgDn scroll (carrying focus with
-// them), Home/End jump to either end, x remove, Enter play focused
-// card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→ seek, -/+ speed,
+// them), Home/End jump to either end, Shift+↑/↓/Home/End move the card, x
+// remove, Enter play focused card, 1/5/2 preferred speed. PLAYER: Space play/pause, ←/→ seek, -/+ speed,
 // n next, l like, m mute, f fullscreen. BOTH: '/' throws focus between the two
 // panes. Ignored while typing in an input (the add field lives on this page, so
 // this matters more here), during onboarding, and for Ctrl/Cmd/Alt combos
@@ -1689,6 +1784,14 @@ const CARD_SPEED_KEYS = new Map([
   ['1', 1],
   ['5', 1.5],
   ['2', 2],
+]);
+
+// Shift + walk key -> where the selected card moves (see moveCardTo).
+const SHIFT_MOVES = new Map([
+  ['arrowup', 'up'],
+  ['arrowdown', 'down'],
+  ['home', 'top'],
+  ['end', 'bottom'],
 ]);
 
 /**
@@ -1745,6 +1848,19 @@ function onGlobalKeydown(e) {
   // The navigation keys take neither: they create the selection.
   const selIdx = queueFocus && queueFocus.isCardSelected() ? idx : -1;
 
+  if (e.shiftKey && SHIFT_MOVES.has(key)) {
+    // Shift+↑/↓ move the SELECTED card one place, Shift+Home/End to the top /
+    // bottom, through the same move as the card menu. Checked BEFORE the walk
+    // keys, which would otherwise take them as plain steps. Focus stays on the
+    // card (the re-render puts it back), so a run of presses keeps carrying it.
+    // Prevented only when it moved: at an end, or with no selected card, the
+    // key keeps its native meaning.
+    if (selIdx >= 0 && moveCardTo(rows[selIdx].dataset.videoId, SHIFT_MOVES.get(key))) {
+      e.preventDefault();
+    }
+    return;
+  }
+
   if (key === 'arrowup' || key === 'arrowdown') {
     // ↑ = previous card (upward in the oldest->newest list), ↓ = next. The
     // whole rule lives in page-chrome's moveCard — what they walk (the cards,
@@ -1755,8 +1871,7 @@ function onGlobalKeydown(e) {
     // preventDefault ONLY on true, so everything it declines keeps its native
     // scrolling: the player pane, the stacked layout's document, and a clamp at
     // either end of the list. Identical to the subscriptions page, clamp
-    // included, where the clamp is also what gets focus out of a card menu this
-    // page does not have.
+    // included, and an open card menu is walked first, as there.
     if (queueFocus && queueFocus.moveCard(key === 'arrowup' ? -1 : 1)) e.preventDefault();
   } else if (key === 'pageup' || key === 'pagedown') {
     // The SAME move as ↑/↓, only further: moveCard steps QUEUE_PAGE_STEP walk

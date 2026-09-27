@@ -720,17 +720,265 @@ function buildCardMenu(rec, items) {
   return wrapper;
 }
 
+// ---------------------------------------------------------------------------
+// Drag-to-reorder (mouse only)
+//
+// A card whose page passes `onReorder` gets a grip, and the grip alone starts a
+// drag: the card itself stays undraggable, so text selection and the thumbnail
+// link's own native drag are untouched. The grip is aria-hidden and never
+// focusable, because the keyboard has its own route to every move (the card
+// menu and the page's Shift keys) and a screen reader must not hear a control it
+// cannot operate.
+//
+// The drop only reports WHERE — (videoId, toIndex) — and the page does the move,
+// through the same path as its menu items and keys.
+// ---------------------------------------------------------------------------
+
+// The private type a grip drag carries. Checked on every dragover and drop as
+// well as `cardDrag`, so nothing else dragged over the list (a link, a file,
+// text) is ever accepted — even if a lost dragend left `cardDrag` behind.
+const CARD_DRAG_TYPE = 'application/x-yqa-card';
+
+// The drag in flight, or null. Held here rather than read off dataTransfer,
+// which dragover cannot read.
+// { listEl, videoId, x, y (last pointer position; y null = outside the window),
+//   frame (pending rAF id, 0 = none), lastTick (previous frame's timestamp) }
+let cardDrag = null;
+
+// Lists already carrying the list-level listeners, and each one's current
+// { onReorder, queueBand, scrollQueueBy }, replaced on every renderQueue.
+const reorderLists = new WeakMap();
+
+// Edge auto-scroll: within EDGE_BAND px of the visible list's top or bottom the
+// list scrolls, linearly faster toward the edge, up to EDGE_MAX_SPEED px/s.
+const EDGE_BAND = 72;
+const EDGE_MAX_SPEED = 1200;
+
+/** True when a dragover/drop belongs to a grip drag of ours. */
+function isCardDrag(e) {
+  return Boolean(cardDrag && e.dataTransfer && Array.from(e.dataTransfer.types).includes(CARD_DRAG_TYPE));
+}
+
+/**
+ * The gap the pointer is over, as an index into the list's cards: 0 = above the
+ * first, cards.length = below the last. Each card's midpoint decides which side.
+ * @param {HTMLElement[]} rows
+ * @param {number} y clientY
+ * @returns {number}
+ */
+function dropGap(rows, y) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i].getBoundingClientRect();
+    if (y < r.top + r.height / 2) return i;
+  }
+  return rows.length;
+}
+
+/** Remove the drop indicator from every card of `listEl`. */
+function clearDropMarks(listEl) {
+  for (const row of listEl.querySelectorAll('.row--drop-before, .row--drop-after')) {
+    row.classList.remove('row--drop-before', 'row--drop-after');
+  }
+}
+
+/**
+ * Where the current drag would land over `listEl` at `y`: the moved card's index
+ * AFTER the move, plus the card to hold still on screen (see renderKeepingAnchor's
+ * `pin`) — the neighbour on the far side of the gap, which the move does not
+ * shift. Null when the card would stay where it is.
+ */
+function dropTarget(listEl, y) {
+  const rows = Array.from(listEl.querySelectorAll('.row'));
+  const from = rows.findIndex((r) => r.dataset.videoId === cardDrag.videoId);
+  if (from === -1) return null;
+  const gap = dropGap(rows, y);
+  if (gap === from || gap === from + 1) return null;
+  const toIndex = gap > from ? gap - 1 : gap;
+  const pinRow = gap > from ? rows[gap - 1] : rows[gap];
+  return { rows, gap, toIndex, pin: pinRow.dataset.videoId };
+}
+
+/** Draw the drop line for the pointer at `y` — the one computation dragover and
+ *  the auto-scroll loop both use, so the line is always what a drop would do. */
+function markDrop(listEl, y) {
+  clearDropMarks(listEl);
+  const t = dropTarget(listEl, y);
+  if (!t) return;
+  if (t.gap < t.rows.length) t.rows[t.gap].classList.add('row--drop-before');
+  else t.rows[t.rows.length - 1].classList.add('row--drop-after');
+}
+
+// ---- Edge auto-scroll ----
+//
+// A rAF loop fed by the last pointer position, NOT scrolling from dragover:
+// dragover fires only on the element under the pointer — the edge band can sit
+// over the sticky queue header or outside the list entirely — and a held,
+// stationary pointer gets it at a slow, uneven cadence, so dragover-driven
+// scrolling stutters and stalls exactly when the user is waiting on it. The
+// document-level dragover below only RECORDS where the pointer is; the frame
+// loop does the scrolling, and re-draws the drop line after each step since the
+// cards moved under a pointer that did not.
+
+function onDocumentDragOver(e) {
+  if (!isCardDrag(e)) return;
+  cardDrag.x = e.clientX;
+  cardDrag.y = e.clientY;
+  if (!cardDrag.frame) cardDrag.frame = requestAnimationFrame(dragScrollTick);
+}
+
+// The backstop end signal. A browser dispatches no mouse events during a native
+// drag, so the first mousemove means the drag is over — even when its dragend
+// never arrives, which is what happens if a re-render detached the grip it
+// started on. Deliberately not a timer: a held, stationary pointer is exactly
+// the moment the loop must keep running, whatever dragover's cadence.
+function onDocumentMouseMove() {
+  endCardDrag();
+}
+
+function onDocumentDragLeave(e) {
+  // Leaving the WINDOW (not just one element for another): nothing to scroll
+  // toward, so stop the frames; a dragover on the way back in restarts them.
+  if (!cardDrag || e.relatedTarget) return;
+  const { clientX: x, clientY: y } = e;
+  if (x <= 0 || y <= 0 || x >= window.innerWidth || y >= window.innerHeight) {
+    cardDrag.y = null;
+    stopDragFrames();
+  }
+}
+
+function stopDragFrames() {
+  if (cardDrag && cardDrag.frame) cancelAnimationFrame(cardDrag.frame);
+  if (cardDrag) {
+    cardDrag.frame = 0;
+    cardDrag.lastTick = 0;
+  }
+}
+
+/** End the drag entirely: frames, document listeners, indicator, state. */
+function endCardDrag() {
+  if (!cardDrag) return;
+  stopDragFrames();
+  document.removeEventListener('dragover', onDocumentDragOver);
+  document.removeEventListener('dragleave', onDocumentDragLeave);
+  document.removeEventListener('mousemove', onDocumentMouseMove);
+  clearDropMarks(cardDrag.listEl);
+  cardDrag = null;
+}
+
+function dragScrollTick(now) {
+  const drag = cardDrag;
+  if (!drag) return;
+  drag.frame = 0;
+  if (drag.y == null) {
+    drag.lastTick = 0;
+    return; // outside the window: the next document dragover restarts the loop
+  }
+  const dt = drag.lastTick ? Math.min(50, now - drag.lastTick) : 16;
+  drag.lastTick = now;
+  drag.frame = requestAnimationFrame(dragScrollTick);
+
+  const hooks = reorderLists.get(drag.listEl);
+  if (!hooks || !hooks.queueBand || !hooks.scrollQueueBy) return;
+  const list = drag.listEl.getBoundingClientRect();
+  if (drag.x < list.left || drag.x > list.right) return; // over the other pane
+  const band = hooks.queueBand();
+  const { y } = drag;
+  let dir = 0;
+  let depth = 0;
+  // Up only while cards are hidden above the band, down only while some are
+  // below it; a pointer beyond the band (over the header) counts as the edge.
+  if (y < band.top + EDGE_BAND && y > band.top - EDGE_BAND && list.top < band.top - 1) {
+    dir = -1;
+    depth = band.top + EDGE_BAND - y;
+  } else if (y > band.bottom - EDGE_BAND && y < band.bottom + EDGE_BAND && list.bottom > band.bottom + 1) {
+    dir = 1;
+    depth = y - (band.bottom - EDGE_BAND);
+  }
+  if (!dir) return;
+  const speed = EDGE_MAX_SPEED * Math.min(1, depth / EDGE_BAND);
+  const moved = hooks.scrollQueueBy(Math.max(1, Math.round((speed * dt) / 1000)) * dir);
+  if (!moved) return;
+  // The cards moved under a stationary pointer: re-derive the line from where
+  // the pointer is. Over the header there is no drop to show.
+  if (y >= band.top && y <= band.bottom) markDrop(drag.listEl, y);
+  else clearDropMarks(drag.listEl);
+}
+
+function bindReorderList(listEl) {
+  listEl.addEventListener('dragover', (e) => {
+    if (!isCardDrag(e) || cardDrag.listEl !== listEl) return;
+    e.preventDefault(); // accept the drop
+    e.dataTransfer.dropEffect = 'move';
+    markDrop(listEl, e.clientY);
+  });
+  listEl.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget || !listEl.contains(e.relatedTarget)) clearDropMarks(listEl);
+  });
+  listEl.addEventListener('drop', (e) => {
+    if (!isCardDrag(e) || cardDrag.listEl !== listEl) return;
+    e.preventDefault();
+    const t = dropTarget(listEl, e.clientY);
+    const videoId = cardDrag.videoId;
+    endCardDrag(); // before the move re-renders the list
+    const hooks = reorderLists.get(listEl);
+    if (t && hooks && typeof hooks.onReorder === 'function') {
+      hooks.onReorder(videoId, t.toIndex, { pin: t.pin });
+    }
+  });
+}
+
+/**
+ * The grip for one card. The drag image is the whole CARD, grabbed at the point
+ * the pointer holds, so what moves under the cursor is what is being moved.
+ * @param {object} rec
+ * @returns {HTMLElement}
+ */
+function buildGrip(rec) {
+  const grip = el('span', {
+    class: 'row__grip',
+    'aria-hidden': 'true',
+    draggable: 'true',
+    title: 'Drag to reorder',
+  });
+  grip.addEventListener('dragstart', (e) => {
+    const row = grip.closest('.row');
+    const listEl = row && row.parentElement;
+    if (!row || !listEl) return;
+    endCardDrag(); // a previous drag whose dragend never arrived
+    cardDrag = { listEl, videoId: rec.videoId, x: e.clientX, y: e.clientY, frame: 0, lastTick: 0 };
+    document.addEventListener('dragover', onDocumentDragOver);
+    document.addEventListener('dragleave', onDocumentDragLeave);
+    document.addEventListener('mousemove', onDocumentMouseMove);
+    cardDrag.frame = requestAnimationFrame(dragScrollTick);
+    e.dataTransfer.effectAllowed = 'move';
+    // Some data is required for Firefox to start the drag at all; a private
+    // type, so nothing else on the page (the URL field) accepts it as text.
+    e.dataTransfer.setData(CARD_DRAG_TYPE, rec.videoId);
+    const r = row.getBoundingClientRect();
+    e.dataTransfer.setDragImage(row, e.clientX - r.left, e.clientY - r.top);
+    row.classList.add('row--dragging');
+  });
+  grip.addEventListener('dragend', () => {
+    const row = grip.closest('.row');
+    if (row) row.classList.remove('row--dragging');
+    endCardDrag();
+  });
+  return grip;
+}
+
 /**
  * Build a single queue row (<li>). All text is set safely.
  * @param {object} rec video record
  * @param {object} handlers { onSkip(id), onPlay(id), onCardSpeed(id, speed),
- *        cardMenu(rec)? }. cardMenu is OPTIONAL and returns this card's menu
- *        model — an array of { label, onSelect, disabled? } descriptors; its
- *        presence AND a non-empty return are together what render the card
- *        menu, so a page can suppress it per record without a second flag.
- *        stash-page.js passes no such key, so its cards render none. It
- *        runs during row construction, once per card: keep it cheap and
- *        side-effect-free.
+ *        cardMenu(rec)?, onReorder(id, toIndex, {pin})? }. cardMenu is OPTIONAL
+ *        and returns this card's menu model — an array of { label, onSelect,
+ *        disabled? } descriptors; its presence AND a non-empty return are
+ *        together what render the card menu, so a page can suppress it per
+ *        record without a second flag. It runs during row construction, once
+ *        per card: keep it cheap and side-effect-free. onReorder is OPTIONAL
+ *        too, and its presence is what renders the drag grip (see buildGrip);
+ *        queueBand() and scrollQueueBy(dy) beside it drive the drag's edge
+ *        auto-scroll, the page answering which element scrolls the list.
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} resolveChannel the
  *        calling page's channel resolver (see buildChannelBadge)
  * @param {string} [skipLabel='Skip'] visible label for the mark button
@@ -995,16 +1243,24 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     noEmbed ? [youtubeBtn, skipBtn, menu] : [playBtn, speedGroup, skipBtn, menu]
   );
 
+  // The drag grip, only for a page that can reorder (see buildGrip). It sits
+  // over the thumbnail, OUTSIDE its link — inside, a press would also be a click
+  // on the link, and the link's own drag would compete.
+  const reorderable = typeof handlers.onReorder === 'function';
+  const classes = ['row'];
+  if (noEmbed) classes.push('row--noembed');
+  if (reorderable) classes.push('row--reorderable');
+
   const li = el(
     'li',
     {
-      class: noEmbed ? 'row row--noembed' : 'row',
+      class: classes.join(' '),
       tabindex: '0',
       role: 'listitem',
       dataset: { videoId: rec.videoId },
       'aria-label': `${rec.title}, ${rec.channelTitle || 'unknown channel'}`,
     },
-    [thumbBtn, meta, actions]
+    [thumbBtn, reorderable ? buildGrip(rec) : null, meta, actions]
   );
 
   // Reflect the record's initial state (marked videos render greyed on load).
@@ -1037,6 +1293,11 @@ export function renderQueue(listEl, queue, handlers, resolveChannel, more = null
   // its document listeners come off with it and the reference never dangles.
   closeCardMenu();
   clear(listEl);
+  if (typeof handlers.onReorder === 'function') {
+    if (!reorderLists.has(listEl)) bindReorderList(listEl);
+    const { onReorder, queueBand, scrollQueueBy } = handlers;
+    reorderLists.set(listEl, { onReorder, queueBand, scrollQueueBy });
+  }
   for (const rec of queue) {
     listEl.append(buildQueueRow(rec, handlers, resolveChannel, skipLabel));
   }
