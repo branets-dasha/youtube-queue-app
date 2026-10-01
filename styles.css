@@ -894,9 +894,9 @@ body.app-active .blocked-overlay {
    the card and the page's right edge with it (a 175px viewport put the box at
    x = 207). Wrapped at its own spaces is the least-bad reading there.
    A CONTAINER query, not a media query, because the question is about this column
-   rather than the viewport: the container is .row__sub / .player__meta (see the
-   container-type on each) and a size query reads its CONTENT box — exactly the
-   width left after the avatar's indent, on either page and in either layout.
+   rather than the viewport: the container is .row__sub (see its container-type)
+   and a size query reads its CONTENT box — exactly the width left after the
+   avatar's indent, on either page and in either layout.
    150px is the widest a short-month timestamp runs across locales ("Sep 24, 2026,
    05:00 PM" and the like) plus slack, and erring HIGH is the safe direction: above
    the true threshold the cost is a date split over two lines, below it a page that
@@ -907,6 +907,21 @@ body.app-active .blocked-overlay {
   .row__time-abs {
     white-space: normal;
   }
+}
+/* The bar needs no threshold: there "· date" is ONE atomic box (renderPlayerMeta
+   in js/ui.js), so a date that does not fit moves WHOLE to the next line, dot
+   and all — below the avatar, where a line is the row's full width — and wraps
+   at its own spaces only when even that cannot hold it. Exact at every width
+   and in every locale, where a threshold has to guess the widest label
+   ("Scheduled …" in pt-BR runs 227px). `top` keeps the dot on a wrapped date's
+   FIRST line; an inline-block's baseline is its last. */
+.player__date {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+}
+.player__date .row__time-abs {
+  white-space: normal;
 }
 
 /* Channel avatar (always present — image or letter placeholder — so the sub-row,
@@ -930,15 +945,15 @@ body.app-active .blocked-overlay {
   line-height: 1;
   text-transform: uppercase;
 }
-/* In a meta row and in a channel row alike, it is out of flow, pinned to the
-   row's left edge
+/* In a card's meta row and in a channel row alike, it is out of flow, pinned to
+   the row's left edge
    and centred on the row's FULL height, which is what centres it against a name
    that has wrapped. It stays a DESCENDANT of .row__channel-link, so a click on
    it still follows the link: out of flow is a geometry exemption, not a
    hit-testing one. (position blockifies the placeholder's inline-flex to flex,
-   so its letter stays centred.) */
+   so its letter stays centred.) The now-playing bar floats it instead; see
+   .player__meta. */
 .row__sub .row__avatar,
-.player__meta .row__avatar,
 .chan__identity .row__avatar {
   position: absolute;
   left: 0;
@@ -1447,7 +1462,7 @@ body.app-active #app-main.app[hidden] {
      info and controls all live in this wrapper, so the info still aligns to the
      video's LEFT edge and the right-aligned controls to its RIGHT edge. */
   width: 100%;
-  /* Query container: whether the player__bar can hold info + controls side by
+  /* Query container: whether the player__bar can hold title + controls side by
      side depends on THIS wrapper's width (which tracks the video), NOT the
      viewport — so the stack-order switch below is driven by a @container query.
      It now fires in the STACKED layout only: the frame's 1080px floor holds the
@@ -1509,32 +1524,24 @@ body.app-active #app-main.app[hidden] {
 .player__empty-text {
   margin: 0;
 }
+/* Title and controls side by side, then the channel/date row (#player-meta)
+   across the FULL width beneath both — under the controls was dead space. All
+   by auto-placement in SOURCE order: the meta row is last in the markup and
+   spans both columns, so Tab runs title → controls → channel as the eye does.
+   The title's track has a 0 minimum, so a long title wraps within it rather than
+   pushing the controls off their row; the @container query near the bottom of
+   this file is the one thing that stacks them. */
 .player__bar {
-  display: flex;
-  /* NOWRAP so the controls can NEVER wrap onto a line BELOW the title. As the
-     pane narrows, the info block (below) shrinks and the title wraps to multiple
-     lines within the remaining width while the controls stay pinned right. The
-     ONLY way controls leave this row is the @container query near the bottom of
-     this file, which stacks them ABOVE the title (never below). The controls'
-     own row wraps within itself when it must (see .player__controls); that is
-     not this row wrapping, and it still puts nothing below the title. */
-  flex-wrap: nowrap;
-  align-items: flex-start; /* multi-line title top-aligns with the controls */
-  gap: 10px;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start; /* a multi-line title top-aligns with the controls */
+  gap: 8px 10px;
 }
 /* An author display value overrides the UA [hidden] rule, so hide explicitly.
    Hidden whenever nothing is playing; .player's flex `gap` applies only BETWEEN
    visible items, so no empty box, border or gap is left behind. */
 .player__bar[hidden] {
   display: none;
-}
-.player__info {
-  min-width: 0; /* allow the flex item to shrink below its content's width */
-  flex: 1 1 0; /* shrink/grow from a 0 basis so the title wraps instead of pushing */
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 .player__title {
   margin: 0;
@@ -1546,17 +1553,43 @@ body.app-active #app-main.app[hidden] {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-/* Player info meta row (avatar + channel + date), mirroring a card's meta row —
-   one in-flow block over an out-of-flow avatar, for the reasons in .row__sub. */
+/* The now-playing meta row (avatar + channel + dates): a card's meta row bar one
+   thing — the avatar FLOATS instead of leaving the flow, so the text wraps
+   AROUND it: lines beside it are indented, and a long name or the second date
+   returns to the left edge once past it, where a card's row is indented all the
+   way down. The float is still inside .row__channel-link, so a click on it still
+   follows the link; the ring is the one thing it costs (see below).
+   One line still centres on the 36px avatar: the padding lowers the text by half
+   the difference and the float's equal negative margin lifts the avatar back to
+   the top (a float's border box may rise into its container's padding). As a
+   flow root this row grows to hold the float, so one line is a 36px row, as
+   before. 1.35rem is the line: the body's 1.5 × this 0.9rem, in rem because the
+   placeholder avatar sets its own size. No `metarow` container here: the bar's
+   dates wrap by another rule (see .player__date). */
 .player__meta {
-  position: relative;
-  container: metarow / inline-size; /* as .row__sub, and for the same date rule */
-  display: flex;
-  align-items: center;
-  min-height: 36px;
-  padding-left: 42px; /* as .row__sub */
+  --meta-lift: calc((36px - 1.35rem) / 2);
+  display: flow-root;
+  grid-column: 1 / -1;
+  padding-top: var(--meta-lift);
   color: var(--text-dim);
   font-size: 0.9rem;
+}
+.player__meta .row__avatar {
+  float: left;
+  margin: calc(-1 * var(--meta-lift)) 6px 0 0; /* 6px: .row__sub's gap after it */
+}
+/* The link's own outline would trace the floated avatar too — Chrome counts a
+   float among an inline's outline rects, where it skips a positioned box — so
+   here the ring moves onto the NAME, all it ever hugs in a card: the same ring,
+   fragmenting per line the same way. The :not() carries over the pointer rule
+   (.is-pointer-focused, near the top), which can only reach the focused link. */
+.player__meta .row__channel-link:focus-visible {
+  outline: none;
+}
+.player__meta .row__channel-link:focus-visible:not(.is-pointer-focused) .row__channel {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 /* STRETCH, so the row is one height: .btn--icon (❤ / ⏭) and .btn--speed size
    themselves differently, and a base .btn's height is font-dependent besides.
@@ -1571,13 +1604,11 @@ body.app-active #app-main.app[hidden] {
      the two-pane layout, so both bar layouts keep their single line. Chosen over
      relaxing the 3.5rem min-width below, which does fit one line at 320px but at
      36–55px a button, neither an even row nor a touch target, on exactly the
-     screens that are touched. This is the controls' OWN line only — .player__bar
-     stays nowrap, so they still never drop BELOW the title; the @container query
-     alone moves them, and above it. The stretch works per line, so each line is
-     its own tallest control's height. */
+     screens that are touched. This is the controls' OWN line only — they still
+     never leave the title's row; the @container query alone moves them. The
+     stretch works per line, so each line is its own tallest control's height. */
   flex-wrap: wrap;
   gap: 8px;
-  flex: 0 0 auto;
 }
 /* The now-playing video's description, below the sticky frame + info bar. Scrolls
    with the player pane (.workspace__player is overflow-y:auto). Preserves the
@@ -1763,7 +1794,7 @@ body.app-active #app-main.app[hidden] {
 }
 
 /* Player bar stacking, driven by the PLAYER PANE width (see container-type on
-   .player), so it fires wherever the bar is too narrow to hold info + controls on
+   .player), so it fires wherever the bar is too narrow to hold title + controls on
    one line. In practice that is the STACKED layout alone: the frame's 1080px
    floor keeps the two-pane column at 636px or more, clear of this threshold even
    once the pane's own scrollbar takes 15px off it. That is deliberate — two
@@ -1774,15 +1805,15 @@ body.app-active #app-main.app[hidden] {
    screenshot sits at ~34.4rem, right on the old 34rem edge) while keeping genuinely
    wide panes side by side (e.g. a ~620px / ~38.75rem laptop pane, and far wider
    desktop panes). Erring toward stacking is the desired direction. Above it, the
-   wide info-left / controls-right layout and the equal-width buttons are
+   wide title-left / controls-right layout and the equal-width buttons are
    unchanged.
-   The stacked bar keeps SOURCE order — title, then channel/date, then the
-   controls — so the row of buttons sits BELOW the two links it follows in the
-   tab order. It used to be hoisted above them with `order: -1`, which put the
-   focus order and the visual order at odds for every keyboard user. */
+   The stacked bar keeps SOURCE order — title, then the controls, then
+   channel/dates — one column of the same grid, so the visual order is the tab
+   order here too. Never reorder it (`order`, explicit grid rows): that puts
+   focus order and visual order at odds for every keyboard user. */
 @container player (max-width: 38rem) {
   .player__bar {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
   }
 }

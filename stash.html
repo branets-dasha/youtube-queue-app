@@ -237,10 +237,7 @@
                    control is a disabled stub in that state, so the empty player
                    reads as just the frame. Ships hidden — nothing plays at load. -->
               <div id="player-bar" class="player__bar" hidden>
-                <div class="player__info">
-                  <p id="player-title" class="player__title" aria-live="polite"></p>
-                  <div id="player-meta" class="player__meta"></div>
-                </div>
+                <p id="player-title" class="player__title" aria-live="polite"></p>
                 <div class="player__controls">
                   <button
                     id="like-btn"
@@ -293,6 +290,7 @@
                     ⏭
                   </button>
                 </div>
+                <div id="player-meta" class="player__meta"></div>
               </div>
               <div id="player-description" class="player__description" hidden></div>
             </div>

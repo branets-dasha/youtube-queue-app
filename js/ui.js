@@ -11,7 +11,7 @@
 // and everything here simply renders the answer it is handed.
 
 import { STATE_NEW } from './config.js';
-import { formatDuration, isShort, isUnaired, parseDescription, sortTime } from './queue.js';
+import { formatDuration, isShort, isUnaired, parseDescription, sortTime, sortTimeLabel } from './queue.js';
 
 // ---------------------------------------------------------------------------
 // Small DOM helpers
@@ -315,12 +315,13 @@ function metaSeparator() {
 
 /**
  * Build a meta line: ONE block holding the channel avatar, the channel name and
- * then `trailing` — the separator + the posted date, at both call sites.
+ * then `trailing` — the separator + the posted date, at both call sites (the
+ * bar may add a second separator + date; see renderPlayerMeta).
  * Everything in it is ordinary inline content bar the avatar, which the caller's
- * CSS lifts out of the flow (.row__sub .row__avatar); that is what lets a
- * wrapped channel name's later lines sit beside the avatar rather than under it
- * and the date ride along on the tail of the last one instead of being pushed to
- * a line of its own.
+ * CSS lifts out of the flow (.row__sub .row__avatar) — or floats, in the bar
+ * (.player__meta) — so a wrapped channel name's later lines sit beside the avatar
+ * (or wrap under it) and the date rides along on the tail of the last one
+ * instead of being pushed to a line of its own.
  *
  * Avatar and name TOGETHER are the anchor to the channel on YouTube (new tab,
  * noopener) when the record carries a channelId, so clicking either navigates —
@@ -335,8 +336,8 @@ function metaSeparator() {
  * click-to-play handler. With no channelId the two are dropped in unlinked, and
  * the block around them is the same either way.
  *
- * Returns the block itself: it is the caller's flex row's ONLY in-flow child
- * (a card's .row__sub, or #player-meta).
+ * Returns the block itself: it is the caller's row's ONLY in-flow child (a
+ * card's .row__sub, or #player-meta).
  *
  * The channel's title and avatar are NOT derived here: `resolveChannel` — the
  * calling page's policy, bound to that page's channels map — answers both, and
@@ -414,6 +415,13 @@ export function renderPlayerTitle(container, rec) {
  * differently. Pass rec = null to clear it; the resolver is then never called,
  * which is why the clearing callers may omit it. XSS-safe (textContent,
  * img.src, encodeURIComponent via buildAvatar/formatters).
+ *
+ * Where a card shows only the sort time, the bar ALSO shows `publishedAt` when
+ * the two print differently, each date then named: "Aired … · Published …".
+ * "Differently" is judged on the printed strings, so two instants inside one
+ * minute stay a single bare date. Each date and the separator before it are ONE
+ * atomic box (.player__date), so the line breaks only before a dot, and a date
+ * splits at its own spaces only when a whole line cannot hold it (styles.css).
  * @param {HTMLElement} container
  * @param {object|null} rec video record
  * @param {(rec:object) => {title?:string,avatarUrl?:string}} [resolveChannel]
@@ -423,26 +431,39 @@ export function renderPlayerMeta(container, rec, resolveChannel) {
   if (!container) return;
   clear(container);
   if (!rec) return;
-  container.append(buildChannelBadge(rec, resolveChannel, [...metaSeparator(), buildTime(rec)]));
+  const now = Date.now();
+  const at = sortTime(rec);
+  const both =
+    !Number.isNaN(Date.parse(rec.publishedAt)) &&
+    formatAbsolute(rec.publishedAt) !== formatAbsolute(at);
+  const times = both
+    ? [buildTime(at, sortTimeLabel(rec, now)), buildTime(rec.publishedAt, 'Published')]
+    : [buildTime(at, isUnaired(rec, now) ? sortTimeLabel(rec, now) : null)];
+  // The dot goes INSIDE the box: a line may break before any atomic inline, a
+  // no-break space notwithstanding, so outside it the dot would dangle.
+  const dates = times.flatMap((time) => {
+    const [space, ...dot] = metaSeparator();
+    return [space, el('span', { class: 'player__date' }, [...dot, time])];
+  });
+  container.append(buildChannelBadge(rec, resolveChannel, dates));
 }
 
 /**
- * The meta row's date, for a card and the now-playing bar alike: the record's
- * SORT time (queue.js's sortTime), so a premiere shows when it airs — the very
- * time it is filed at — and an unaired one says so in words, which is what a
- * screen reader gets (the thumbnail badge is aria-hidden like SHORTS). A
- * premiere has an uploaded file and so a duration; a scheduled live stream has
- * none, which is the only tell the API gives between the two.
- * @param {object} rec video record
+ * A meta row's date: the instant `at`, with `label` (if any) leading it inside
+ * the same <time> — what a screen reader gets, the thumbnail badge being
+ * aria-hidden like SHORTS.
+ * @param {string} at ISO timestamp
+ * @param {string|null} [label]
  * @returns {HTMLElement}
  */
-function buildTime(rec) {
-  const at = sortTime(rec);
-  let text = formatAbsolute(at);
-  if (isUnaired(rec, Date.now())) {
-    text = `${rec.durationSeconds > 0 ? 'Premieres' : 'Streams'} ${text}`;
-  }
-  return el('time', { class: 'row__time-abs', datetime: at, text, title: at });
+function buildTime(at, label = null) {
+  const date = formatAbsolute(at);
+  return el('time', {
+    class: 'row__time-abs',
+    datetime: at,
+    text: label ? `${label} ${date}` : date,
+    title: at,
+  });
 }
 
 /**
@@ -1052,7 +1073,8 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
   }
   // Premieres and live streams: UPCOMING until it airs (the date says when),
   // LIVE while the last re-check found it on air. Top-RIGHT, clear of SHORTS.
-  if (isUnaired(rec, Date.now())) {
+  const now = Date.now();
+  if (isUnaired(rec, now)) {
     overlays.push(el('span', { class: 'row__live', 'aria-hidden': 'true', text: 'UPCOMING' }));
   } else if (rec.liveBroadcastContent === 'live') {
     overlays.push(
@@ -1149,7 +1171,9 @@ export function buildQueueRow(rec, handlers, resolveChannel, skipLabel = 'Skip')
     text: rec.title, // safe
   });
 
-  const timeAbs = buildTime(rec);
+  // The SORT time, so a premiere shows when it airs (the very time it is filed
+  // at), and an unaired one says so in words.
+  const timeAbs = buildTime(sortTime(rec), isUnaired(rec, now) ? sortTimeLabel(rec, now) : null);
   const channelBadge = buildChannelBadge(rec, resolveChannel, [
     ...metaSeparator(),
     timeAbs,
