@@ -97,6 +97,28 @@ export function isUnaired(rec, nowMs) {
 }
 
 /**
+ * The word naming WHICH time a record's sortTime is, when that is a start time
+ * rather than `publishedAt` — null when the record is ordered by its
+ * publishedAt (an ordinary upload, or a start at or before it).
+ *
+ * Unaired: 'Premieres' or 'Streams' — a premiere has an uploaded file and so a
+ * duration, a scheduled live stream has none, which is the only tell the API
+ * gives between the two. Once there is an actual start, 'Aired'. A schedule that
+ * has passed with no actual start on record is 'Scheduled': no refresh has
+ * re-checked it yet (and the stash never does), so nothing says it aired. Pure:
+ * the caller passes the time.
+ * @param {object|null|undefined} rec
+ * @param {number} nowMs epoch millis
+ * @returns {'Premieres'|'Streams'|'Aired'|'Scheduled'|null}
+ */
+export function sortTimeLabel(rec, nowMs) {
+  if (!rec) return null;
+  if (isUnaired(rec, nowMs)) return rec.durationSeconds > 0 ? 'Premieres' : 'Streams';
+  if (sortTime(rec) === rec.publishedAt) return null;
+  return rec.actualStartTime ? 'Aired' : 'Scheduled';
+}
+
+/**
  * Whether a record needs its videos.list details (re-)requested: a backfilled
  * field is missing, or it is still upcoming/live. The second is a RE-CHECK on
  * every refresh — a premiere can be rescheduled and its actual start exists only

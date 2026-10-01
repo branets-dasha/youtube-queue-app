@@ -45,6 +45,7 @@ import {
   normalizeKey,
   sortTime,
   isUnaired,
+  sortTimeLabel,
   needsDetails,
 } from './queue.js';
 import { SHORTS_MAX_SECONDS } from './config.js';
@@ -2181,6 +2182,24 @@ test('isUnaired: a future schedule with no actual start, judged against the cloc
   assert.equal(isUnaired(premiere({ actualStartTime: PB }), before), false);
   assert.equal(isUnaired(rec('v', PA, 'new'), before), false);
   assert.equal(isUnaired(null, before), false);
+});
+
+test('sortTimeLabel names the start time a record files at, and nothing else', () => {
+  const before = Date.parse(PB);
+  const after = Date.parse('2026-03-11T00:00:00Z');
+  // Unaired: a premiere has a duration, a scheduled stream has none.
+  assert.equal(sortTimeLabel(premiere({ durationSeconds: 600 }), before), 'Premieres');
+  assert.equal(sortTimeLabel(premiere({ durationSeconds: 0 }), before), 'Streams');
+  assert.equal(sortTimeLabel(premiere(), before), 'Streams');
+  assert.equal(sortTimeLabel(premiere({ actualStartTime: PB }), before), 'Aired');
+  // Past its schedule with no actual start on record: nothing says it aired.
+  assert.equal(sortTimeLabel(premiere({ durationSeconds: 600 }), after), 'Scheduled');
+  // Ordered by publishedAt: an ordinary upload, a start at or before publishing, a bad start.
+  assert.equal(sortTimeLabel(rec('v', PA, 'new'), before), null);
+  assert.equal(sortTimeLabel({ ...rec('v', PC, 'new'), actualStartTime: PA }, before), null);
+  assert.equal(sortTimeLabel(premiere({ scheduledStartTime: PA }), before), null);
+  assert.equal(sortTimeLabel(premiere({ scheduledStartTime: 'garbage' }), after), null);
+  assert.equal(sortTimeLabel(null, before), null);
 });
 
 test('firstPlayable / nextPlayable skip an unaired video, and only when given the time', () => {
