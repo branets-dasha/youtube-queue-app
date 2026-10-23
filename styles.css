@@ -1641,6 +1641,179 @@ body.app-active #app-main.app[hidden] {
 .player__desc-link:focus-visible {
   text-decoration: underline;
 }
+/* The now-playing video's comments (js/comments.js), under the description and
+   inset like it. That inset is also what keeps every ring in here — the .btn's
+   4px reach, a comment landing's 6px — well clear of the pane's clip edge. */
+.player__comments {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start; /* the two .btns keep their own width */
+  gap: 16px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.player__comments[hidden] {
+  display: none;
+}
+/* The ladder's last rung when the button that loaded a page goes (tabindex -1):
+   a landing, not a control, and as tall as every comment in it — the
+   .queue:focus / .empty:focus reasoning. */
+.player__comments:focus {
+  outline: none;
+}
+.comments__list,
+.comments__replies {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.comments__list {
+  align-self: stretch;
+}
+.comments__replies {
+  gap: 12px;
+}
+/* A sub-thread (queue.js's nestReplies): one level deeper, its avatars under
+   the root reply's text (24px avatar + the 10px gap). */
+.comments__subreplies {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0 0 0 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.comments__more-nested {
+  margin: 8px 0 0 30px; /* 34px, less the text button's own -4px pull */
+}
+/* The disclosure's target: the root replies plus their "Show more replies". */
+.comments__replies-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+.comments__replies-panel[hidden] {
+  display: none;
+}
+.comments__replies-panel .comments__replies {
+  align-self: stretch;
+}
+.comment {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-radius: 6px;
+}
+/* A LANDING (focused only by script, when the button that loaded it went away),
+   ringed so a keyboard user sees where focus went. 6px reach, inside the
+   section's 14px inset. */
+.comment:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+.comment .row__avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 0.95rem;
+}
+.comments__replies .row__avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 0.75rem;
+}
+.comment__body {
+  min-width: 0;
+}
+.comment__head {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.comment__author {
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.comment__dot {
+  opacity: 0.6;
+}
+.comment__text {
+  margin: 2px 0 0;
+  white-space: pre-wrap; /* the comment's own line breaks */
+  overflow-wrap: anywhere; /* .row__title's rule: no token runs off the pane */
+  line-height: 1.5;
+}
+/* Under the comment's text, past its avatar (32px + the 10px gap). */
+.comments__thread-tail {
+  padding-left: 42px;
+  margin-top: 4px;
+}
+/* A text button, the description links' accent: a .btn per thread (the reply
+   toggle, "Show more replies", a sub-thread's "Show N more") would be a column
+   of boxes louder than the comments. The toggle's chevron is alt-text-free generated content, so its
+   name stays "3 replies". */
+.comments__text-btn {
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.comments__toggle::before {
+  content: '▸' / '';
+  display: inline-block;
+  width: 1em;
+}
+.comments__toggle[aria-expanded='true']::before {
+  content: '▾' / '';
+}
+.comments__text-btn:hover {
+  text-decoration: underline;
+}
+.comments__text-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.comments__text-btn[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.comments__status {
+  margin: 0;
+  color: var(--text-dim);
+  border-radius: 4px;
+}
+.comments__status:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* A phone-width player: the two reply indents took ~40% of the column (124px
+   of 307 at a 360px viewport), so they shrink to a step that still reads as
+   nesting and stop lining avatars up under the text above. LAST in the block,
+   since it overrides rules of equal specificity above it. */
+@container player (max-width: 30rem) {
+  .comments__thread-tail {
+    padding-left: 20px;
+  }
+  .comments__subreplies {
+    padding-left: 16px;
+  }
+  .comments__more-nested {
+    margin-left: 12px;
+  }
+}
 .player__speeds {
   display: flex;
   /* WRAPS, so this group is not the one thing .player__controls' own wrap cannot
