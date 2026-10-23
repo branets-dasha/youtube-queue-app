@@ -1583,3 +1583,125 @@ export function reconcileStash(current, fresh, inFlight) {
 
   return { records, changed };
 }
+
+// ---------------------------------------------------------------------------
+// Comments (the now-playing video's, loaded on demand by comments.js)
+// ---------------------------------------------------------------------------
+
+/**
+ * The items of a newly fetched page (comment threads) that are not already
+ * shown, in page order. Nothing is rendered twice: a thread's reply panel id
+ * hangs off it, and two copies would leave one disclosure controlling the
+ * other's panel. Tolerant of malformed entries (no id: dropped). Mutates
+ * neither input.
+ * @param {Array<{id:string}>} shown items already on screen
+ * @param {Array<{id:string}>} incoming the page just fetched
+ * @returns {Array<{id:string}>}
+ */
+export function unseenById(shown, incoming) {
+  const seen = new Set();
+  for (const t of Array.isArray(shown) ? shown : []) {
+    if (t && t.id) seen.add(t.id);
+  }
+  const out = [];
+  for (const t of Array.isArray(incoming) ? incoming : []) {
+    if (!t || !t.id || seen.has(t.id)) continue;
+    seen.add(t.id);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Whether a thread's free replies — the ones commentThreads.list hands back
+ * with it — already are ALL of its replies, so expanding it needs no request.
+ * A missing or non-numeric total counts as 0.
+ * @param {{replies?:Array<object>, totalReplyCount?:number}|null} thread
+ * @returns {boolean}
+ */
+export function repliesComplete(thread) {
+  if (!thread) return true;
+  const have = Array.isArray(thread.replies) ? thread.replies.length : 0;
+  const total = Number.isFinite(thread.totalReplyCount) ? thread.totalReplyCount : 0;
+  return have >= total;
+}
+
+// What may follow a mentioned name for the mention to END there: anything but a
+// letter, digit or underscore, or one of . - · leading into one — those carry a
+// handle on, so "@ann.lee" is never a mention of "@ann". A class rather than a
+// handle regex: real handles hold dots, hyphens and Cyrillic.
+const HANDLE_CONTINUES = /^(?:[\p{L}\p{N}_]|[.\-·][\p{L}\p{N}_])/u;
+// Whitespace and invisible format marks (bidi embeddings and the like) a reply
+// can open with before its mention.
+const LEADING_MARKS = /^[\s\p{Cf}]+/u;
+
+/**
+ * Group one thread's replies into sub-threads by @mention — a HEURISTIC: the
+ * API is two levels only (comment → replies) and says nothing about who a reply
+ * answers, where YouTube's own page nests them.
+ *
+ * Replies are walked oldest first. One whose text OPENS with the name of an
+ * author who replied EARLIER in the thread (case-insensitive, the longest known
+ * name winning, the name followed by anything that does not continue a handle)
+ * joins the sub-thread of that author's most recent earlier reply — its ROOT, so
+ * nesting is one level deep, as on YouTube. A reply that mentions no one, mentions
+ * someone mid-text, mentions an author who only replies later, or mentions the
+ * TOP-LEVEL comment's author is a root of its own. Only names in @handle form
+ * take part: a bare display name opening a reply is too often just a word.
+ *
+ * Roots are ordered by likes (ties: earlier first), each one's nested replies by
+ * time. Tolerant of malformed input: null / id-less entries dropped, a repeated
+ * id taken once, an unparseable publishedAt treated as the latest. Mutates
+ * nothing; the replies in the result are the input objects.
+ * @param {Array<{id:string, authorName:string, text:string, likeCount:number, publishedAt:string}>} replies
+ * @param {string} [topAuthor] the top-level comment's authorName
+ * @returns {Array<{reply:object, replies:Array<object>}>}
+ */
+export function nestReplies(replies, topAuthor) {
+  const norm = (name) => (typeof name === 'string' ? name.trim().toLowerCase() : '');
+  const time = (r) => {
+    const t = Date.parse(r.publishedAt);
+    return Number.isNaN(t) ? Infinity : t;
+  };
+  const seen = new Set();
+  const chrono = [];
+  for (const r of Array.isArray(replies) ? replies : []) {
+    if (!r || !r.id || seen.has(r.id)) continue;
+    seen.add(r.id);
+    chrono.push({ r, t: time(r), at: chrono.length });
+  }
+  // Oldest first; equal times keep the order given (the API's own).
+  chrono.sort((a, b) => (a.t === b.t ? a.at - b.at : a.t < b.t ? -1 : 1));
+
+  const top = norm(topAuthor);
+  // Mentionable names, LONGEST FIRST, and for each the root its author's most
+  // recent reply sits under. The top-level author is a name too — so it can win
+  // the longest match — but always resolves to "root".
+  const names = top.startsWith('@') ? [top] : [];
+  const rootOf = new Map();
+  const roots = [];
+  chrono.forEach(({ r }, at) => {
+    const text = String(r.text || '').replace(LEADING_MARKS, '').toLowerCase();
+    const name = names.find((n) => text.startsWith(n) && !HANDLE_CONTINUES.test(text.slice(n.length)));
+    let root = name && name !== top ? rootOf.get(name) : null;
+    if (root) {
+      root.replies.push(r);
+    } else {
+      root = { reply: r, replies: [], at };
+      roots.push(root);
+    }
+    const author = norm(r.authorName);
+    if (author.startsWith('@') && author !== top) {
+      if (!rootOf.has(author)) {
+        names.push(author);
+        names.sort((a, b) => b.length - a.length);
+      }
+      rootOf.set(author, root);
+    }
+  });
+
+  const likes = (r) => (Number.isFinite(r.likeCount) ? r.likeCount : 0);
+  return roots
+    .sort((a, b) => likes(b.reply) - likes(a.reply) || a.at - b.at)
+    .map(({ reply, replies: nested }) => ({ reply, replies: nested }));
+}

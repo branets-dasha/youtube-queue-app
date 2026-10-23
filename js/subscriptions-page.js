@@ -101,6 +101,7 @@ import {
   stopPlayback,
 } from './player.js';
 import { showToast } from './toast.js';
+import { initComments } from './comments.js';
 import {
   requestTabLock,
   showBlockedError,
@@ -160,6 +161,10 @@ let paneNav = null;
 // The player frame's focus guard, from page-chrome.js's bindIframeFocusGuard();
 // its one method is the '\' key's deliberate entry into the frame.
 let iframeGuard = null;
+
+// The now-playing video's comments section, from comments.js's initComments();
+// it owns everything inside the section. Set in bindEvents().
+let comments = null;
 
 // DOM references, populated in init().
 const dom = {};
@@ -335,6 +340,7 @@ function cacheDom() {
   dom.playerTitle = byId('player-title');
   dom.playerMeta = byId('player-meta');
   dom.playerDescription = byId('player-description');
+  dom.playerComments = byId('player-comments');
   dom.playerBar = byId('player-bar');
   dom.playerEmpty = byId('player-empty');
   dom.playerEmptyText = byId('player-empty-text');
@@ -372,6 +378,16 @@ function bindEvents() {
   if (dom.startQueueBtn) dom.startQueueBtn.addEventListener('click', onStartQueue);
   if (dom.skipBtn) dom.skipBtn.addEventListener('click', onSkipNext);
   if (dom.likeBtn) dom.likeBtn.addEventListener('click', onLike);
+
+  comments = initComments({
+    container: dom.playerComments,
+    authorize: async () => {
+      if (!hasSession()) showToast('Authorizing with Google…', { type: 'info' });
+      await authorize();
+      updateAuthUi(); // a fresh token flips the status label straight away
+    },
+    onError: handleError,
+  });
 
   document.addEventListener('keydown', onGlobalKeydown);
 
@@ -1467,6 +1483,8 @@ function setPlayerNowPlaying(rec) {
   // Description below the player: clickable in-video timestamps seek the built-in
   // player; plain URLs open in a new tab. Hidden when the record has no description.
   renderDescription(dom.playerDescription, rec, { onSeek: seekTo });
+  // Back to a bare "Load comments" for a different video — nothing fetched.
+  if (comments) comments.setVideo(rec.videoId);
   // A new video loaded: scroll the pane back to the top so the video shows,
   // rather than keeping the previous video's (possibly scrolled) position.
   if (dom.playerPane) dom.playerPane.scrollTop = 0;
@@ -1484,13 +1502,14 @@ function setPlayerNowPlaying(rec) {
 function showPlayerEmpty(caughtUp) {
   // EVERYTHING focusable in the now-playing region is about to be destroyed or
   // hidden: Skip and Like (disabled, under a bar that hides), the title link, the
-  // channel-badge link and the description's timestamp/URL links. One gate for
-  // the lot — the two subtrees, NOT the whole player pane, so focus already on
-  // the pane itself is left where the user put it.
+  // channel-badge link, the description's timestamp/URL links and the comments
+  // section. One gate for the lot — the three subtrees, NOT the whole player
+  // pane, so focus already on the pane itself is left where the user put it.
   const active = document.activeElement;
   const takesFocus =
     (dom.playerBar && dom.playerBar.contains(active)) ||
-    (dom.playerDescription && dom.playerDescription.contains(active));
+    (dom.playerDescription && dom.playerDescription.contains(active)) ||
+    (dom.playerComments && dom.playerComments.contains(active));
 
   // The overlay only COVERS the frame, so a video still running here would go on
   // being heard behind it. A no-op at the sites that arrive with nothing playing.
@@ -1501,6 +1520,7 @@ function showPlayerEmpty(caughtUp) {
   renderPlayerTitle(dom.playerTitle, null);
   renderPlayerMeta(dom.playerMeta, null);
   renderDescription(dom.playerDescription, null, { onSeek: seekTo });
+  if (comments) comments.setVideo(null);
   setVisible(dom.playerEmpty, true);
   if (dom.skipBtn) dom.skipBtn.disabled = true;
   updatePlayingControls(); // stopped -> disable the jump, show/hide "Start the queue"

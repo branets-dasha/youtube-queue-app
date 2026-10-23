@@ -10,7 +10,7 @@
 // the pure resolvers in queue.js (subscriptionChannelInfo / stashChannelInfo),
 // and everything here simply renders the answer it is handed.
 
-import { STATE_NEW } from './config.js';
+import { STATE_NEW, AVATAR_RETRY_MS } from './config.js';
 import { formatDuration, isShort, isUnaired, parseDescription, sortTime, sortTimeLabel } from './queue.js';
 
 // ---------------------------------------------------------------------------
@@ -276,16 +276,30 @@ export function buildAvatar(info) {
   // ever defers a request the viewport does not need yet, and `async` says
   // "never block presentation on this decode" — already the right answer at
   // every call site, from one avatar to two thousand.
+  // No Referer: Google's image hosts answer a burst of hotlinked loads with 429
+  // Too Many Requests, and the throttling keys on the foreign Referer.
   const img = el('img', {
     class: 'row__avatar',
     alt: '', // decorative; the name is rendered beside it
     loading: 'lazy',
     decoding: 'async',
+    referrerpolicy: 'no-referrer',
     width: '36',
     height: '36',
   });
-  // If the avatar fails to load, swap in the placeholder so height stays uniform.
+  // onerror cannot tell a 429 from a dead URL, so ONE retry after a jittered
+  // delay (spread, so a throttled burst does not come straight back as another
+  // burst) — a truly broken URL costs one extra request — then the placeholder,
+  // so height stays uniform. An image no longer in the page is not retried.
+  let retried = false;
   img.onerror = () => {
+    if (!retried) {
+      retried = true;
+      setTimeout(() => {
+        if (img.isConnected) img.src = avatarUrl;
+      }, AVATAR_RETRY_MS * (1 + Math.random()));
+      return;
+    }
     img.onerror = null;
     img.replaceWith(avatarPlaceholder(title));
   };

@@ -97,6 +97,21 @@ export const IDB_KEYPATH = 'videoId';
 // Paging size used for both subscriptions and playlistItems requests.
 export const PAGE_SIZE = 50;
 
+// Comment threads fetched per "Load comments" / "Load more comments" press.
+export const COMMENT_PAGE_SIZE = 20;
+// A thread's replies are fetched WHOLE (they are sorted by likes, which needs
+// every one in hand), at the API's maximum per comments.list call...
+export const REPLY_PAGE_SIZE = 100;
+// ...then shown from memory: this many top-level replies per "Show more
+// replies" press, and this many of a sub-thread's nested replies before its
+// own "Show N more" — sized for how much one press adds to the pane.
+export const REPLY_SHOW_STEP = 20;
+export const NESTED_REPLIES_SHOWN = 3;
+
+// An avatar that fails is retried once, after this delay plus up to as much
+// again of jitter, before it falls back to the letter (ui.js's buildAvatar).
+export const AVATAR_RETRY_MS = 1500;
+
 // Max number of queue CARDS rendered by default — a pure display window. All
 // videos are still fetched/stored and auto-advance runs over the full list; only
 // the rendered cards are limited. "Show all" reveals the rest for the session.

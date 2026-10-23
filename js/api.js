@@ -4,12 +4,12 @@
 // https://www.googleapis.com/youtube/v3 with an Authorization: Bearer header
 // carrying the in-memory OAuth access token. No API key is used.
 //
-// Cost awareness: subscriptions.list, playlistItems.list, videos.list and
-// channels.list each cost 1 quota unit per call (videos.list and channels.list
-// batch up to 50 ids/call, so fetching durations or avatars stays cheap).
-// search.list is NEVER used.
+// Cost awareness: subscriptions.list, playlistItems.list, videos.list,
+// channels.list, commentThreads.list and comments.list each cost 1 quota unit
+// per call (videos.list and channels.list batch up to 50 ids/call, so fetching
+// durations or avatars stays cheap). search.list is NEVER used.
 
-import { API_BASE, PAGE_SIZE } from './config.js';
+import { API_BASE, PAGE_SIZE, COMMENT_PAGE_SIZE, REPLY_PAGE_SIZE } from './config.js';
 import { ensureToken, getToken, requestToken, tokenIsFresh } from './auth.js';
 import { uploadsPlaylistId, compareIso, parseIsoDuration } from './queue.js';
 
@@ -17,6 +17,10 @@ import { uploadsPlaylistId, compareIso, parseIsoDuration } from './queue.js';
  * Error thrown for API-level failures, carrying a machine-usable `kind`:
  *   'auth'      -> 401 / token problem (caller should re-auth)
  *   'quota'     -> 403 quotaExceeded / rateLimitExceeded
+ *   'commentsDisabled' -> 403 commentsDisabled: the video's comments are turned
+ *                  off (incl. every made-for-kids video) — a property of the
+ *                  video, not a failure, so comments.js shows it in place and
+ *                  no page router ever sees it
  *   'forbidden' -> other 403
  *   'notfound'  -> 404 (channel/playlist gone)
  *   'network'   -> fetch failed (offline, CORS, etc.)
@@ -146,6 +150,9 @@ async function apiGet(path, params, _retried = false) {
         'quota',
         403
       );
+    }
+    if (reason === 'commentsDisabled') {
+      throw new ApiError('Comments are turned off for this video.', 'commentsDisabled', 403);
     }
     throw new ApiError(apiMessage, 'forbidden', 403);
   }
@@ -463,6 +470,91 @@ export async function getChannelAvatars(channelIds) {
     }
   }
   return out;
+}
+
+/**
+ * One comment resource (a top-level comment or a reply) as a plain object.
+ * `text` is snippet.textDisplay, which is PLAIN TEXT only because every request
+ * here passes textFormat=plainText — the default is HTML. Not textOriginal: the
+ * API guarantees that one only to the comment's own author.
+ * @param {object} c a comment resource
+ * @returns {{id:string, authorName:string, authorAvatarUrl:string, text:string, likeCount:number, publishedAt:string, edited:boolean}|null}
+ */
+function shapeComment(c) {
+  if (!c || !c.id) return null;
+  const s = c.snippet || {};
+  return {
+    id: c.id,
+    authorName: s.authorDisplayName || '',
+    authorAvatarUrl: s.authorProfileImageUrl || '',
+    text: s.textDisplay || '',
+    likeCount: Number.isFinite(s.likeCount) ? s.likeCount : 0,
+    publishedAt: s.publishedAt || '',
+    edited: !!(s.updatedAt && s.publishedAt && s.updatedAt !== s.publishedAt),
+  };
+}
+
+/**
+ * One page of a video's top-level comments, in YouTube's "Top comments" order:
+ * commentThreads.list?part=snippet,replies (1 quota unit). Each thread carries
+ * the replies that ride along free — a SUBSET whenever it holds fewer than
+ * `totalReplyCount` (getCommentReplies fetches the whole set).
+ * Comments turned off is the ApiError kind 'commentsDisabled'.
+ * @param {string} videoId
+ * @param {string} [pageToken] a previous page's nextPageToken
+ * @returns {Promise<{threads:Array<{id:string, comment:object, totalReplyCount:number, replies:Array<object>}>, nextPageToken:(string|null)}>}
+ */
+export async function getCommentThreads(videoId, pageToken) {
+  const data = await apiGet('commentThreads', {
+    part: 'snippet,replies',
+    videoId,
+    order: 'relevance',
+    textFormat: 'plainText',
+    maxResults: COMMENT_PAGE_SIZE,
+    pageToken,
+  });
+  const threads = [];
+  for (const item of data.items || []) {
+    const snip = item.snippet || {};
+    const comment = shapeComment(snip.topLevelComment);
+    if (!item.id || !comment) continue;
+    const free = (item.replies && item.replies.comments) || [];
+    threads.push({
+      id: item.id,
+      comment,
+      totalReplyCount: Number.isFinite(snip.totalReplyCount) ? snip.totalReplyCount : 0,
+      replies: free.map(shapeComment).filter(Boolean),
+    });
+  }
+  return { threads, nextPageToken: data.nextPageToken || null };
+}
+
+/**
+ * EVERY reply to one top-level comment: comments.list?parentId=…, paged to the
+ * end at REPLY_PAGE_SIZE per call (1 quota unit each), in the API's order
+ * (oldest first; it takes no order parameter). All or nothing: a page that
+ * fails throws, and the pages before it go with it.
+ * @param {string} parentId the top-level comment's id (a thread's comment.id)
+ * @returns {Promise<Array<object>>} shaped as getCommentThreads' comments
+ */
+export async function getCommentReplies(parentId) {
+  const replies = [];
+  let pageToken = '';
+  do {
+    const data = await apiGet('comments', {
+      part: 'snippet',
+      parentId,
+      textFormat: 'plainText',
+      maxResults: REPLY_PAGE_SIZE,
+      pageToken,
+    });
+    for (const item of data.items || []) {
+      const reply = shapeComment(item);
+      if (reply) replies.push(reply);
+    }
+    pageToken = data.nextPageToken || '';
+  } while (pageToken);
+  return replies;
 }
 
 /**

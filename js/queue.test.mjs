@@ -47,6 +47,9 @@ import {
   isUnaired,
   sortTimeLabel,
   needsDetails,
+  unseenById,
+  repliesComplete,
+  nestReplies,
 } from './queue.js';
 import { SHORTS_MAX_SECONDS } from './config.js';
 
@@ -2218,6 +2221,129 @@ test('needsDetails: a missing field, no live marker yet, or still upcoming/live'
   assert.equal(needsDetails({ ...done, liveBroadcastContent: 'upcoming' }), true);
   assert.equal(needsDetails({ ...done, liveBroadcastContent: 'live' }), true);
   assert.equal(needsDetails({ ...done, durationSeconds: undefined }), true);
+});
+
+test('unseenById: drops items already shown and repeats within the page, keeps page order', () => {
+  const t = (id) => ({ id });
+  const shown = [t('a'), t('b')];
+  const incoming = [t('c'), t('a'), t('d'), t('c'), null, {}, t('b')];
+  assert.deepEqual(unseenById(shown, incoming).map((x) => x.id), ['c', 'd']);
+  assert.equal(shown.length, 2); // inputs untouched
+  assert.equal(incoming.length, 7);
+  assert.deepEqual(unseenById(undefined, [t('x')]).map((x) => x.id), ['x']);
+  assert.deepEqual(unseenById([t('x')], undefined), []);
+});
+
+test('repliesComplete: the free replies hold every reply, or a request is needed', () => {
+  const r = (n) => Array.from({ length: n }, (_, i) => ({ id: `r${i}` }));
+  assert.equal(repliesComplete({ totalReplyCount: 3, replies: r(3) }), true);
+  assert.equal(repliesComplete({ totalReplyCount: 0, replies: [] }), true);
+  assert.equal(repliesComplete({ totalReplyCount: 7, replies: r(5) }), false);
+  assert.equal(repliesComplete({ totalReplyCount: 2 }), false); // no replies array at all
+  assert.equal(repliesComplete({ replies: r(1) }), true); // missing total counts as 0
+  assert.equal(repliesComplete(null), true);
+});
+
+// nestReplies fixtures: `at` is minutes after a fixed instant, so order is explicit.
+const reply = (id, authorName, text, at, likeCount = 0) => ({
+  id, authorName, text, likeCount, publishedAt: new Date(Date.UTC(2026, 4, 1) + at * 60_000).toISOString(),
+});
+// The tree as [rootId, [nestedIds…]] pairs, roots in result order.
+const shape = (tree) => tree.map((n) => [n.reply.id, n.replies.map((r) => r.id)]);
+
+test('nestReplies: a reply to a reply joins its sub-thread; mentioning the top author is a root', () => {
+  const tree = nestReplies([
+    reply('a', '@ann', '@top great point', 1),
+    reply('b', '@bob', '@ann agreed', 2),
+  ], '@top');
+  assert.deepEqual(shape(tree), [['a', ['b']]]);
+});
+
+test('nestReplies: a chain stays ONE level deep, under the root of the mentioned reply', () => {
+  const tree = nestReplies([
+    reply('c', '@cat', '@bob no way', 3), // out of order on purpose: walked by time
+    reply('a', '@ann', 'first!', 1),
+    reply('b', '@bob', '@ann hi', 2),
+  ], '@top');
+  assert.deepEqual(shape(tree), [['a', ['b', 'c']]]);
+});
+
+test('nestReplies: the most recent earlier reply by the mentioned author decides the sub-thread', () => {
+  const tree = nestReplies([
+    reply('a', '@ann', 'root one', 1),
+    reply('c', '@cat', 'root two', 2),
+    reply('b1', '@bob', '@cat replying to cat', 3), // bob's latest reply is now under c
+    reply('d', '@dan', '@bob what?', 4),
+  ], '@top');
+  assert.deepEqual(shape(tree), [['a', []], ['c', ['b1', 'd']]]);
+});
+
+test('nestReplies: mentioning an author who only replies LATER, or mentioning mid-text, is a root', () => {
+  const tree = nestReplies([
+    reply('a', '@ann', '@zed you will reply later', 1),
+    reply('z', '@zed', 'hello', 2),
+    reply('b', '@bob', 'as @zed said, yes', 3),
+  ], '@top');
+  assert.deepEqual(shape(tree), [['a', []], ['z', []], ['b', []]]);
+});
+
+test('nestReplies: handles with dots, hyphens and Cyrillic, matched case-insensitively', () => {
+  const tree = nestReplies([
+    reply('j', '@John.Doe', 'root j', 1),
+    reply('m', '@anna-maria', 'root m', 2),
+    reply('d', '@Дмитрий_К', 'root d', 3),
+    reply('j2', '@x', '@john.doe, thanks', 4),
+    reply('m2', '@y', '@Anna-Maria!', 5),
+    reply('d2', '@z', '@дмитрий_к согласен', 6),
+  ], '@top');
+  assert.deepEqual(shape(tree), [['j', ['j2']], ['m', ['m2']], ['d', ['d2']]]);
+});
+
+test('nestReplies: the longest known name wins, and a name never matches inside a longer handle', () => {
+  const tree = nestReplies([
+    reply('a', '@ann', 'root ann', 1),
+    reply('l', '@ann.lee', 'root ann.lee', 2),
+    reply('x', '@x', '@ann.lee hi', 3), // both "@ann" and "@ann.lee" prefix it
+    reply('y', '@y', '@ann. Fair', 4), // a dot that ENDS the handle
+  ], '@top');
+  assert.deepEqual(shape(tree), [['a', ['y']], ['l', ['x']]]);
+  // With only "@ann" known, "@ann.lee" is someone else: no match, a root.
+  assert.deepEqual(shape(nestReplies([
+    reply('a', '@ann', 'root', 1),
+    reply('x', '@x', '@ann.lee hi', 2),
+  ], '@top')), [['a', []], ['x', []]]);
+  // The top author's longer handle beats a shorter replier's: a root.
+  assert.deepEqual(shape(nestReplies([
+    reply('a', '@top', 'root', 1),
+    reply('x', '@x', '@top.channel hi', 2),
+  ], '@top.channel')), [['a', []], ['x', []]]);
+});
+
+test('nestReplies: leading whitespace and bidi marks before the mention are skipped', () => {
+  const tree = nestReplies([
+    reply('a', '@ann', 'root', 1),
+    reply('b', '@bob', '‪@ann‬ yes', 2),
+    reply('c', '@cat', '  @ann', 3), // the name and nothing after it
+  ], '@top');
+  assert.deepEqual(shape(tree), [['a', ['b', 'c']]]);
+});
+
+test('nestReplies: roots by likes (ties earlier first), nested by time; malformed input tolerated', () => {
+  const input = [
+    reply('a', '@ann', 'a', 1, 5),
+    reply('b', '@bob', 'b', 2, 9),
+    reply('c', '@cat', 'c', 3, 5),
+    reply('n2', '@n2', '@ann later', 6, 100), // likes never reorder nested replies
+    reply('n1', '@n1', '@ann earlier', 4, 0),
+    null,
+    { authorName: '@noid', text: 'x' },
+    reply('a', '@ann', 'duplicate id', 9, 999),
+  ];
+  assert.deepEqual(shape(nestReplies(input, '@top')), [['b', []], ['a', ['n1', 'n2']], ['c', []]]);
+  assert.equal(input.length, 8); // untouched
+  assert.deepEqual(nestReplies(undefined), []);
+  // A bare display name (no @) never takes part as a mention target.
+  assert.deepEqual(shape(nestReplies([reply('a', 'Bob', 'hi', 1), reply('b', '@x', 'Bob is right', 2)])), [['a', []], ['b', []]]);
 });
 
 console.log(`\n${passed} passed`);
