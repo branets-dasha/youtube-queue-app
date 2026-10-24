@@ -4,8 +4,8 @@
 // https://www.googleapis.com/youtube/v3 with an Authorization: Bearer header
 // carrying the in-memory OAuth access token. No API key is used.
 //
-// Cost awareness: subscriptions.list, playlistItems.list, videos.list,
-// channels.list, commentThreads.list and comments.list each cost 1 quota unit
+// Cost awareness: subscriptions.list, playlistItems.list, playlists.list,
+// videos.list, channels.list, commentThreads.list and comments.list each cost 1 quota unit
 // per call (videos.list and channels.list batch up to 50 ids/call, so fetching
 // durations or avatars stays cheap). search.list is NEVER used.
 
@@ -436,6 +436,50 @@ export async function getVideosByIds(videoIds) {
     });
   }
   return records;
+}
+
+/**
+ * A playlist's title via playlists.list?part=snippet (1 quota unit), or null
+ * when YouTube returns no such playlist to this user — a private or missing one
+ * answers with an empty list, not an error, so playlistItems.list is what then
+ * reports the failure.
+ * @param {string} playlistId
+ * @returns {Promise<string|null>}
+ */
+export async function getPlaylistTitle(playlistId) {
+  const data = await apiGet('playlists', { part: 'snippet', id: playlistId, maxResults: 1 });
+  const item = (data.items || [])[0];
+  return (item && item.snippet && item.snippet.title) || null;
+}
+
+/**
+ * EVERY video id in a playlist, in playlist order: playlistItems.list
+ * ?part=contentDetails, paged to the end at PAGE_SIZE per call (1 quota unit
+ * each). Deleted and private entries keep their ids here; videos.list is what
+ * leaves them out. A missing or private playlist throws ApiError 'notfound'
+ * (playlistNotFound) or 'forbidden' (playlistItemsNotAccessible).
+ * @param {string} playlistId
+ * @param {(fetched:number)=>void} [onProgress] called with the running count
+ * @returns {Promise<Array<string>>}
+ */
+export async function getPlaylistVideoIds(playlistId, onProgress) {
+  const ids = [];
+  let pageToken = '';
+  do {
+    const data = await apiGet('playlistItems', {
+      part: 'contentDetails',
+      playlistId,
+      maxResults: PAGE_SIZE,
+      pageToken,
+    });
+    for (const item of data.items || []) {
+      const videoId = item.contentDetails && item.contentDetails.videoId;
+      if (videoId) ids.push(videoId);
+    }
+    if (typeof onProgress === 'function') onProgress(ids.length);
+    pageToken = data.nextPageToken || '';
+  } while (pageToken);
+  return ids;
 }
 
 /**

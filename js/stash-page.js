@@ -25,6 +25,7 @@ import {
   DEFAULT_PLAYBACK_SPEED,
   STASH_TAB_LOCK,
   STASH_SYNC_COALESCE_MS,
+  STASH_PLAYLIST_CONFIRM_OVER,
 } from './config.js';
 import { migrateLocalStorage } from './migrations.js';
 import {
@@ -50,15 +51,26 @@ import {
   clearToken,
   revoke,
 } from './auth.js';
-import { getVideosByIds, getChannelAvatars, rateVideo, ApiError } from './api.js';
+import {
+  getVideosByIds,
+  getChannelAvatars,
+  getPlaylistTitle,
+  getPlaylistVideoIds,
+  rateVideo,
+  ApiError,
+} from './api.js';
 import {
   parseVideoId,
   parseStartSeconds,
+  parsePlaylistId,
+  unreadablePlaylist,
   stashChannelInfo,
   sortStash,
   moveInStash,
   stashToClean,
   addToStash,
+  unstashedIds,
+  addPlaylistToStash,
   reconcileStash,
   firstPlayable,
   nextPlayable,
@@ -600,7 +612,7 @@ async function onSignOut() {
 }
 
 // ---------------------------------------------------------------------------
-// Add a video (the ONLY way records enter the stash)
+// Add a video, or a whole playlist (this page's only way records enter the stash)
 //
 // EVERY message here is a TOAST — errors, the duplicate notice, progress and
 // success alike. The inline status line this replaced appeared and disappeared
@@ -617,8 +629,9 @@ function clearAddInvalid() {
 }
 
 /**
- * Empty the URL field — for every outcome that ENDS WITH THE VIDEO IN THE STASH,
- * whether this add put it there or found it already there. A second press could
+ * Empty the URL field — for every outcome that ENDS WITH THE VIDEO IN THE STASH
+ * (for a playlist: any of its videos), whether this add put it there or found it
+ * already there. A second press could
  * then only repeat a no-op, and the caret is back in the field (onAddSubmit) with
  * nothing to delete before the next paste. The outcomes that do NOT reach here
  * keep the text on purpose: the user is about to fix or replace it.
@@ -739,11 +752,63 @@ async function runAdd() {
     rejectInput('Paste a YouTube link (or a bare video id) first.');
     return;
   }
+  // The video FIRST: a watch link that also names a list adds just the video.
   const videoId = parseVideoId(raw);
-  if (!videoId) {
-    rejectInput('That does not look like a YouTube video link or id.');
+  if (videoId) {
+    await addVideo(raw, videoId);
     return;
   }
+  const playlistId = parsePlaylistId(raw);
+  if (playlistId) {
+    await addPlaylist(playlistId);
+    return;
+  }
+  rejectInput('That does not look like a YouTube video or playlist link.');
+}
+
+/**
+ * The part of an add that talks to YouTube, shared by the video and playlist
+ * routes: the Client ID check, the in-flight flag, the on-demand authorization
+ * and ONE catch that words every failure for `noun`. The progress toast always
+ * goes when it ends (success, error or an early return inside `work`).
+ * @param {'video'|'playlist'} noun
+ * @param {() => Promise<void>} work
+ */
+async function inAddFlight(noun, work) {
+  if (!state.clientId) {
+    showToast('Add your OAuth Client ID first (Change Client ID).', { type: 'error' });
+    return;
+  }
+
+  setAdding(true);
+  try {
+    if (!hasSession()) showProgress('Authorizing with Google…');
+    // Silent when a token is already live; falls back to the consent prompt.
+    await authorize();
+    updateAuthUi(); // a fresh token flips the label + the Like button
+    await work();
+  } catch (err) {
+    showToast(describeAddFailure(err, noun), { type: 'error' });
+    if (err instanceof DbBlockedError || err instanceof DbUnavailableError) {
+      // A fatal storage condition is bigger than this form: put up the halt
+      // screen too (the toast alone would understate it).
+      handleError(err);
+    } else if (err instanceof ApiError && err.kind === 'auth') {
+      // The token is dead: end the session so the label and the Like button
+      // agree with the message above. Marked (a fresh token was rejected) also
+      // arms Sign in to force the consent screen, as handleError does.
+      clearToken();
+      if (err.reconsent) state.reconsent = true;
+      updateAuthUi();
+    }
+  } finally {
+    hideProgress();
+    setAdding(false);
+  }
+}
+
+/** One video, by its id; `raw` is the paste, read for its timestamp. */
+async function addVideo(raw, videoId) {
   // Read here because this is where the pasted string exists: past this point
   // only the id survives.
   const startSeconds = parseStartSeconds(raw);
@@ -760,18 +825,7 @@ async function runAdd() {
     return;
   }
 
-  if (!state.clientId) {
-    showToast('Add your OAuth Client ID first (Change Client ID).', { type: 'error' });
-    return;
-  }
-
-  setAdding(true);
-  try {
-    if (!hasSession()) showProgress('Authorizing with Google…');
-    // Silent when a token is already live; falls back to the consent prompt.
-    await authorize();
-    updateAuthUi(); // a fresh token flips the label + the Like button
-
+  await inAddFlight('video', async () => {
     showProgress('Looking up the video…');
     const [incoming] = await getVideosByIds([videoId]);
     if (!incoming) {
@@ -783,7 +837,7 @@ async function runAdd() {
       return;
     }
 
-    await attachAvatar(incoming);
+    await attachAvatars([incoming]);
 
     // A link's timestamp seeds the SAME field the player writes, so the video
     // opens where the link points and the first watch overwrites it. Set only
@@ -815,32 +869,137 @@ async function runAdd() {
     clearAddInput();
     showToast(`Added “${record.title}” to your stash.`, { type: 'success' });
     scrollToCard(record.videoId);
-  } catch (err) {
-    showToast(describeAddFailure(err), { type: 'error' });
-    if (err instanceof DbBlockedError || err instanceof DbUnavailableError) {
-      // A fatal storage condition is bigger than this form: put up the halt
-      // screen too (the toast alone would understate it).
-      handleError(err);
-    } else if (err instanceof ApiError && err.kind === 'auth') {
-      // The token is dead: end the session so the label and the Like button
-      // agree with the message above. Marked (a fresh token was rejected) also
-      // arms Sign in to force the consent screen, as handleError does.
-      clearToken();
-      if (err.reconsent) state.reconsent = true;
-      updateAuthUi();
-    }
-  } finally {
-    // Always dismiss the progress toast when an add ends (success/error/early).
-    hideProgress();
-    setAdding(false);
-  }
+  });
+}
+
+// The two lists the Data API will not read (unreadablePlaylist), refused before
+// any request so a signed-out user is not sent through sign-in to hear it.
+const UNREADABLE_PLAYLIST_MESSAGES = {
+  mix: 'YouTube does not let apps read Mixes, so this one cannot be added — add its videos one at a time instead.',
+  watchLater:
+    'YouTube does not let apps read Watch Later. Copy its videos into a playlist of your own, then add that.',
+};
+
+/** "1 video" / "37 videos". */
+function videoCount(n) {
+  return `${n} video${n === 1 ? '' : 's'}`;
 }
 
 /**
- * Give the new record its channel avatar, WITHOUT touching `yqa_channels`: the
- * stash stores the URL on its own record, so it depends on no map that a
- * subscriptions refresh could prune out from under it. The already-known map is
- * tried first, so stashing from a subscribed channel costs no quota. Purely
+ * Every video of a playlist, in playlist order, appended at the bottom.
+ *
+ * The ids come first (1 unit per 50), so what the add would actually ADD is
+ * known before the expensive part: more than STASH_PLAYLIST_CONFIRM_OVER new
+ * ones asks first, through the native confirm() — modal, so nothing else can
+ * happen meanwhile, and it hands focus back to wherever it was, which
+ * onAddSubmit then moves to the field as for every other ending. Cancel adds
+ * nothing and keeps the text. Only the NEW ids are then looked up: a video
+ * already here needs no record to be revived (addToStash's duplicate branch
+ * reads the videoId alone).
+ * @param {string} playlistId
+ */
+async function addPlaylist(playlistId) {
+  const unreadable = unreadablePlaylist(playlistId);
+  if (unreadable) {
+    showToast(UNREADABLE_PLAYLIST_MESSAGES[unreadable], { type: 'error' });
+    return;
+  }
+
+  await inAddFlight('playlist', async () => {
+    showProgress('Reading the playlist…');
+    const title = await getPlaylistTitle(playlistId);
+    const name = title ? `“${title}”` : 'the playlist';
+    const ids = await getPlaylistVideoIds(playlistId, (n) =>
+      showProgress(`Reading ${name}… ${videoCount(n)}`)
+    );
+    if (!ids.length) {
+      showToast(`${title ? name : 'That playlist'} has no videos to add.`, { type: 'info' });
+      return;
+    }
+
+    const wanted = unstashedIds(state.records, ids);
+    if (wanted.length > STASH_PLAYLIST_CONFIRM_OVER) {
+      hideProgress(); // nothing is in progress while the question is open
+      if (!window.confirm(`Add ${videoCount(wanted.length)} from ${name} to your stash?`)) return;
+    }
+
+    let fetched = [];
+    if (wanted.length) {
+      showProgress(`Looking up ${videoCount(wanted.length)}…`);
+      fetched = await getVideosByIds(wanted);
+      await attachAvatars(fetched);
+    }
+
+    // Prefs read fresh, Ignore not consulted — the single-video rules, since
+    // every video goes through addToStash.
+    const result = addPlaylistToStash(state.records, ids, fetched, {
+      addedAt: new Date().toISOString(),
+      prefs: loadChannelPrefs(),
+    });
+    if (result.added + result.already === 0) {
+      showToast(`None of the videos in ${name} could be found — they may be private or deleted.`, {
+        type: 'error',
+      });
+      return;
+    }
+    if (result.changed.length) {
+      showProgress(`Saving ${videoCount(result.changed.length)}…`);
+      await persistBatch(result.changed);
+    }
+    clearAddInput();
+    showToast(describePlaylistAdd(name, result), { type: 'success' });
+    // The top of what this add brought in — unless the user has gone into the
+    // list meanwhile, whose place the re-render kept and a scroll would lose.
+    const first = result.changed.length ? result.changed[0].videoId : ids[0];
+    if (!dom.queueList.contains(document.activeElement)) scrollToCard(first);
+  });
+}
+
+/**
+ * Persist a playlist add: one persistRecord — a single-key putStashVideo — per
+ * record, never a set write (see store.js), so every one is covered by the
+ * in-flight guard reconcileStash reads and announces itself on commit. Memory
+ * follows AFTER the writes, applied to the LIVE list rather than the one the
+ * batch was computed from, so a mark or a cross-tab arrival made meanwhile is
+ * not undone. Should any write fail, the others may still have committed:
+ * memory is re-read from the store to agree with it, and the failure rethrown.
+ * @param {Array<object>} changed records to write (added or revived)
+ */
+async function persistBatch(changed) {
+  const settled = await Promise.allSettled(changed.map((rec) => persistRecord(rec)));
+  const failed = settled.find((s) => s.status === 'rejected');
+  if (failed) {
+    await syncFromStore();
+    throw failed.reason;
+  }
+  const ids = new Set(changed.map((rec) => rec.videoId));
+  state.records = state.records.filter((r) => !ids.has(r.videoId)).concat(changed);
+  // Membership only grows, so the anchor cannot vanish; focus the user moved
+  // into the list during a long add is put back.
+  if (queueFocus) queueFocus.renderKeepingAnchor(render);
+  else render();
+}
+
+/**
+ * The success toast, e.g. "Added 37 videos from “Title” · 5 already in the
+ * stash (2 restored) · 3 unavailable."
+ * @param {string} name the playlist's quoted title, or "the playlist"
+ * @param {{added:number, already:number, revived:number, unavailable:number}} result
+ * @returns {string}
+ */
+function describePlaylistAdd(name, { added, already, revived, unavailable }) {
+  const parts = [added ? `Added ${videoCount(added)} from ${name}` : `Nothing new from ${name}`];
+  if (already) parts.push(`${already} already in the stash${revived ? ` (${revived} restored)` : ''}`);
+  if (unavailable) parts.push(`${unavailable} unavailable`);
+  return `${parts.join(' · ')}.`;
+}
+
+/**
+ * Give freshly fetched records their channel avatars, WITHOUT touching
+ * `yqa_channels`: the stash stores the URL on its own record, so it depends on
+ * no map that a subscriptions refresh could prune out from under it. The
+ * already-known map is tried first, so a subscribed channel costs no quota, and
+ * the rest go in one batched getChannelAvatars (≤50 ids per call). Purely
  * cosmetic — a failure leaves the letter placeholder and never fails the add.
  *
  * `yqa_channels` is read FRESH here, and at this page's other two use sites
@@ -849,19 +1008,24 @@ async function runAdd() {
  * subscriptions refresh in another tab rewrites it, so a boot-time snapshot
  * would strand a card whose record carries no avatar of its own on the letter
  * placeholder until the next full page reload.
- * @param {object} rec the freshly fetched record (mutated in place)
+ * @param {Array<object>} recs the freshly fetched records (mutated in place)
  */
-async function attachAvatar(rec) {
-  if (!rec || !rec.channelId) return;
-  const known = loadChannels()[rec.channelId];
-  if (known && known.avatarUrl) {
-    rec.channelAvatarUrl = known.avatarUrl;
-    return;
+async function attachAvatars(recs) {
+  const known = loadChannels();
+  const unknown = new Set();
+  for (const rec of recs) {
+    if (!rec || !rec.channelId) continue;
+    const entry = known[rec.channelId];
+    if (entry && entry.avatarUrl) rec.channelAvatarUrl = entry.avatarUrl;
+    else unknown.add(rec.channelId);
   }
+  if (!unknown.size) return;
   try {
-    const avatars = await getChannelAvatars([rec.channelId]);
-    const url = avatars.get(rec.channelId);
-    if (url) rec.channelAvatarUrl = url;
+    const avatars = await getChannelAvatars(Array.from(unknown));
+    for (const rec of recs) {
+      const url = rec && unknown.has(rec.channelId) ? avatars.get(rec.channelId) : '';
+      if (url) rec.channelAvatarUrl = url;
+    }
   } catch {
     // Cosmetic only: the card falls back to the placeholder circle.
   }
@@ -873,9 +1037,10 @@ async function attachAvatar(rec) {
  * so they carry no `kind` and would fall through an ApiError-only router: GIS
  * not loaded yet, and a token request already in progress.
  * @param {unknown} err
+ * @param {'video'|'playlist'} [noun] what the add was for
  * @returns {string}
  */
-function describeAddFailure(err) {
+function describeAddFailure(err, noun = 'video') {
   if (err instanceof DbBlockedError || err instanceof DbUnavailableError) {
     return 'Could not save to storage — see the message on screen.';
   }
@@ -888,9 +1053,12 @@ function describeAddFailure(err) {
     if (err.kind === 'quota') return err.message; // already user-facing
     if (err.kind === 'network') return 'Network error. Check your connection and try again.';
     if (err.kind === 'notfound') {
-      return 'YouTube has no such video — it may be private, deleted, or the link may be wrong.';
+      return `YouTube has no such ${noun} — it may be private, deleted, or the link may be wrong.`;
     }
-    return `Could not add that video: ${err.message}`;
+    if (err.kind === 'forbidden' && noun === 'playlist') {
+      return 'YouTube will not list that playlist’s videos — it may be private.';
+    }
+    return `Could not add that ${noun}: ${err.message}`;
   }
   const message = (err && err.message) || '';
   if (/Identity Services/i.test(message)) {
@@ -901,9 +1069,9 @@ function describeAddFailure(err) {
   }
   const code = err && err.code;
   if (code === 'popup_closed' || code === 'access_denied' || /cancel/i.test(message)) {
-    return 'Sign-in was cancelled, so the video was not added.';
+    return `Sign-in was cancelled, so the ${noun} was not added.`;
   }
-  return message || 'Something went wrong — the video was not added.';
+  return message || `Something went wrong — the ${noun} was not added.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1381,7 +1549,7 @@ function onPlayerEnded(endedId) {
  * This page's channel resolver: the record's OWN channelAvatarUrl first, the
  * yqa_channels map only as the fallback (stashChannelInfo). The map is read
  * FRESH at each of the two render sites and closed over for that one render —
- * never a boot snapshot (see attachAvatar), and never one read per card.
+ * never a boot snapshot (see attachAvatars), and never one read per card.
  * @param {Record<string,{title?:string,avatarUrl?:string}>} channels one fresh read
  * @returns {(rec:object) => {title:string,avatarUrl:string}}
  */

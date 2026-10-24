@@ -66,6 +66,10 @@ export const STASH_SYNC_CHANNEL = 'yqa_stash_sync';
 // instead of one of each per message. Short enough to read as instant.
 export const STASH_SYNC_COALESCE_MS = 120;
 
+// A playlist pasted into the stash's add form adds straight away when it brings
+// at most this many NEW videos; more asks first.
+export const STASH_PLAYLIST_CONFIRM_OVER = 50;
+
 // How many items of the queue walk one PageUp/PageDown covers — the "page" in
 // the page keys, deliberately a COUNT OF CARDS and not a screenful of pixels.
 // page-chrome.js is its only importer: the keydown tables pass moveCard() just
