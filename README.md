@@ -83,7 +83,7 @@ Each YouTube Data API call spends quota units associated with your Client. The d
 The app is deliberately quota-frugal. It uses the following methods:
 
 - `subscriptions.list` — gets a list of subscribed channels. **1 unit per page** (page size is 50 results max).
-- `playlistItems.list` — gets channel videos. **1 unit per page**, requested **per channel**, paging stops once it reaches the cutoff point (for "Refresh all") or the point of the last saved video + 6h buffer (for "Fetch new"). Upload playlist ids are derived cheaply by replacing the leading `UC` of a channel id with `UU` (no extra call); the rare non-`UC` channel costs one additional `channels.list` request.
+- `playlistItems.list` — gets channel videos. **1 unit per page**, requested **per channel**, paging stops once it reaches the cutoff point (for "Refresh all") or the point of the last saved video + 6h buffer (for "Fetch new"). Upload playlist ids are derived cheaply by replacing the leading `UC` of a channel id with `UU` (no extra call); the rare non-`UC` channel costs one additional `channels.list` request. Adding a playlist to the stash pages through it too (1 unit per 50 videos), plus one `playlists.list` for its title.
 - `videos.list?part=contentDetails,status,snippet` — backfills video durations, descriptions and embeddability, and on "Refresh all" confirms that a video its channel's listing no longer returned is really gone before deleting it. Batched **≤ 50 ids per call, 1 unit** each.
 - `videos.rate` (the Like button) — roughly **50 units** per like/unlike.
 
@@ -112,6 +112,7 @@ To reset, use **Change Client ID** / **Change cutoff** in the toolbar, or clear 
 - **Resume** only covers **in-app** playback position (tracked by the embedded player); it does not sync with YouTube's own watch history.
 - **Shorts** are detected by a **heuristic** (duration ≤ 90s) — there is no separate Shorts filter, and the API exposes no true `isShort` flag, so the "Shorts" badge can be wrong for edge cases.
 - **One tab per page.** A second tab of the *same* page stops with a "close the other tab and reload" message so the two can't write over each other. Different pages are fine open at once — the queue and the stash write separate stores, and the Channels page writes no videos at all.
+- **Mixes and Watch Later can't be added to the stash.** The YouTube Data API doesn't list their videos; copy them into a playlist of your own and add that instead.
 - **Non-embeddable** videos can't play in the on-page player and open on YouTube instead; auto-advance skips them.
 - **YouTube's own player controls are behind one key.** Tab deliberately skips the video frame: focus inside a cross-origin frame swallows every keypress, so the app's shortcuts — Esc included — stop working the moment it lands there. Press **`\`** to put focus inside the frame on purpose: YouTube's own keys then work at once (`c` toggles captions), and Tab reaches its settings menu — caption language, audio track, quality. **Shift+Tab** brings you back from any of its controls; straight after `\`, press Tab once first (Tab forward is a long walk through the related-videos drawer). The app's shortcuts are off while you're inside.
 - YouTube's uploads playlist can lag real-time by a short interval, so a very fresh upload may take a few minutes to appear on refresh.

@@ -37,10 +37,14 @@ import {
   dropUnverified,
   parseVideoId,
   parseStartSeconds,
+  parsePlaylistId,
+  unreadablePlaylist,
   sortStash,
   moveInStash,
   stashToClean,
   addToStash,
+  unstashedIds,
+  addPlaylistToStash,
   reconcileStash,
   normalizeKey,
   sortTime,
@@ -1576,6 +1580,61 @@ test('a link carrying a timestamp still yields its id', () => {
   assert.equal(parseStartSeconds(`https://youtu.be/${ODD_ID}?t=8`), 8);
 });
 
+// --- parsePlaylistId: a /playlist?list= link (the video parse runs first) ---
+
+const PL = 'PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf'; // a 34-char PL id, _ and - included
+
+test('parsePlaylistId reads a /playlist?list= link, any protocol and subdomain', () => {
+  assert.equal(parsePlaylistId(`https://www.youtube.com/playlist?list=${PL}`), PL);
+  assert.equal(parsePlaylistId(`http://youtube.com/playlist?list=${PL}`), PL);
+  assert.equal(parsePlaylistId(`youtube.com/playlist?list=${PL}`), PL); // no protocol
+  assert.equal(parsePlaylistId(`//www.youtube.com/playlist?list=${PL}`), PL);
+  assert.equal(parsePlaylistId(`https://m.youtube.com/playlist?list=${PL}`), PL);
+  assert.equal(parsePlaylistId(`https://music.youtube.com/playlist?list=${PL}`), PL);
+  assert.equal(parsePlaylistId(`  https://www.youtube.com/playlist?list=${PL}\n`), PL); // trimmed
+});
+
+test('parsePlaylistId finds list= among other params and keeps the id case', () => {
+  assert.equal(parsePlaylistId(`https://www.youtube.com/playlist?si=AbC123&list=${PL}`), PL);
+  assert.equal(parsePlaylistId(`https://www.youtube.com/playlist?list=${PL}&si=AbC123`), PL);
+  assert.equal(parsePlaylistId(`HTTPS://WWW.YOUTUBE.COM/playlist?list=${PL}`), PL);
+  assert.equal(parsePlaylistId('https://www.youtube.com/playlist?list=WL'), 'WL'); // short special ids too
+});
+
+test('parsePlaylistId accepts a bare playlist id, never one an 11-char video id could be', () => {
+  assert.equal(parsePlaylistId(PL), PL);
+  assert.equal(parsePlaylistId('UUuAXFkgsw1L7xaCfnd5JJOw'), 'UUuAXFkgsw1L7xaCfnd5JJOw');
+  assert.equal(parsePlaylistId('OLAK5uy_kV4VcumFf2pRcMdX0Wvqf7mR1hVvGI9z8'), 'OLAK5uy_kV4VcumFf2pRcMdX0Wvqf7mR1hVvGI9z8');
+  assert.equal(parsePlaylistId('PLabcdefghi'), null); // 11 chars: that is a video id's length
+  assert.equal(parsePlaylistId(ID), null);
+  assert.equal(parsePlaylistId('WL'), null); // the special ids only inside a link
+  assert.equal(parsePlaylistId('just some text'), null);
+});
+
+test('parsePlaylistId rejects video links, lookalike hosts and junk', () => {
+  // A watch link naming a list is the VIDEO path's — parseVideoId takes it first.
+  assert.equal(parseVideoId(`https://www.youtube.com/watch?v=${ID}&list=${PL}`), ID);
+  assert.equal(parsePlaylistId(`https://www.youtube.com/watch?v=${ID}&list=${PL}`), null);
+  assert.equal(parsePlaylistId(`https://youtu.be/${ID}?list=${PL}`), null);
+  assert.equal(parsePlaylistId(`https://evil-youtube.com/playlist?list=${PL}`), null);
+  assert.equal(parsePlaylistId(`https://youtube.com.evil.tld/playlist?list=${PL}`), null);
+  assert.equal(parsePlaylistId('https://www.youtube.com/playlist?list='), null);
+  assert.equal(parsePlaylistId(`https://www.youtube.com/playlist?listx=${PL}`), null);
+  assert.equal(parsePlaylistId('https://www.youtube.com/playlist?list=PL<script>'), null);
+  for (const junk of ['', '   ', null, undefined, 42, { list: PL }]) {
+    assert.equal(parsePlaylistId(junk), null);
+  }
+});
+
+test('unreadablePlaylist names Mixes and Watch Later, and nothing else', () => {
+  assert.equal(unreadablePlaylist('WL'), 'watchLater');
+  assert.equal(unreadablePlaylist(`RD${ID}`), 'mix');
+  assert.equal(unreadablePlaylist('RDMM'), 'mix');
+  for (const ok of [PL, 'UUuAXFkgsw1L7xaCfnd5JJOw', 'LL', 'WLx', null, undefined]) {
+    assert.equal(unreadablePlaylist(ok), null);
+  }
+});
+
 // --- sortStash: the stash's ONLY order — oldest addedAt first, unstamped last ---
 
 const A1 = '2026-05-01T10:00:00.000Z';
@@ -1982,6 +2041,117 @@ test('addToStash mutates neither input', () => {
   assert.equal(incoming.state, undefined); // the stamp lands on the copy only
   assert.equal(incoming.addedAt, undefined);
   assert.equal(incoming.preferredSpeed, undefined);
+});
+
+// --- unstashedIds / addPlaylistToStash: a whole playlist, through addToStash ---
+
+test('unstashedIds is the new ids only, deduped, in playlist order', () => {
+  const stash = [stashRec('b', A1, 'new'), stashRec('d', A2, 'skipped')];
+  assert.deepEqual(unstashedIds(stash, ['c', 'b', 'a', 'c', 'd', '', null, 'e']), ['c', 'a', 'e']);
+  assert.deepEqual(unstashedIds([], []), []);
+  assert.deepEqual(unstashedIds(null, undefined), []);
+});
+
+test('addPlaylistToStash appends new videos at the bottom IN PLAYLIST ORDER', () => {
+  const stash = [stashRec('old', A1, 'new')];
+  // videoIds that sort the other way round, so a tie broken by videoId would show.
+  const ids = ['zz', 'mm', 'aa'];
+  const fetched = [paste('aa', 'UCa'), paste('zz', 'UCa'), paste('mm', 'UCa')]; // any order
+  const out = addPlaylistToStash(stash, ids, fetched, { addedAt: A2, prefs: {} });
+  assert.deepEqual(sortStash(out.records).map((r) => r.videoId), ['old', 'zz', 'mm', 'aa']);
+  assert.deepEqual(out.changed.map((r) => r.videoId), ['zz', 'mm', 'aa']);
+  // One strictly increasing stamp each, starting at the given instant.
+  assert.deepEqual(out.changed.map((r) => r.addedAt), [
+    '2026-05-02T10:00:00.000Z',
+    '2026-05-02T10:00:00.001Z',
+    '2026-05-02T10:00:00.002Z',
+  ]);
+  assert.ok(out.changed.every((r) => r.state === 'new'));
+  assert.deepEqual(
+    { added: out.added, already: out.already, revived: out.revived, unavailable: out.unavailable },
+    { added: 3, already: 0, revived: 0, unavailable: 0 }
+  );
+});
+
+test('addPlaylistToStash takes a video listed twice ONCE, at its first position', () => {
+  const out = addPlaylistToStash([], ['a', 'b', 'a', 'c', 'b'], [paste('a', 'UCa'), paste('b', 'UCa'), paste('c', 'UCa')], {
+    addedAt: A1,
+  });
+  assert.deepEqual(sortStash(out.records).map((r) => r.videoId), ['a', 'b', 'c']);
+  assert.equal(out.added, 3);
+  assert.equal(out.already, 0); // a repeat inside the playlist is not "already in the stash"
+});
+
+test('addPlaylistToStash leaves stashed videos in place and revives Remove-marked ones', () => {
+  const stash = [stashRec('x', A1, 'new'), stashRec('y', A2, 'skipped'), stashRec('z', A3, 'new')];
+  // Only the new id was looked up — a stashed one needs no record to be revived.
+  const out = addPlaylistToStash(stash, ['n1', 'y', 'x', 'n2'], [paste('n1', 'UCa'), paste('n2', 'UCa')], {
+    addedAt: '2026-06-01T00:00:00.000Z',
+  });
+  assert.deepEqual(sortStash(out.records).map((r) => r.videoId), ['x', 'y', 'z', 'n1', 'n2']);
+  const y = out.records.find((r) => r.videoId === 'y');
+  assert.equal(y.state, 'new'); // revived
+  assert.equal(y.addedAt, A2); // in its old place, not re-stamped
+  assert.equal(stash[1].state, 'skipped'); // the input record is left alone
+  // Written: the two arrivals and the revived one, in playlist order; x is untouched.
+  assert.deepEqual(out.changed.map((r) => r.videoId), ['n1', 'y', 'n2']);
+  assert.strictEqual(out.records.find((r) => r.videoId === 'x'), stash[0]);
+  assert.deepEqual(
+    { added: out.added, already: out.already, revived: out.revived },
+    { added: 2, already: 2, revived: 1 }
+  );
+  // Stamps count ARRIVALS only, so they stay contiguous across a duplicate.
+  assert.deepEqual(out.changed.filter((r) => r !== y).map((r) => r.addedAt), [
+    '2026-06-01T00:00:00.000Z',
+    '2026-06-01T00:00:00.001Z',
+  ]);
+});
+
+test('addPlaylistToStash never refreshes a stashed video from a fetched copy', () => {
+  // A copy fetched for an id that is (now) stashed — another tab added it
+  // during the lookup — is ignored: the duplicate branch sees the id alone.
+  const stash = [{ ...stashRec('a', A1, 'new'), preferredSpeed: 1.5 }];
+  const out = addPlaylistToStash(stash, ['a'], [paste('a', 'UCa', { title: 'renamed', preferredSpeed: 2 })], {
+    addedAt: A2,
+  });
+  assert.equal(out.changed.length, 0);
+  assert.strictEqual(out.records, stash); // nothing changed: the very same array
+  assert.equal(out.records[0].title, 'a');
+  assert.equal(out.records[0].preferredSpeed, 1.5);
+  assert.equal(out.already, 1);
+});
+
+test('addPlaylistToStash counts an id with no fetched record as unavailable', () => {
+  // videos.list omits deleted and private videos.
+  const out = addPlaylistToStash([], ['gone', 'a', 'private'], [paste('a', 'UCa')], { addedAt: A1 });
+  assert.deepEqual(out.records.map((r) => r.videoId), ['a']);
+  assert.equal(out.unavailable, 2);
+  assert.equal(out.added, 1);
+  assert.equal(out.changed[0].addedAt, A1); // a skipped id spends no stamp
+});
+
+test('addPlaylistToStash fills each channel speed and ignores the Ignore flag', () => {
+  const prefs = { UCa: { speed: 2 }, UCi: { ignored: true, speed: 1.5 } };
+  const out = addPlaylistToStash([], ['a', 'i', 'n'], [paste('a', 'UCa'), paste('i', 'UCi'), paste('n', 'UCn')], {
+    addedAt: A1,
+    prefs,
+  });
+  const speeds = Object.fromEntries(out.records.map((r) => [r.videoId, r.preferredSpeed]));
+  assert.deepEqual(speeds, { a: 2, i: 1.5, n: undefined });
+  assert.equal('preferredSpeed' in out.records[2], false);
+});
+
+test('addPlaylistToStash mutates neither input and tolerates junk', () => {
+  const stash = [stashRec('a', A1, 'skipped')];
+  const fetched = [paste('b', 'UCa')];
+  const out = addPlaylistToStash(stash, ['a', 'b'], fetched, { addedAt: A2 });
+  assert.equal(stash.length, 1);
+  assert.equal(stash[0].state, 'skipped');
+  assert.equal(fetched[0].state, undefined);
+  assert.equal(fetched[0].addedAt, undefined);
+  assert.equal(out.records.length, 2);
+  const empty = addPlaylistToStash(null, [null, '', 7], [null, {}], {});
+  assert.deepEqual(empty, { records: [], changed: [], added: 0, already: 0, revived: 0, unavailable: 0 });
 });
 
 // --- reconcileStash: cross-tab merge — membership from `fresh`, CONTENT local ---

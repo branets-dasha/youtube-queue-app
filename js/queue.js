@@ -1224,6 +1224,52 @@ export function parseStartSeconds(input) {
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
 }
 
+// Anchored for the same reasons as VIDEO_URL_PATTERNS. Only the /playlist page
+// form: a watch link that ALSO names a list is a video add (parseVideoId runs
+// first and wins). The bare form takes only the prefixes a user can copy out of
+// a playlist URL, and needs 12+ chars, so it can never meet an 11-char video id.
+const PLAYLIST_URL_PATTERNS = [
+  new RegExp(
+    '^' + PROTOCOL_RE_SRC + YT_HOST_RE_SRC + '/playlist/?\\?(?:[^#]*&)?list=([A-Za-z0-9_-]+)(?=[&#/]|$)',
+    'i'
+  ),
+  /^((?:PL|UU|FL|OLAK5uy_)[A-Za-z0-9_-]{10,})$/,
+];
+
+/**
+ * Extract the playlist id from a pasted `youtube.com/playlist?list=ID` link (or
+ * a bare `PL…`-style id), else null. The stash form tries parseVideoId FIRST, so
+ * a link naming both a video and a list adds the video. The id is returned as
+ * given, Mixes and Watch Later included — unreadablePlaylist says which those
+ * are. Regex, not `new URL()`, for parseVideoId's reasons. Pure.
+ * @param {string} input
+ * @returns {string|null}
+ */
+export function parsePlaylistId(input) {
+  if (typeof input !== 'string') return null;
+  const text = input.trim();
+  for (const re of PLAYLIST_URL_PATTERNS) {
+    const m = re.exec(text);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
+ * Why the Data API cannot list this playlist's videos, or null when it can:
+ * 'mix' for an auto-generated Mix (an `RD…` id) and 'watchLater' for `WL`, both
+ * of which playlistItems.list will not return. Checked before any request, so a
+ * signed-out user is not sent through a sign-in popup to be told no. Pure.
+ * @param {string|null} playlistId
+ * @returns {'mix'|'watchLater'|null}
+ */
+export function unreadablePlaylist(playlistId) {
+  if (typeof playlistId !== 'string') return null;
+  if (playlistId === 'WL') return 'watchLater';
+  if (playlistId.startsWith('RD')) return 'mix';
+  return null;
+}
+
 /**
  * The instant a stash record was added, in epoch millis, with a MISSING or
  * UNPARSEABLE `addedAt` mapped to +Infinity so it sorts LAST. Accepts the ISO
@@ -1476,6 +1522,82 @@ export function addToStash(records, incoming, { addedAt, prefs } = {}) {
     else record.preferredSpeed = speed;
   }
   return { records: list.concat([record]), added: true, changed: true, record };
+}
+
+/**
+ * The videoIds of a playlist that are NOT in the stash yet — deduped, in
+ * playlist order. This is what a playlist add would actually ADD, known before
+ * any videos.list lookup, so the page can confirm a big one and look up only
+ * these. Pure.
+ * @param {Array<object>} records the current stash
+ * @param {Array<string>} videoIds the playlist's ids, in playlist order
+ * @returns {Array<string>}
+ */
+export function unstashedIds(records, videoIds) {
+  const have = new Set((Array.isArray(records) ? records : []).map((r) => r && r.videoId));
+  const out = [];
+  for (const id of Array.isArray(videoIds) ? videoIds : []) {
+    if (typeof id !== 'string' || !id || have.has(id)) continue;
+    have.add(id); // a video listed twice is added once
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Add a whole playlist to the stash: every id, in playlist order, through
+ * addToStash's own rules — an already-stashed video keeps its place (revived if
+ * marked Remove, as `{ videoId }` alone, exactly like a re-pasted link), a new
+ * one is APPENDED with the channel speed filled. A video listed twice is taken
+ * once, and an id with no record in `fetched` that is not already stashed is
+ * counted `unavailable` (videos.list omits deleted and private videos).
+ *
+ * Each new record gets its own `addedAt`, `addedAt` + 0, 1, 2… ms: one shared
+ * instant would tie, and sortStash breaks ties by videoId, scrambling the
+ * playlist. `changed` is what to persist — the added and revived records, in
+ * playlist order. Mutates neither input. Pure.
+ * @param {Array<object>} records the current stash
+ * @param {Array<string>} videoIds the playlist's ids, in playlist order
+ * @param {Array<object>} fetched full records for (some of) the new ids
+ * @param {{addedAt?:string, prefs?:object}} [options] addedAt: the batch's first stamp
+ * @returns {{records:Array<object>, changed:Array<object>, added:number, already:number, revived:number, unavailable:number}}
+ */
+export function addPlaylistToStash(records, videoIds, fetched, { addedAt, prefs } = {}) {
+  let list = Array.isArray(records) ? records : [];
+  const have = new Set(list.map((r) => r && r.videoId));
+  const byId = new Map();
+  for (const rec of Array.isArray(fetched) ? fetched : []) {
+    if (rec && rec.videoId && !byId.has(rec.videoId)) byId.set(rec.videoId, rec);
+  }
+  const base = typeof addedAt === 'string' ? Date.parse(addedAt) : NaN;
+  const stamp = (i) => (Number.isNaN(base) ? addedAt : new Date(base + i).toISOString());
+
+  const seen = new Set();
+  const changed = [];
+  let added = 0;
+  let already = 0;
+  let revived = 0;
+  let unavailable = 0;
+  for (const videoId of Array.isArray(videoIds) ? videoIds : []) {
+    if (typeof videoId !== 'string' || !videoId || seen.has(videoId)) continue;
+    seen.add(videoId);
+    const present = have.has(videoId);
+    const incoming = present ? { videoId } : byId.get(videoId);
+    if (!incoming) {
+      unavailable++;
+      continue;
+    }
+    const result = addToStash(list, incoming, { addedAt: stamp(added), prefs });
+    list = result.records;
+    if (result.added) {
+      added++;
+    } else {
+      already++;
+      if (result.changed) revived++; // a `{ videoId }` carries no speed: a change IS a revive
+    }
+    if (result.changed) changed.push(result.record);
+  }
+  return { records: list, changed, added, already, revived, unavailable };
 }
 
 /**
