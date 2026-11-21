@@ -91,7 +91,6 @@ import {
   loadVideo as playerLoad,
   setSpeed as playerSetSpeed,
   capturePosition,
-  isReady as isPlayerReady,
   togglePlay,
   seekBy,
   seekTo,
@@ -109,6 +108,7 @@ import {
   showSupersededError,
   showDbReadError,
   reportIfFatalDb,
+  showPlaybackError,
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
@@ -1176,11 +1176,10 @@ async function addCardToStash(videoId, opts = {}) {
 
   try {
     // The poll writes only every 5s, so the PLAYING card's stored position can
-    // be that stale — flush it before the spread below copies it. Gated on
-    // READY: until onReady fires, loadVideo has already set currentVideoId
-    // while getCurrentTime() can still answer 0, which would persist a 0 over
-    // the very position being copied.
-    if (isPlayerReady()) flushProgress();
+    // be that stale — flush it before the spread below copies it. Safe in any
+    // player state: player.js captures nothing from a load that has not reached
+    // PLAYING, so an unready, loading or errored player cannot write a 0 here.
+    flushProgress();
     const incoming = { ...rec };
     const known = state.channels[rec.channelId];
     // Omit the key entirely when we have no avatar — never an explicit
@@ -1380,6 +1379,7 @@ function ensurePlayer() {
     onEnded: onPlayerEnded,
     onReady: () => updateSpeedButtons(),
     onProgress: onPlayerProgress,
+    onError: showPlaybackError,
   });
   updateSpeedButtons();
 }
@@ -1442,20 +1442,28 @@ function openOnYouTube(videoId) {
 }
 
 /**
- * Fired when the current video ENDS: auto-mark it 'skipped' via the EXISTING
- * setVideoState path (set, never toggle), so the cutoff marker + greying +
- * persistence all update; then auto-play the NEXT eligible video — the first one
- * after it that is still 'new' (skips any handled video) and is embeddable — or
- * show the caught-up state when none remain.
+ * Fired when the current video ENDS: reset its saved position so a finished
+ * video won't resume at its very end, then mark it and advance (markAndAdvance).
  * @param {string} endedId
  */
 function onPlayerEnded(endedId) {
   if (!endedId) return;
-  // Reset the saved position so a finished video won't resume at its very end.
   const rec = state.records.find((r) => r.videoId === endedId);
   if (rec) rec.positionSeconds = 0;
-  setVideoState(endedId, STATE_SKIPPED); // persists rec (incl. position)
-  const next = nextPlayable(state.visible, endedId, Date.now());
+  markAndAdvance(endedId);
+}
+
+/**
+ * Mark `videoId` 'skipped' via the EXISTING setVideoState path (set, never
+ * toggle), so the cutoff marker + greying + persistence all update; then
+ * auto-play the NEXT eligible video — the first one after it that is still 'new'
+ * (skips any handled video) and is embeddable — or show the caught-up state when
+ * none remain. Shared by ENDED and the Skip button.
+ * @param {string} videoId
+ */
+function markAndAdvance(videoId) {
+  setVideoState(videoId, STATE_SKIPPED); // persists rec (incl. position)
+  const next = nextPlayable(state.visible, videoId, Date.now());
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
 }
@@ -1684,11 +1692,15 @@ function onCardSpeed(videoId, speed) {
 }
 
 /**
- * Skip button: mark the CURRENT video skipped and advance — reusing the EXACT
- * same path as auto-advance-on-end (setVideoState + nextPlayable).
+ * Skip button / n: mark the CURRENT video skipped and advance, as ENDED does —
+ * but KEEPING its watched position, so a mistaken skip resumes where it was left
+ * once un-skipped. Captured first because with nothing left to play the advance
+ * stops the player, and a stop saves nothing.
  */
 function onSkipNext() {
-  if (state.playing) onPlayerEnded(state.playing);
+  if (!state.playing) return;
+  flushProgress();
+  markAndAdvance(state.playing);
 }
 
 // --- Watch progress (track + resume) ---

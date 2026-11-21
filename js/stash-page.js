@@ -111,6 +111,7 @@ import {
   showSupersededError,
   showDbReadError,
   reportIfFatalDb,
+  showPlaybackError,
   describeAuthFailure,
   initCurtain,
   initQueueFocus,
@@ -1467,6 +1468,7 @@ function ensurePlayer() {
     onEnded: onPlayerEnded,
     onReady: () => updateSpeedButtons(),
     onProgress: onPlayerProgress,
+    onError: showPlaybackError,
   });
   updateSpeedButtons();
 }
@@ -1528,19 +1530,26 @@ function openOnYouTube(videoId) {
 }
 
 /**
- * Fired when the current video ENDS: auto-mark it Remove via setVideoState (SET,
- * never toggle — once watched it is marked for removal), reset the saved
- * position so it can't resume at its very end, then auto-play the next still-
- * 'new', embeddable record — again over the FULL list — or show the caught-up
- * state when none remain.
+ * Fired when the current video ENDS: reset its saved position so it can't
+ * resume at its very end, then mark it and advance (markAndAdvance).
  * @param {string} endedId
  */
 function onPlayerEnded(endedId) {
   if (!endedId) return;
   const rec = state.records.find((r) => r.videoId === endedId);
   if (rec) rec.positionSeconds = 0;
-  setVideoState(endedId, STATE_SKIPPED); // persists rec (incl. the reset position)
-  const next = nextPlayable(state.records, endedId, Date.now());
+  markAndAdvance(endedId);
+}
+
+/**
+ * Mark `videoId` Remove via setVideoState (SET, never toggle), then auto-play
+ * the next still-'new', embeddable record — again over the FULL list — or show
+ * the caught-up state when none remain. Shared by ENDED and "Remove & next".
+ * @param {string} videoId
+ */
+function markAndAdvance(videoId) {
+  setVideoState(videoId, STATE_SKIPPED); // persists rec (incl. position)
+  const next = nextPlayable(state.records, videoId, Date.now());
   if (next) playVideo(next.videoId);
   else showPlayerEmpty(true);
 }
@@ -1709,11 +1718,15 @@ function onCardSpeed(videoId, speed) {
 }
 
 /**
- * Player "Remove & next": mark the CURRENT video and advance — the EXACT same
- * path as auto-advance-on-end (setVideoState + nextPlayable).
+ * Player "Remove & next" / n: mark the CURRENT video and advance, as ENDED does —
+ * but KEEPING its watched position, so a mistaken mark resumes where it was left
+ * once undone. Captured first because with nothing left to play the advance
+ * stops the player, and a stop saves nothing.
  */
 function onSkipNext() {
-  if (state.playing) onPlayerEnded(state.playing);
+  if (!state.playing) return;
+  flushProgress();
+  markAndAdvance(state.playing);
 }
 
 // --- Watch progress (track + resume) ---

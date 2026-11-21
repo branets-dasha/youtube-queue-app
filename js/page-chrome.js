@@ -343,6 +343,25 @@ export function reportIfFatalDb(err) {
   // site's intent and stay quiet (a refresh is never failed over one).
 }
 
+let playbackErrorToast = null;
+/**
+ * Tell the user the player errored, for both player pages' `onError`. The wording
+ * is generic because the error codes say little reliable about the cause. A retry
+ * from ▶ Play does recover, and the player keeps the resume position through the
+ * error. One toast at a time: a repeat while one is still up re-arms it rather
+ * than stacking a second, since YT can fire onError more than once per load.
+ */
+export function showPlaybackError() {
+  const message =
+    'This video failed to play. Press ▶ Play on its card to try again from where ' +
+    'you left off, or click its title to watch on YouTube.';
+  if (playbackErrorToast && playbackErrorToast.el.isConnected) {
+    playbackErrorToast.update(message);
+    return;
+  }
+  playbackErrorToast = showToast(message, { type: 'error' });
+}
+
 // ---------------------------------------------------------------------------
 // Privacy curtain: a full-viewport overlay that hides the whole page. Covers the
 // page on a wheel-DOWN in the band ABOVE the exempt scroll area (or Esc), lifted
