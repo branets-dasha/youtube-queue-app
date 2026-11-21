@@ -17,9 +17,13 @@ let ready = false; // true once the player's onReady has fired
 let currentVideoId = null; // id of the video currently loaded
 let currentSpeed = 1; // playback speed, re-applied on each new video
 let pending = null; // { videoId, startSeconds } requested before the player was ready
-let handlers = {}; // { onEnded(videoId), onReady(), onProgress(videoId, seconds) }
+let handlers = {}; // { onEnded(videoId), onReady(), onProgress(videoId, seconds), onError(videoId) }
 let progressTimer = null; // interval polling getCurrentTime() while playing
-let justEnded = false; // set on ENDED so switching away won't re-capture end-time
+// True only once the CURRENT load has reached PLAYING. getCurrentTime() answers
+// 0 in every error, unstarted, cued and loading state, so a capture outside this
+// window — the poll outliving an error, the page-hide flush of the very reload
+// that recovers from one — would overwrite the stored resume position with 0.
+let positionTrusted = false;
 
 function loadApiScript() {
   if (window.YT && window.YT.Player) return; // already available
@@ -34,11 +38,12 @@ function loadApiScript() {
  * Initialize the player ONCE. Loads the IFrame API (if needed) and creates a
  * YT.Player in the element with id `mountId` (sized 16:9 responsively by CSS).
  * @param {{ mountId:string, onEnded?:(videoId:string)=>void, onReady?:()=>void,
- *          onProgress?:(videoId:string, seconds:number)=>void }} opts
+ *          onProgress?:(videoId:string, seconds:number)=>void,
+ *          onError?:(videoId:string)=>void }} opts
  */
-export function initPlayer({ mountId, onEnded, onReady, onProgress }) {
+export function initPlayer({ mountId, onEnded, onReady, onProgress, onError }) {
   if (player) return;
-  handlers = { onEnded, onReady, onProgress };
+  handlers = { onEnded, onReady, onProgress, onError };
   // The IFrame API invokes this global once it finishes loading. Chain any
   // previously-registered callback so we do not clobber it.
   const prev = window.onYouTubeIframeAPIReady;
@@ -103,17 +108,29 @@ function createPlayer(mountId) {
       onStateChange: (e) => {
         const YT = window.YT;
         if (e.data === YT.PlayerState.PLAYING) {
-          justEnded = false;
+          positionTrusted = true;
           startProgressPoll(); // poll getCurrentTime() ~every 5s while playing
         } else if (e.data === YT.PlayerState.PAUSED) {
           captureProgress();
           stopProgressPoll();
         } else if (e.data === YT.PlayerState.ENDED) {
-          justEnded = true;
-          stopProgressPoll();
+          // The page resets a finished video's position; a later capture (the
+          // switch to the next video) would re-store the end time over it.
+          distrustPosition();
           // ENDED === 0. Report the video that just finished (currentVideoId).
           if (typeof handlers.onEnded === 'function') handlers.onEnded(currentVideoId);
+        } else if (
+          e.data === YT.PlayerState.UNSTARTED ||
+          e.data === YT.PlayerState.CUED
+        ) {
+          distrustPosition();
         }
+      },
+      onError: () => {
+        distrustPosition();
+        // Reported whatever the code: the codes say little reliable about cause
+        // (a missing id reports 150 in an embed, not 100).
+        if (currentVideoId && typeof handlers.onError === 'function') handlers.onError(currentVideoId);
       },
     },
   });
@@ -124,11 +141,11 @@ function createPlayer(mountId) {
 }
 
 function doLoad(videoId, startSeconds = 0) {
-  // Capture the OUTGOING video's position before switching away — UNLESS it just
-  // ended (its position was reset; capturing would re-store the end-time).
-  if (currentVideoId && currentVideoId !== videoId && !justEnded) captureProgress();
-  justEnded = false;
-  stopProgressPoll();
+  // Capture the OUTGOING video's position before switching away. Distrusting
+  // after it also covers the PAUSED a load-while-playing fires, which already
+  // reads 0 and already names the INCOMING video.
+  if (currentVideoId && currentVideoId !== videoId) captureProgress();
+  distrustPosition();
   currentVideoId = videoId;
   try {
     // Object form supports startSeconds (resume). Attempts autoplay; a browser
@@ -150,6 +167,7 @@ function doLoad(videoId, startSeconds = 0) {
 export function loadVideo(videoId, startSeconds = 0) {
   if (!videoId) return;
   if (!ready || !player) {
+    distrustPosition();
     pending = { videoId, startSeconds };
     currentVideoId = videoId;
     return;
@@ -160,14 +178,22 @@ export function loadVideo(videoId, startSeconds = 0) {
 // --- Watch-progress tracking ---------------------------------------------
 
 function captureProgress() {
-  if (!player || !currentVideoId || typeof player.getCurrentTime !== 'function') return;
+  if (!positionTrusted || !player || !currentVideoId) return;
+  if (typeof player.getCurrentTime !== 'function') return;
   let t = 0;
   try {
-    t = player.getCurrentTime() || 0;
+    t = player.getCurrentTime();
   } catch {
-    t = 0;
+    return;
   }
+  // Never a 0 either: a failure that reports no state change still reads 0, and
+  // resumeStart treats anything this low as "from the start" anyway.
+  if (!(t > 0)) return;
   if (typeof handlers.onProgress === 'function') handlers.onProgress(currentVideoId, t);
+}
+function distrustPosition() {
+  positionTrusted = false;
+  stopProgressPoll();
 }
 function startProgressPoll() {
   stopProgressPoll();
@@ -208,10 +234,6 @@ export function getCurrentVideoId() {
   return currentVideoId;
 }
 
-export function isReady() {
-  return ready;
-}
-
 /**
  * The <iframe> element YT.Player created, or null if the player isn't up yet.
  * Two consumers: page-chrome.js's bindIframeFocusGuard, which undoes focus
@@ -247,20 +269,16 @@ export function togglePlay() {
  * running: the empty-state overlay covers the frame opaquely, so an un-stopped
  * video is invisible but fully audible.
  *
- * NOT pauseVideo(): the PAUSED branch above captures progress, which would
- * re-persist the mid-video time over the position the caller just reset. And
- * stopVideo() alone is not enough — it moves the player to a state onStateChange
- * has no branch for, so the poll would keep firing, and getCurrentTime() returns
- * 0 after it, writing a bogus 0 every 5s. Hence: kill the poll, then clear
- * currentVideoId (which makes any late captureProgress a no-op via its own
- * guard), then stop. Clearing `pending` covers a load queued before ready, which
- * onReady would otherwise run after this.
+ * Distrust the position BEFORE stopping, so nothing after this — the poll, the
+ * PAUSED or stop event, a page-hide flush — re-persists a time over the position
+ * the caller just reset; clearing currentVideoId makes any late capture a no-op
+ * as well. Clearing `pending` covers a load queued before ready, which onReady
+ * would otherwise run after this.
  */
 export function stopPlayback() {
-  stopProgressPoll();
+  distrustPosition();
   currentVideoId = null;
   pending = null;
-  justEnded = false;
   if (!player || typeof player.stopVideo !== 'function') return;
   try {
     player.stopVideo();
@@ -269,9 +287,13 @@ export function stopPlayback() {
   }
 }
 
-/** Seek the current video by `deltaSeconds` (clamped at 0). */
+/**
+ * Seek the current video by `deltaSeconds` (clamped at 0). Inert until this
+ * load has played: before that getCurrentTime() reads 0, so a seek "forward"
+ * from a resume point would jump back to the start.
+ */
 export function seekBy(deltaSeconds) {
-  if (!player || typeof player.seekTo !== 'function') return;
+  if (!positionTrusted || !player || typeof player.seekTo !== 'function') return;
   try {
     const t = (player.getCurrentTime() || 0) + deltaSeconds;
     player.seekTo(Math.max(0, t), true);
